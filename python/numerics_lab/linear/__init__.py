@@ -38,6 +38,8 @@ from scipy.sparse.linalg import (
     spsolve,
 )
 
+from motronics.gauss.linear.ssor import ssor_preconditioner
+
 __all__ = [
     'LINEAR_SOLVER_REGISTRY',
     'PRECONDITIONER_REGISTRY',
@@ -47,6 +49,7 @@ __all__ = [
     'make_preconditioner',
     'requires_symmetric',
     'solve_linear_system',
+    'ssor_preconditioner',
 ]
 
 # Krylov convergence target: tight enough that the iterative solution matches the direct factorization
@@ -202,35 +205,15 @@ def _ilu_preconditioner(matrix) -> LinearOperator:
     return LinearOperator((n, n), matvec=ilu.solve)
 
 
-def _ssor_preconditioner(matrix) -> LinearOperator:
-    r"""Symmetric SOR (SSOR, omega=1 = symmetric Gauss-Seidel) preconditioner ``M ~ matrix^{-1}``.
-
-    The auxiliary preconditioner for the NODAL magnetostatic Krylov path (handoff §4 close-out of
-    the Hiptmair-Xu / AMS item -- AMS preconditions the curl-curl EDGE-element operator, which this
-    codebase's SPD scalar-nodal ``-div(nu grad A)`` solve does not have; see
-    ``maxwell/fea/hx_precond.py`` for the full rationale). SSOR is (a) *symmetric* when ``A`` is, so
-    CG stays a valid Krylov method on the SPD operator (unlike a non-symmetric ILU factor), and
-    (b) strictly stronger than Jacobi (Jacobi is a no-op on the constant-diagonal Laplacian). For
-    ``A = L + D + U`` it applies ``omega/(2-omega) (D/omega + U)^{-1} D (D/omega + L)^{-1}`` -- a
-    forward triangular solve, a diagonal scaling, a backward triangular solve. Measured on the 2D
-    Poisson operator it roughly halves-or-better the CG iteration count (see
-    ``tests/unit/maxwell/test_hx_precond.py``). Implementation lives in ``maxwell/fea/hx_precond.py``
-    to keep this module free of the triangular-solve plumbing; it is registered here so the entry is
-    default-available.
-    """
-    # Imported here (module-level would be a circular import: hx_precond imports this registry).
-    from motronics.maxwell.fea.hx_precond import ssor_preconditioner  # noqa: PLC0415
-
-    return ssor_preconditioner(matrix)
-
-
 # name -> builder(matrix) -> LinearOperator. AMG (pyamg) is an optional dep -- the hook is here
 # (add 'amg' when pyamg is present) but no hard dependency is introduced. 'ssor' is the nodal
-# auxiliary accelerator (symmetric, strengthens CG on the SPD Poisson-type nodal operator).
+# auxiliary accelerator (symmetric, strengthens CG on the SPD Poisson-type nodal operator); its
+# implementation lives in the physics-blind ``gauss.linear.ssor`` module (pure algebra on the
+# matrix triangles), imported at module level -- no cycle back into any physics package.
 PRECONDITIONER_REGISTRY: dict[str, Callable[[object], LinearOperator]] = {
     'jacobi': _jacobi_preconditioner,
     'ilu': _ilu_preconditioner,
-    'ssor': _ssor_preconditioner,
+    'ssor': ssor_preconditioner,
 }
 
 
