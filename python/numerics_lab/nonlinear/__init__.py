@@ -167,6 +167,24 @@ class DampedPicardStrategy:
     halve ``alpha`` (floored at :data:`_ALPHA_MIN`) whenever the energy error grows, converge when the
     energy change drops below :data:`_RTOL_ENERGY_PCT`, and damp the update ``x += alpha*(solve-x)``.
     A linear system converges after one solve.
+
+    Also ratchets ``alpha`` down (x0.6, floored at :data:`_ALPHA_MIN`, never raised again) on an
+    energy-delta SIGN FLIP -- the same class of damping the FEA frozen-damped loop applies
+    (``discretizations/fem/_newton.py``). The ``err > prev_err`` rule above only fires on a
+    MONOTONICALLY growing relative error; a period-2 limit cycle (energy alternating between two
+    values every step, e.g. a sharp BH knee overshooting each iteration) has a roughly CONSTANT
+    relative error, so that rule never trips and alpha stays at 1.0 forever (MANUAL-20260721-414
+    follow-up: MEC's Picard loop never converged on the FEMM-matching PCHIP BH spline). The sign-flip
+    trigger catches exactly that oscillation.
+
+    Once alpha has EVER been ratcheted below 1.0, the energy criterion alone is no longer trusted:
+    a heavily-damped iterate can sit on a near-flat plateau of ``total_energy`` that is NOT the true
+    Picard fixed point (measured: a saturating-BH case read 0.00% energy change for 20+ iterations
+    at a spurious energy level ~14x the physical one, only escaping and reaching the genuine
+    fixed point ~15 iterations later when left to run). So once damped, convergence ALSO requires
+    the RAW (undamped) Picard increment ``x_solve - x`` to be small -- the direct fixed-point test
+    ``x_solve == x``, immune to a flat-but-wrong energy plateau. A run that never ratchets (today's
+    common case) never evaluates this extra test: bit-for-bit with the pre-ratchet loop.
     """
 
     name = 'picard-damped'
@@ -179,6 +197,8 @@ class DampedPicardStrategy:
         last_energy: float | None = None
         converged = False
         alpha, prev_err = 1.0, np.inf
+        prev_delta_sign = 0
+        ratcheted = False
         ran = 0
         for i in range(max_iter):
             ran = i + 1
@@ -188,11 +208,25 @@ class DampedPicardStrategy:
             err = _energy_error_pct(state.total_energy, last_energy)
             if np.isfinite(prev_err) and err > prev_err:
                 alpha = max(_ALPHA_MIN, alpha * 0.5)
+                ratcheted = True
+            if last_energy is not None:
+                delta = state.total_energy - last_energy
+                sign = (delta > 0) - (delta < 0)
+                if prev_delta_sign != 0 and sign not in (0, prev_delta_sign):
+                    alpha = max(_ALPHA_MIN, alpha * 0.6)
+                    ratcheted = True
+                prev_delta_sign = sign
             prev_err = err
-            if err < rtol_energy_pct:
-                converged = True
-            last_energy = state.total_energy
             x_solve = system.solve_linear(state)
+            if err < rtol_energy_pct:
+                if not ratcheted:
+                    converged = True
+                else:
+                    x_scale = max(float(np.linalg.norm(x)), 1e-12)
+                    increment_rel = float(np.linalg.norm(x_solve - x)) / x_scale
+                    if increment_rel < rtol_energy_pct / 100.0:
+                        converged = True
+            last_energy = state.total_energy
             x = x + alpha * (x_solve - x)
             if system.is_linear:
                 converged = True
