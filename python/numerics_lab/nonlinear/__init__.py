@@ -494,6 +494,25 @@ class ModifiedNewtonStrategy:
     interface); falls back to a Picard step when ``tangent`` returns ``None`` and to the equation's own
     ``solve_system`` for a non-scipy tangent (FEA's opaque bundle). Converges to the same root as
     Newton; same delayed-break energy bookkeeping.
+
+    MANUAL-20260721-419: a HELD tangent step is only amortized cheaply while it is still a good local
+    model. On the sharper-curvature FEMM-matching BH spline the tangent goes stale mid-hold and the
+    step over-shoots into a spurious root -- a near-zero field on the sdm map, an outright energy
+    blow-up on MEC/FEA (``newton`` / ``newton-linesearch``, which refresh every step, land the correct
+    root on the same maps). So every HELD (non-refresh) step is checked against the RAW (unfiltered)
+    ``residual`` norm before/after: if the step would GROW ``||residual||``, the held tangent is stale
+    for the current curvature -- refresh it right there and retake the step with the fresh one,
+    instead of marching toward the spurious root.
+
+    Deliberately the raw residual, not :meth:`NonlinearSystem.residual_norm`: that hook is
+    scale-RELATIVE (``||g(x)-x|| / ||x||``), which is exactly blind to this failure mode -- once a
+    stale step has already pushed ``x`` far outside the physical range, ``g(x)`` saturates to a value
+    that no longer scales with ``x``, so the RATIO plateaus near a fixed asymptote even as the
+    ABSOLUTE residual (and ``x`` itself) keeps growing without bound (measured: a stale sdm step took
+    ``||x||`` 1.6e3 -> 1.4e8 while the relative residual read a near-constant ~1.0 throughout). The raw
+    norm has no such blind spot: it grows in lockstep with the divergence. A held step that genuinely
+    shrinks the residual (every low-curvature case, and the common case generally) never trips this
+    guard, so the amortization -- and its bit-for-bit iterate -- is unchanged.
     """
 
     name = 'modified-newton'
@@ -520,18 +539,38 @@ class ModifiedNewtonStrategy:
             if err < rtol_energy_pct:
                 converged = True
             last_energy = state.total_energy
-            if i % self.refresh_every == 0 or cached_jac is None:
+            refresh = i % self.refresh_every == 0 or cached_jac is None
+            if refresh:
                 cached_jac = system.tangent(x, state)  # refresh (re-assemble)
                 cached_lu = _lu_factorize(cached_jac)  # re-factorize ONCE; reused below until next refresh
             if cached_jac is None:
                 x = system.solve_linear(state)  # no Jacobian -> Picard substitution
-            elif cached_lu is not None:
-                # Reuse the cached factorization: bit-for-bit the spsolve step, without re-factorizing.
-                dx = cached_lu.solve(-np.asarray(system.residual(x, state), dtype=float))
-                x = x + dx
             else:
-                dx = system.solve_system(cached_jac, -system.residual(x, state))
-                x = x + dx
+                r = np.asarray(system.residual(x, state), dtype=float)
+                # Reuse the cached factorization: bit-for-bit the spsolve step, without re-factorizing.
+                dx = cached_lu.solve(-r) if cached_lu is not None else system.solve_system(cached_jac, -r)
+                if refresh:
+                    x = x + dx  # freshly-refreshed tangent: trusted, no staleness check needed
+                else:
+                    # Staleness guard (MANUAL-20260721-419): a HELD step must not GROW the RAW
+                    # (unfiltered) residual norm -- see the class docstring for why the scale-relative
+                    # residual_norm hook is blind to this. It never grows on a low-curvature hold, so
+                    # this branch is a no-op there and the iterate stays bit-for-bit the pre-guard step.
+                    r0 = float(np.linalg.norm(r))
+                    trial = x + dx
+                    r1 = float(np.linalg.norm(np.asarray(system.residual(trial, system.assemble(trial)), dtype=float)))
+                    if np.isfinite(r1) and r1 <= r0:
+                        x = trial
+                    else:
+                        # Stale for the current curvature: refresh right here and retake the step with
+                        # the fresh tangent, instead of marching toward the spurious root.
+                        cached_jac = system.tangent(x, state)
+                        cached_lu = _lu_factorize(cached_jac)
+                        if cached_jac is None:
+                            x = system.solve_linear(state)
+                        else:
+                            dx = cached_lu.solve(-r) if cached_lu is not None else system.solve_system(cached_jac, -r)
+                            x = x + dx
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0)
