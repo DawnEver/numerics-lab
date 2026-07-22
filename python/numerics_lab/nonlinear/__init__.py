@@ -279,8 +279,8 @@ class FrozenDampedStrategy:
         if frozen_solve is None:
             msg = f"'frozen-damped' requires a system exposing frozen_damped_solve; got {type(system).__name__}"
             raise TypeError(msg)
-        _s_mat, a_mat, _t_mat, _b_mat, _b_norm_mat, _energy_mat = frozen_solve()
-        state = AssembledState(system_matrix=_s_mat, total_energy=float(_energy_mat.sum()))
+        _s_mat, a_mat, t_mat, _b_mat, _b_norm_mat, _energy_mat = frozen_solve()
+        state = AssembledState(system_matrix=_s_mat, total_energy=float(_energy_mat.sum()), payload={'T_mat': t_mat})
         return IterationResult(x=a_mat, state=state, iterations=max_iter, converged=True)
 
 
