@@ -39,11 +39,13 @@ from scipy.sparse.linalg import spsolve
 
 from motronics.contracts.analysis_formulation import DerivativeWeights, SemiDiscreteProblem
 from motronics.contracts.study_spec import IntegratorKind, TransientStudy
+from motronics.gauss.time_integrators.factor_reuse import FactorCache
 
 __all__ = [
     'INTEGRATOR_REGISTRY',
     'BDF1Integrator',
     'BDF2Integrator',
+    'FactorCache',
     'GeneralizedAlphaIntegrator',
     'ITimeIntegrator',
     'IntegratorState',
@@ -381,6 +383,7 @@ def _solve_step(
     solve,
     max_newton: int,
     tol: float,
+    factor_cache: FactorCache | None = None,
 ) -> NDArray[np.floating]:
     """Advance one step by a Newton loop on ``residual(u_arg, u_dot, u_ddot, t)`` for ``u_{n+1}``.
 
@@ -389,7 +392,12 @@ def _solve_step(
     problem one iteration is exact (``max_newton = 1``, the default first cut); a NONLINEAR problem
     is where a ``gauss.nonlinear`` strategy plugs in -- this local loop is the minimal Newton that
     the richer registry-driven iteration would replace, driving the SAME residual/jacobian seam.
+
+    ``factor_cache`` (W6) engages only when the problem exposes ``factor_reuse_key``: while the
+    derived key holds, the tangent is neither rebuilt nor re-factored -- the cached factorization
+    back-substitutes. A problem without the seam takes the per-solve path exactly as before.
     """
+    key_fn = getattr(problem, 'factor_reuse_key', None) if factor_cache is not None else None
     u = np.asarray(guess, dtype=float).copy()
     t = form.t_eval
     for _ in range(max_newton):
@@ -397,8 +405,15 @@ def _solve_step(
         r = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
         if float(np.linalg.norm(r)) <= tol:
             break
-        jac = problem.jacobian(u_arg, u_dot, u_ddot, t, form.weights)
-        du = np.asarray(solve(jac, -r), dtype=float)
+        if key_fn is None:
+            jac = problem.jacobian(u_arg, u_dot, u_ddot, t, form.weights)
+            du = np.asarray(solve(jac, -r), dtype=float)
+        else:
+            key = key_fn(u_arg, u_dot, u_ddot, t, form.weights)
+            du = np.asarray(
+                factor_cache.solve(key, lambda: problem.jacobian(u_arg, u_dot, u_ddot, t, form.weights), -r),
+                dtype=float,
+            )
         u = u + du.reshape(u.shape)
     return u
 
@@ -413,6 +428,7 @@ def integrate_transient(
     solve=_default_solve,
     max_newton: int = 1,
     tol: float = 1e-12,
+    factor_cache: FactorCache | None = None,
 ) -> TransientSolution:
     """March ``problem`` from ``study.t0`` to ``study.t1`` by ``study.dt`` with ``study.integrator``.
 
@@ -421,7 +437,14 @@ def integrate_transient(
     ``advance`` folds it back into the history. ``v0`` / ``a0`` seed the second-order schemes
     (default zero). ``max_newton = 1`` is the exact linear step; raise it (or swap ``solve``) for a
     nonlinear problem. Returns the full march including the initial condition.
+
+    ``factor_cache`` (W6) reuses one factorization per reuse key across the march (see
+    :mod:`~motronics.gauss.time_integrators.factor_reuse`); the default ``None`` builds a fresh
+    cache when the problem exposes ``factor_reuse_key`` and none otherwise, so a keyed problem
+    reuses by default and an unkeyed one is untouched. Pass a cache in to READ the counters.
     """
+    if factor_cache is None and callable(getattr(problem, 'factor_reuse_key', None)):
+        factor_cache = FactorCache()
     integrator = get_integrator(study.integrator)
     u0 = np.asarray(u0, dtype=float)
     state = integrator.start(u0, study.t0, v0, a0)
@@ -431,7 +454,9 @@ def integrate_transient(
     for k in range(n_steps):
         t_new = study.t0 + (k + 1) * dt
         form = integrator.prepare(state, dt, t_new)
-        u_new = _solve_step(problem, form, state.last_u, solve=solve, max_newton=max_newton, tol=tol)
+        u_new = _solve_step(
+            problem, form, state.last_u, solve=solve, max_newton=max_newton, tol=tol, factor_cache=factor_cache
+        )
         state = integrator.advance(state, u_new, dt, t_new)
         solution.times.append(t_new)
         solution.states.append(u_new)
