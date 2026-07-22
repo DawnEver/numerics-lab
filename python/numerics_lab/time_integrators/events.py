@@ -62,6 +62,7 @@ from numpy.typing import NDArray
 from motronics.contracts.analysis_formulation import DerivativeWeights
 from motronics.contracts.study_spec import TransientStudy
 from motronics.gauss.time_integrators import (
+    FactorCache,
     IntegratorState,
     StepForm,
     TransientSolution,
@@ -144,6 +145,7 @@ def integrate_transient_with_events(
     max_newton: int = 1,
     tol: float = 1e-12,
     time_tol: float | None = None,
+    factor_cache: FactorCache | None = None,
 ) -> EventfulTransientSolution:
     """March ``problem`` over ``study``, stopping the grid at every zero of ``event_fns``.
 
@@ -162,7 +164,16 @@ def integrate_transient_with_events(
 
     The initial point is NOT scanned for events: a zero at ``t0`` is the caller's initial
     condition to declare, not an event to locate.
+
+    ``factor_cache`` (W6) reuses one factorization per reuse key, as in
+    :func:`~motronics.gauss.time_integrators.integrate_transient`. No invalidation hook is needed
+    here: the key re-derives from the system every solve, so the toggle's changed tangent, the
+    history restart's bootstrap weights, and each bisection probe's unique ``dt`` all miss the
+    cache on their own -- a stale factor across an event is impossible unless the key itself
+    under-reads the system (the hole the module docstring names).
     """
+    if factor_cache is None and callable(getattr(problem, 'factor_reuse_key', None)):
+        factor_cache = FactorCache()
     integrator = get_integrator(study.integrator)
     u0 = np.asarray(u0, dtype=float)
     state = integrator.start(u0, study.t0, v0, a0)
@@ -193,7 +204,9 @@ def integrate_transient_with_events(
             form = _bdf2_variable_form(from_state, dt_step, from_prev_dt, t_new)
         else:
             form = integrator.prepare(from_state, dt_step, t_new)
-        u_new = _solve_step(problem, form, from_state.last_u, solve=solve, max_newton=max_newton, tol=tol)
+        u_new = _solve_step(
+            problem, form, from_state.last_u, solve=solve, max_newton=max_newton, tol=tol, factor_cache=factor_cache
+        )
         return integrator.advance(from_state, u_new, dt_step, t_new), u_new
 
     for k in range(n_steps):
