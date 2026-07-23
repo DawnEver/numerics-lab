@@ -257,6 +257,7 @@ def integrate_transient_with_events(
                 if best is None or candidate[0] < best[0]:
                     best = candidate
 
+            assert best is not None, 'at least one event finder must cross in an event bracket'  # type: narrow[None]
             t_star, i_star, u_star = best
             state, prev_dt = _rollback(checkpoint, solution)
             if t_star > t_from:  # land the march exactly on the event
