@@ -315,7 +315,21 @@ class FrozenDampedStrategy:
             raise TypeError(msg)
         _s_mat, a_mat, t_mat, _b_mat, _b_norm_mat, _energy_mat = frozen_solve()
         state = AssembledState(system_matrix=_s_mat, total_energy=float(_energy_mat.sum()), payload={'T_mat': t_mat})
-        return IterationResult(x=a_mat, state=state, iterations=max_iter, converged=True)
+        # The frozen loop returns fields only, so it PUBLISHES its own convergence bookkeeping on the
+        # system (``last_iterations`` / ``last_converged``). This used to report
+        # ``iterations=max_iter, converged=True`` unconditionally -- two fabricated numbers, which is
+        # why accuracy._ITERATION_BANDS['frozen-damped'] (level='validated', measured=3 iters) could
+        # not be gated by anything: the count it claimed was never the count that ran, and a
+        # non-converged solve still reported success (R1.4, 2026-07-25).
+        iterations = getattr(system, 'last_iterations', None)
+        converged = getattr(system, 'last_converged', None)
+        if iterations is None or converged is None:
+            msg = (
+                f"'frozen-damped' requires the system to publish last_iterations/last_converged after "
+                f'frozen_damped_solve; {type(system).__name__} did not'
+            )
+            raise TypeError(msg)
+        return IterationResult(x=a_mat, state=state, iterations=int(iterations), converged=bool(converged))
 
 
 class PicardStrategy:
