@@ -11,16 +11,19 @@ call site). This module is where those seams get a shared home: one ``FieldEvalu
 one ``AssemblyEquation`` Protocol (the narrowed :class:`~motronics.gauss.nonlinear.NonlinearSystem`
 seam an equation implements once it has a field-dependent :class:`CoefficientState` in hand).
 
-Two things this module deliberately does NOT do, because the codebase's own granularities are not
-uniform (see the plan's evaluator table -- MEC's branch evaluators consume a per-branch ``|B|``
-array, FEA's element evaluators a single per-element scalar, the P4 edge evaluator a per-element
-``(3, 2)`` edge-vector block): it does not force one calling CONVENTION on every evaluator (that
-would mean rewriting the T3/Q4/VEM per-element kernels' hot loops purely for interface uniformity,
-risking the bit-identity every golden here depends on -- AGENTS.md's "implement, don't exclude"
-cuts against a refactor whose only benefit is symmetry), and it does not replace ``tangent()``,
-which stays on the equation itself (MEC and FEA compute their Newton differential term directly
-from the material's reluctivity SLOPE, never through an evaluator -- P2 never routed a tangent
-through this seam either, so there is nothing to supersede).
+Granularity is ONE axis, independent of which equation is being solved -- MEC and FEA are two
+DISCRETIZATIONS, and each granularity (branch / element / edge) is a Protocol any discretization
+can implement (MEC's ``PerElementFromBranches`` and FEA's ``PerElement`` both satisfy
+:class:`ElementFieldEvaluator`, from two different equations). What this module deliberately does
+NOT do is force one calling CONVENTION across granularities: :class:`BranchFieldEvaluator`,
+:class:`ElementFieldEvaluator` and :class:`EdgeFieldEvaluator` each declare their OWN method
+(``evaluate_branch`` / ``evaluate_element`` / ``evaluate_edges``) rather than a shared ``evaluate``,
+because unifying the signature would mean rewriting the T3/Q4/VEM per-element kernels' hot loops
+purely for interface uniformity, risking the bit-identity every golden here depends on (AGENTS.md's
+"implement, don't exclude" cuts against a refactor whose only benefit is symmetry). This module also
+does not replace ``tangent()``, which stays on the equation itself (MEC and FEA compute their Newton
+differential term directly from the material's reluctivity SLOPE, never through an evaluator -- P2
+never routed a tangent through this seam either, so there is nothing to supersede).
 
 ``_ReluctanceSystem`` (MEC) and ``GalerkinSystem`` (FEA) COMPOSE this pair: each names its own
 ``_extract_field`` hook (MEC: reduced loop flux -> per-branch ``|B|``; FEA: per-element/per-block
@@ -37,9 +40,17 @@ from typing import Protocol, runtime_checkable
 
 import numpy as np
 
+from motronics.core.materials import MaterialRegistry
 from motronics.gauss.nonlinear import AssembledState
 
-__all__ = ['AssemblyEquation', 'CoefficientState', 'FieldEvaluator']
+__all__ = [
+    'AssemblyEquation',
+    'BranchFieldEvaluator',
+    'CoefficientState',
+    'EdgeFieldEvaluator',
+    'ElementFieldEvaluator',
+    'FieldEvaluator',
+]
 
 
 @dataclass
@@ -76,20 +87,86 @@ class FieldEvaluator(Protocol):
     inspecting its class -- the same role :mod:`~motronics.hamilton.discretizations.reduced_order`
     documentation gives ``chart.kind``: a property the code CONSULTS, not a name that merely says so.
 
-    This Protocol intentionally carries NO ``evaluate`` method: the field-evaluation calling
-    convention differs by granularity (MEC's branch evaluators take a per-branch ``|B|`` array and
-    the owning system as geometry context; FEA's element evaluator takes one scalar ``|B|`` per
-    call inside the T3/Q4/VEM assembly loop; the edge evaluator takes one element's ``(3, 2)`` edge
-    vectors) -- see the concrete evaluators in
-    :mod:`~motronics.hamilton.formulations.magnetic_circuit._sparse` (``PerBranch``,
-    ``PerElementFromBranches``) and :mod:`~motronics.hamilton.discretizations.fem._nu_element`
-    (``PerElement``, ``PerEdgeFromElement``) for the granularity-specific method each implements.
-    Forcing one signature here would mean rewriting the per-element hot loops purely for interface
-    symmetry, trading the bit-identity every golden depends on for a cosmetic uniformity this
-    Protocol does not need in order to do its job: naming what an evaluator IS.
+    This BASE Protocol intentionally carries no ``evaluate`` method of its own: the field-evaluation
+    calling convention differs by granularity (a per-branch ``|B|`` array plus the owning system as
+    geometry context; a single scalar ``|B|`` per call inside the T3/Q4/VEM assembly loop; one
+    element's ``(3, 2)`` edge-vector block), so each granularity gets its OWN narrower Protocol
+    below (:class:`BranchFieldEvaluator`, :class:`ElementFieldEvaluator`, :class:`EdgeFieldEvaluator`)
+    rather than one forced shared signature. Forcing one signature here would mean rewriting the
+    per-element hot loops purely for interface symmetry, trading the bit-identity every golden
+    depends on for a cosmetic uniformity this base Protocol does not need in order to do its job:
+    naming what an evaluator IS (``granularity``) independently of how it is called.
     """
 
     granularity: str
+
+
+@runtime_checkable
+class BranchFieldEvaluator(FieldEvaluator, Protocol):
+    """A :class:`FieldEvaluator` keyed on MEC's branch granularity (``granularity == 'branch'``).
+
+    Closes the composition pyright's structural check demands: ``_ReluctanceSystem.field_evaluator``
+    is typed as THIS narrower Protocol (not the bare ``FieldEvaluator``), so calling
+    ``.evaluate_branch(...)`` on it is checked, not merely duck-typed at the call site. Every branch
+    evaluator (:class:`~motronics.hamilton.formulations.magnetic_circuit._sparse.PerBranch`,
+    ``PerElementFromBranches``) implements this.
+    """
+
+    def evaluate_branch(self, b_abs: np.ndarray, system: object) -> tuple[np.ndarray, np.ndarray]:
+        """Returns ``(R_mat_diag, energy_branch)`` over ALL branches.
+
+        ``system`` is the owning ``_ReluctanceSystem`` -- typed ``object`` here (not imported: that
+        would invert the ``gauss`` -> ``hamilton`` dependency arrow) but ALWAYS the geometry context
+        an evaluator needs (``l_div_A``, ``A_mat``, ``l_mat``, ``group_material_list``, ``material``).
+        """
+        ...
+
+
+@runtime_checkable
+class ElementFieldEvaluator(FieldEvaluator, Protocol):
+    """A :class:`FieldEvaluator` keyed on FEA's element granularity (``granularity == 'element'``).
+
+    Implemented by :class:`~motronics.hamilton.discretizations.fem._nu_element.PerElement` (the
+    default) and by MEC's ``PerElementFromBranches`` (P4's element-granularity experiment on the
+    MEC discretization -- the same PROTOCOL, a different discretization, exactly the point that
+    granularity is one axis independent of which equation is being solved).
+    """
+
+    def evaluate_element(
+        self,
+        material_in_use: MaterialRegistry,
+        material_name: str,
+        b_norm: float,
+        max_B_norm: float,
+        nu_prev: float,
+        alpha: float,
+        temperature: float | None = None,
+    ) -> tuple[float, float]:
+        """Returns ``(nu_target, reluctivity)`` -- see :func:`eval_nu_element`'s docstring."""
+        ...
+
+
+@runtime_checkable
+class EdgeFieldEvaluator(FieldEvaluator, Protocol):
+    """A :class:`FieldEvaluator` keyed on the P4 edge granularity (``granularity == 'edge'``).
+
+    Implemented by
+    :class:`~motronics.hamilton.discretizations.fem._nu_element.PerEdgeFromElement`, the
+    discriminating-experiment evaluator that gives FEA's T3 kernel MEC's per-branch-like
+    granularity.
+    """
+
+    def evaluate_edges(
+        self,
+        material_in_use: MaterialRegistry,
+        material_name: str,
+        current_B: np.ndarray,
+        edge_vectors: np.ndarray,
+        max_B_norm: float,
+        temperature: float | None = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Returns ``(nu_edge, b_edge)`` for one element's edges."""
+        ...
 
 
 class AssemblyEquation(Protocol):

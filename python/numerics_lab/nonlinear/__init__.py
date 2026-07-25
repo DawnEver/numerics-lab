@@ -87,14 +87,22 @@ class NonlinearSystem(Protocol):
 
     is_linear: bool
 
+    # Every parameter below is positional-only (``/``): every real caller (the strategies in this
+    # module) invokes them positionally, and the two implementers name their iterate differently
+    # (MEC's ``phi_loop``, FEA's ``A_mat``) because it carries different physics -- a loop flux vs.
+    # a nodal vector potential. Requiring a shared PARAMETER NAME here would be a "declaration that
+    # lies" for whichever implementer's name is more honest; positional-only makes the Protocol
+    # match how it is actually consumed instead (found via pyright while composing the P3 seam --
+    # `gauss/evaluation.py` -- surfaced this pre-existing mismatch on both `_ReluctanceSystem` and
+    # `GalerkinSystem`).
     def initial_guess(self) -> np.ndarray: ...
-    def assemble(self, x: np.ndarray) -> AssembledState: ...
-    def solve_linear(self, state: AssembledState) -> np.ndarray: ...
+    def assemble(self, x: np.ndarray, /) -> AssembledState: ...
+    def solve_linear(self, state: AssembledState, /) -> np.ndarray: ...
 
-    def residual(self, x: np.ndarray, state: AssembledState) -> np.ndarray:
+    def residual(self, x: np.ndarray, state: AssembledState, /) -> np.ndarray:
         """Residual r(x) whose root is the solution (Newton drives ``tangent @ dx = -r``)."""
 
-    def residual_norm(self, x: np.ndarray, state: AssembledState) -> float:
+    def residual_norm(self, x: np.ndarray, state: AssembledState, /) -> float:
         """Scalar convergence measure a line search minimises -- the norm over the FREE DOFs only.
 
         Defaults to ``||residual||`` (correct for MEC, whose reduced loop residual has no pinned rows).
@@ -105,10 +113,19 @@ class NonlinearSystem(Protocol):
         """
         return float(np.linalg.norm(self.residual(x, state)))
 
-    def tangent(self, x: np.ndarray, state: AssembledState):
-        """Optional Newton tangent operator; return ``None`` to fall back to a Picard step."""
+    def tangent(self, x: np.ndarray, state: AssembledState, /) -> object | None:
+        """Optional Newton tangent operator; return ``None`` to fall back to a Picard step.
 
-    def solve_system(self, matrix, rhs: np.ndarray) -> np.ndarray:
+        The return type is deliberately opaque (``object``, not e.g. a sparse matrix): MEC returns
+        a raw ``scipy.sparse`` matrix, FEA a reduced-tangent bundle (``dict``) that only its own
+        ``solve_system`` understands -- the caller (a strategy) passes it back verbatim, never
+        inspects its shape. An unannotated stub here previously let pyright infer ``-> None`` from
+        the docstring-only body, which is exactly the "declaration that lies" AGENTS.md names: it
+        made every REAL implementation (returning a matrix/dict) structurally incompatible with the
+        Protocol it exists to satisfy.
+        """
+
+    def solve_system(self, matrix, rhs: np.ndarray, /) -> np.ndarray:
         """Solve ``matrix @ y = rhs`` with the equation's own singular-system guard.
 
         ``matrix`` is whatever :meth:`tangent` returned for this equation (a raw sparse matrix for
@@ -119,7 +136,7 @@ class NonlinearSystem(Protocol):
         accepted form (FEA's ``solve_system`` takes the reduced-tangent bundle, not a raw matrix).
         """
 
-    def solve_secant(self, state: AssembledState, rhs: np.ndarray) -> np.ndarray:
+    def solve_secant(self, state: AssembledState, rhs: np.ndarray, /) -> np.ndarray:
         """Solve the SECANT system ``S @ y = rhs`` for an arbitrary rhs, with BC reduction folded in.
 
         The uniform ``H0`` action the quasi-Newton family (Broyden / BFGS / L-BFGS) needs: ``S`` is the
@@ -131,10 +148,10 @@ class NonlinearSystem(Protocol):
         """
         return self.solve_system(state.system_matrix, rhs)
 
-    def on_iteration(self, i: int, state: AssembledState, err: float, alpha: float) -> None:
+    def on_iteration(self, i: int, state: AssembledState, err: float, alpha: float, /) -> None:
         """Optional per-iteration hook (logging); default no-op."""
 
-    def scale_source(self, lam: float) -> NonlinearSystem:
+    def scale_source(self, lam: float, /) -> NonlinearSystem:
         """Return a copy of this system with its SOURCE scaled by ``lam`` (continuation stepping).
 
         Optional -- only the ``continuation`` strategy calls it. An equation that cannot cheaply
