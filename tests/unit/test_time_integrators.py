@@ -160,7 +160,7 @@ def test_backward_euler_reproduces_recurrence() -> None:
     factor = 1.0 / (1.0 + lam * dt)
     for u in sol.states[1:]:
         expected *= factor
-        assert float(u[0]) == pytest.approx(expected, rel=1e-12)
+        assert float(u[0]) == pytest.approx(expected, rel=1e-12, abs=0.0)
 
 
 def test_2x2_decoupled_system() -> None:
