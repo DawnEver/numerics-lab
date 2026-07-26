@@ -38,6 +38,7 @@ from scipy.sparse.linalg import (
     spsolve,
 )
 
+from motronics.gauss.linear.dirichlet import apply_dirichlet_triplets
 from motronics.gauss.linear.ssor import ssor_preconditioner
 
 __all__ = [
@@ -45,6 +46,7 @@ __all__ = [
     'PRECONDITIONER_REGISTRY',
     'LinearSolveError',
     'LinearSolver',
+    'apply_dirichlet_triplets',
     'get_linear_solver',
     'make_preconditioner',
     'requires_symmetric',
