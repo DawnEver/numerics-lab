@@ -30,7 +30,6 @@ __all__ = [
     'BroydenStrategy',
     'ContinuationStrategy',
     'DampedPicardStrategy',
-    'FrozenDampedStrategy',
     'IterationResult',
     'IterationStrategy',
     'LBFGSStrategy',
@@ -39,6 +38,7 @@ __all__ = [
     'NewtonLineSearchStrategy',
     'NewtonStrategy',
     'NonlinearSystem',
+    'NuRelaxationDampedPicardStrategy',
     'PicardStrategy',
     'get_strategy',
 ]
@@ -176,6 +176,32 @@ def _energy_error_pct(total_energy: float, last_energy: float | None) -> float:
     return abs(total_energy - last_energy) / denom * 100.0
 
 
+def _energy_flux_convergence(
+    total_energy: float,
+    total_flux: float,
+    last_energy: float | None,
+    last_flux: float | None,
+    rtol_energy_pct: float,
+    rtol_flux_pct: float,
+) -> tuple[float, float, bool]:
+    """Energy-AND-flux convergence test (fraction of a percent each), both below tolerance to pass.
+
+    A private copy of ``hamilton.discretizations.fem._post._check_convergence``'s formula -- NOT an
+    import of it: ``gauss`` sits BELOW ``hamilton`` in the dependency arrow (``hamilton -> ... ->
+    gauss -> core -> contracts``), so this module cannot import from ``hamilton`` without inverting
+    it. :class:`NuRelaxationDampedPicardStrategy` needs this two-metric check (not the single-metric
+    :func:`_energy_error_pct` the other strategies use) to reproduce the removed FEA frozen loop's
+    exact convergence test verbatim.
+    """
+    if last_energy is None or last_flux is None:
+        return np.inf, np.inf, False
+    energy_denom = max(abs(total_energy), abs(last_energy), 1e-12)
+    flux_denom = max(abs(total_flux), abs(last_flux), 1e-12)
+    energy_error_pct = abs(total_energy - last_energy) / energy_denom * 100.0
+    flux_error_pct = abs(total_flux - last_flux) / flux_denom * 100.0
+    return energy_error_pct, flux_error_pct, energy_error_pct < rtol_energy_pct and flux_error_pct < rtol_flux_pct
+
+
 class DampedPicardStrategy:
     """Successive substitution with adaptive under-relaxation -- the current MEC/FEA production loop.
 
@@ -306,47 +332,110 @@ class AdaptiveDampedPicardStrategy:
         return IterationResult(x=x, state=state, iterations=ran, converged=converged)
 
 
-class FrozenDampedStrategy:
-    """Registry seam for the frozen FEA ``GalerkinSystem.frozen_damped_solve`` loop (WP1 contract 343).
+class NuRelaxationDampedPicardStrategy:
+    """The FEA reluctivity-under-relaxed Picard loop, MOVED here from the deleted inline assembly loop.
 
-    ``fea_newton_solve`` (``maxwell/fea/_newton.py``) still fast-paths ``None``/``'picard-damped'``
-    straight onto ``system.frozen_damped_solve()`` -- that inline reluctivity-under-relaxed loop is
-    frozen and differs from :class:`DampedPicardStrategy` in exactly the ways documented on
-    ``frozen_damped_solve`` (damping lives in the assembly kernel's ``nu_relax``, not the solution
-    vector). This strategy widens the SEAM so that fast path is also reachable BY NAME through
-    :data:`ITERATION_REGISTRY`/:func:`get_strategy`, for callers that want to dispatch generically
-    rather than special-case the FEA default. It adapts the frozen solve's raw
-    ``(S_mat, A_mat, T_mat, B_mat, B_norm_mat, Energy_mat)`` tuple to the uniform
-    :class:`IterationResult`, duck-typing on ``system.frozen_damped_solve`` (present only on
-    ``GalerkinSystem``) rather than importing the FEA module (keeps this module solver-agnostic).
+    plan-multi-layer-decoupling P5: the FEA frozen loop (former ``GalerkinSystem.frozen_damped_solve``)
+    damped the RELUCTIVITY, not the solution vector -- under-relaxing ``nu`` inside the assembly kernel,
+    per element, before the stiffness/source were formed (``nu_used = (1-alpha)*nu_prev +
+    alpha*nu(B)``). :class:`DampedPicardStrategy` damps the SOLUTION instead and cannot reproduce that
+    iteration map (measured ~2.6e-5 relative on the field, ~5.5e-5 on energy -- close, but a DIFFERENT
+    fixed-point trajectory), which is why the frozen loop stayed a separate, inline, kernel-coupled
+    code path for as long as it did.
+
+    **The move this class makes possible:** assembly (:meth:`raw_state`) and the reluctivity's per-
+    element under-relaxation turn out to be exactly the SAME linear operation reordered. Every raw
+    stiffness entry and every PM-remanence source entry in the T3/Q4/VEM kernels is
+    ``reluctivity_e * <fixed geometric factor>`` -- i.e. LINEAR in the per-element reluctivity scalar,
+    and assembly (summing element contributions into one COO/RHS) is a LINEAR map. So mixing the
+    per-element reluctivity BEFORE assembly (what the deleted kernel did) and mixing the assembled
+    RAW matrix/RHS AFTER assembly (what this strategy does) are the same operator:
+
+        reluctivity_k = (1-alpha)*reluctivity_(k-1) + alpha*nu_target_k
+        ==(linear assembly)==>
+        S_k = (1-alpha)*S_(k-1) + alpha*S(nu_target_k),   T_k = (1-alpha)*T_(k-1) + alpha*T(nu_target_k)
+
+    where ``S_(k-1)``/``T_(k-1)`` are literally last iteration's already-mixed raw arrays (no per-
+    element state needs to cross the kernel boundary -- only the previous raw ``(s_val, T_mat)`` pair).
+    A conductor-current source term (nu-independent, identical every iteration) mixes back to itself
+    trivially since the mixing weights ``(1-alpha, alpha)`` always sum to 1.
+
+    **This identity REQUIRES alpha to be a single GLOBAL scalar, uniform across every element**, exactly
+    as the deleted loop always used it: ``(1-alpha)*S(w) != S((1-alpha)*w)`` in general, but IS an
+    identity when the SAME scalar ``1-alpha`` multiplies the whole raw array (which is what a per-
+    element-uniform alpha guarantees by construction). A future optimisation that lets alpha vary PER
+    ELEMENT would silently invalidate this equivalence with nothing else going red -- there is
+    deliberately no runtime assertion here (alpha is a private ``float`` local, never a per-element
+    array, so nothing today CAN pass a non-uniform alpha through this seam); this paragraph is the
+    guard until a per-element-alpha strategy is actually proposed.
+
+    Not bit-for-bit with the deleted loop (floating-point reassociation: ``(1-a)*x+a*y`` computed
+    before vs after multiplying by the geometric factor rounds differently), but the SAME operator in
+    exact arithmetic -- goldens are verified within their existing numerical tolerance, not by hash.
+
+    Duck-types on ``raw_state``/``fold_raw`` (present only on ``GalerkinSystem``) rather than importing
+    the FEA module, keeping this module solver-agnostic -- the same seam style
+    :class:`DampedPicardStrategy` uses via the generic ``assemble``/``solve_linear``, one level lower
+    (raw pre-BC-fold arrays instead of a folded :class:`AssembledState`) because the mixing has to
+    happen BEFORE the boundary fold to match the deleted loop's order of operations exactly.
     """
 
-    name = 'frozen-damped'
+    name = 'nu-damped'
 
     def solve(
         self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
     ) -> IterationResult:
-        frozen_solve = getattr(system, 'frozen_damped_solve', None)
-        if frozen_solve is None:
-            msg = f"'frozen-damped' requires a system exposing frozen_damped_solve; got {type(system).__name__}"
+        raw_state = getattr(system, 'raw_state', None)
+        fold_raw = getattr(system, 'fold_raw', None)
+        if raw_state is None or fold_raw is None:
+            msg = f"'nu-damped' requires a system exposing raw_state/fold_raw; got {type(system).__name__}"
             raise TypeError(msg)
-        _s_mat, a_mat, t_mat, _b_mat, _b_norm_mat, _energy_mat = frozen_solve()
-        state = AssembledState(system_matrix=_s_mat, total_energy=float(_energy_mat.sum()), payload={'T_mat': t_mat})
-        # The frozen loop returns fields only, so it PUBLISHES its own convergence bookkeeping on the
-        # system (``last_iterations`` / ``last_converged``). This used to report
-        # ``iterations=max_iter, converged=True`` unconditionally -- two fabricated numbers, which is
-        # why accuracy._ITERATION_BANDS['frozen-damped'] (level='validated', measured=3 iters) could
-        # not be gated by anything: the count it claimed was never the count that ran, and a
-        # non-converged solve still reported success (R1.4, 2026-07-25).
-        iterations = getattr(system, 'last_iterations', None)
-        converged = getattr(system, 'last_converged', None)
-        if iterations is None or converged is None:
-            msg = (
-                f"'frozen-damped' requires the system to publish last_iterations/last_converged after "
-                f'frozen_damped_solve; {type(system).__name__} did not'
+        x = system.initial_guess()
+        alpha = 1.0
+        alpha_min = 0.05  # frozen floor for the reluctivity under-relaxation factor
+        prev_delta_sign = 0
+        last_energy: float | None = None
+        last_flux: float | None = None
+        prev_s_val = None  # last iteration's MIXED raw stiffness values (None = no prior iterate yet)
+        prev_t_mat = None  # last iteration's MIXED raw source vector
+        state: AssembledState | None = None
+        is_convergence = False  # one-step-delayed break: the pass AFTER convergence only refreshes state
+        reached_tol = False
+        ran = 0
+        for i in range(max_iter):
+            s_row, s_col, s_val, t_mat, total_energy = raw_state(x)
+            if prev_s_val is None:
+                mixed_s_val, mixed_t_mat = s_val, t_mat  # first pass: nu_prev<0 -> reluctivity=nu_target
+            else:
+                mixed_s_val = (1.0 - alpha) * prev_s_val + alpha * s_val
+                mixed_t_mat = (1.0 - alpha) * prev_t_mat + alpha * t_mat
+            state = fold_raw(s_row, s_col, mixed_s_val, mixed_t_mat, total_energy)
+            if is_convergence:
+                break  # refresh-only pass: state now reflects the converged iterate; stop without solving
+            total_flux = float(np.max(np.abs(x)))
+            err, _flux_err, is_converged = _energy_flux_convergence(
+                total_energy, total_flux, last_energy, last_flux, rtol_energy_pct, rtol_energy_pct
             )
-            raise TypeError(msg)
-        return IterationResult(x=a_mat, state=state, iterations=int(iterations), converged=bool(converged))
+            if is_converged:
+                is_convergence = True
+                reached_tol = True
+            # Frozen alpha adaptation: halve (x0.6, floored) on an energy-delta SIGN FLIP -- verbatim
+            # from the deleted loop, never raised back up.
+            if last_energy is not None:
+                delta = total_energy - last_energy
+                sign = (delta > 0) - (delta < 0)
+                if prev_delta_sign != 0 and sign not in (0, prev_delta_sign):
+                    alpha = max(alpha * 0.6, alpha_min)
+                prev_delta_sign = sign
+            last_energy, last_flux = total_energy, total_flux
+            prev_s_val, prev_t_mat = mixed_s_val, mixed_t_mat
+            x = system.solve_linear(state)
+            ran = i + 1
+            if system.is_linear:
+                is_convergence = True
+            system.on_iteration(i, state, err, alpha)
+        converged = bool(reached_tol or system.is_linear)
+        return IterationResult(x=x, state=state, iterations=ran, converged=converged)
 
 
 class PicardStrategy:
@@ -1001,7 +1090,7 @@ class _SeededSystem:
 
 ITERATION_REGISTRY: dict[str, IterationStrategy] = {
     'picard-damped': DampedPicardStrategy(),
-    'frozen-damped': FrozenDampedStrategy(),
+    'nu-damped': NuRelaxationDampedPicardStrategy(),
     'picard-adaptive': AdaptiveDampedPicardStrategy(),
     'picard': PicardStrategy(),
     'newton': NewtonStrategy(),
