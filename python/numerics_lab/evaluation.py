@@ -31,6 +31,26 @@ nodal potentials -> ``curl(A)``, inline in each valence kernel because T3/Q4/VEM
 different field formulas) and holds a ``FieldEvaluator`` instance -- never ``None`` after
 construction, so ``assemble()`` composes it unconditionally instead of branching on
 ``field_evaluator is not None``.
+
+**What these Protocols do NOT do: nothing at runtime checks that an evaluator actually
+conforms.** ``@runtime_checkable`` only makes ``isinstance()`` legal to call against them; nothing
+in this codebase calls it. Every call site (``_sparse.py``'s ``self.field_evaluator.evaluate_branch``,
+the T3/Q4/VEM kernels' ``field_evaluator.evaluate_element``) either accesses the method directly
+(an ``AttributeError`` is the only enforcement: it fires if the method is MISSING, never if it is
+present but wrong) or resolves it via ``getattr(..., 'evaluate_edges', None)`` duck-typing, exactly
+as before this Protocol pair existed. That is a deliberate, MEASURED choice, not an oversight: a
+caller-supplied test evaluator (``test_field_evaluator_seam.py``'s ``_ScaledElementEvaluator``)
+duck-types ``evaluate_element`` without declaring ``granularity``, so an ``isinstance``-gated
+dispatch would silently fall back to the default evaluator for that evaluator -- the exact
+"declaration that lies" failure this seam exists to prevent (a threaded parameter that looks
+consulted but isn't). So: these Protocols are STRUCTURAL documentation with a type checker's
+blessing, consulted by pyright at edit time, never by a runtime check. A class with the right
+method NAME and a plausible ``granularity`` string satisfies all three even if its body computes
+something physically wrong -- Protocols check shape, never behaviour, and this module adds no
+behavioural check on top. If a future change wants a REAL runtime guard (e.g. a registry that
+validates a caller-supplied evaluator before a solve), it needs to be added explicitly and will
+have the same duck-typing-safety question this note describes -- it does not come free with the
+Protocol declaration.
 """
 
 from __future__ import annotations
