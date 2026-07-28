@@ -39,6 +39,7 @@ from scipy.sparse.linalg import (
 )
 
 from motronics.gauss.linear.dirichlet import apply_dirichlet_triplets
+from motronics.gauss.linear.pin_rows import pin_rows
 from motronics.gauss.linear.ssor import ssor_preconditioner
 
 __all__ = [
@@ -49,6 +50,7 @@ __all__ = [
     'apply_dirichlet_triplets',
     'get_linear_solver',
     'make_preconditioner',
+    'pin_rows',
     'requires_symmetric',
     'solve_linear_system',
     'ssor_preconditioner',
