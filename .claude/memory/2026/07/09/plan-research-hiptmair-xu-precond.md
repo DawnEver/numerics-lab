@@ -6,7 +6,7 @@ created: 2026-07-09
 accessed: 2026-07-09
 tags: [research-frontier, hiptmair-xu, auxiliary-space, ams, curl-curl, edge-element, nedelec, preconditioner, linear-solver-registry, ws-research]
 ---
-> **MIGRATED 2026-08-01** → `.claude/memory/2026/08/01/plan-refactor-unified-backlog.md`. All remaining work (if any) is consolidated there; this file is the archived original design record.
+> **MIGRATED 2026-08-01** → `.claude/memory/2026/08/01/plan-refactor-unified-backlog.md`. All remaining work (if any) is consolidated there; this file is the archived original design record. **CLOSED 2026-08-01 -- deferred (research -> 0.6)**
 
 
 # PLAN (research) — Hiptmair-Xu / auxiliary-space preconditioner for Maxwell curl-curl (edge elements)
