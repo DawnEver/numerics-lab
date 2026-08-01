@@ -4,6 +4,8 @@ created: 2026-07-14
 priority: high
 tags: [cli, linear-solver, preconditioner, sync-gate, gap]
 ---
+> **MIGRATED 2026-08-01** → `.claude/memory/2026/08/01/plan-refactor-unified-backlog.md`. All remaining work (if any) is consolidated there; this file is the archived original design record.
+
 
 # Plan — Wire --linear-solver and --preconditioner to CLI
 

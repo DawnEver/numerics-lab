@@ -5,6 +5,8 @@ type: project
 created: 2026-07-21
 accessed: 2026-07-21
 ---
+> **MIGRATED 2026-08-01** → `.claude/memory/2026/08/01/plan-refactor-unified-backlog.md`. All remaining work (if any) is consolidated there; this file is the archived original design record.
+
 
 # Nonlinear BH-curve iteration accuracy vs FEMM — validation plan
 
