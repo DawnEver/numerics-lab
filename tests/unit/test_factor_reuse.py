@@ -7,6 +7,10 @@ trusts ``residual`` / ``jacobian`` -- key SOUNDNESS is the problem's (laplace pi
 ``tests/unit/laplace/test_factor_reuse.py``); what gauss owns here is the mechanics: hit/miss
 accounting, dense/sparse/scalar storage, and that a problem WITHOUT the seam marches untouched.
 """
+# ruff: noqa: PLC0415 -- test-module lazy imports: the module under test is imported inside
+# the test/fixture, keeping collection cheap and loading platform-conditional deps (win32com,
+# OCP, FEMM) only on the path that needs them. Hoist a file's imports and DELETE this header;
+# the population is ratcheted by tests/unit/scripts/test_waiver_principle.py.
 
 from __future__ import annotations
 
