@@ -229,6 +229,60 @@ def test_an_event_landing_exactly_on_a_grid_point_is_still_handled_once() -> Non
     assert abs(t_event - 0.6) <= 1e-6
 
 
+def test_two_events_crossing_at_the_same_instant_fire_together() -> None:
+    """Two functions rooting at the SAME instant: BOTH fire at it.
+
+    The earliest-only rule drops the second, and -- the mechanism that makes it a STUCK device
+    rather than a delayed event -- each function reads only its OWN state (the H-bridge's
+    complementary pair: the S4's event function reads the S4's own flag, which the S1's
+    callback does not change). The dropped function's sign at the event (``g == 0`` reads as
+    the far side) therefore matches its post-event sign, so the re-detection never sees it.
+    Measured on hbridge_deadtime 2026-08-07: the S4's OFF edge at 37.4 us was lost and the
+    switch stayed ON through the whole dead-time, changing the circuit.
+    """
+
+    class _TwinIndependentToggles:
+        """``u_dot = 1`` with two identical level events; each callback flips its OWN flag."""
+
+        def __init__(self) -> None:
+            self.flag_a = False
+            self.flag_b = False
+            self.level = 0.2
+
+        def residual(self, u, u_dot, u_ddot, t):
+            return np.asarray(u_dot) - 1.0
+
+        def jacobian(self, u, u_dot, u_ddot, t, weights):
+            return np.array([[weights.alpha1.real]])
+
+        def fn_a(self, u, t):
+            return float(u[0]) - self.level if not self.flag_a else -1.0
+
+        def fn_b(self, u, t):
+            return float(u[0]) - self.level if not self.flag_b else -1.0
+
+        def on_a(self, *_args):
+            self.flag_a = True
+
+        def on_b(self, *_args):
+            self.flag_b = True
+
+    problem = _TwinIndependentToggles()
+    study = TransientStudy(t0=0.0, t1=1.0, dt=1.0, integrator=IntegratorKind.BDF2)  # ONE cell, both root at 0.2
+    solution = integrate_transient_with_events(
+        problem,
+        study,
+        np.array([0.0]),
+        event_fns=(problem.fn_a, problem.fn_b),
+        on_event=lambda i, _t, _u: (problem.on_a if i == 0 else problem.on_b)(),
+    )
+    assert problem.flag_a and problem.flag_b, f'both callbacks must fire, got a={problem.flag_a} b={problem.flag_b}'
+    times = sorted(t for _, t in solution.events)
+    assert len(times) == 2, f'expected two events, got {solution.events}'
+    assert abs(times[0] - times[1]) <= 1e-9, f'simultaneous events not co-located: {times}'
+    assert abs(times[0] - 0.2) <= 1e-6
+
+
 def test_two_events_in_one_step_are_handled_earliest_first() -> None:
     """Two crossings inside one nominal cell: the EARLIER is located and handled first."""
 

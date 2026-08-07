@@ -231,13 +231,21 @@ def integrate_transient_with_events(
                 g_prev = g_new
                 break
 
-            # Bisect each crossed function to its root; handle the EARLIEST one only.
-            best: tuple[float, int, NDArray[np.floating]] | None = None
+            # Bisect each crossed function to its root; the EARLIEST instant wins, and every
+            # function rooted within ``bracket_tol`` of it fires AT it. The earliest-only rule
+            # would drop a SIMULTANEOUS crossing (a dead-time H-bridge's complementary pair
+            # roots the SAME pulse spec at the same instant), and the dropped function is
+            # STUCK, not just delayed: it reads only its own state, which the fired event's
+            # callback does not change, so its sign at the event (``g == 0`` reads as the far
+            # side) matches its post-event sign and the re-detection never sees it. Measured
+            # on hbridge_deadtime 2026-08-07: the S4's OFF edge at 37.4 us was lost and the
+            # switch stayed ON through the whole dead-time, changing the circuit.
+            candidates: list[tuple[float, int, NDArray[np.floating]]] = []
             for i in crossed:
                 if g_new[i] == 0.0:
-                    candidate = (t_target, i, u_probe)
+                    candidates.append((t_target, i, u_probe))
                 elif t_target - t_from <= bracket_tol:
-                    candidate = (t_from, i, np.array(checkpoint.state.last_u, dtype=float, copy=True))
+                    candidates.append((t_from, i, np.array(checkpoint.state.last_u, dtype=float, copy=True)))
                 else:
                     lo_t, lo_sign = t_from, _sign(g_prev[i])
                     hi_t = t_target
@@ -250,15 +258,14 @@ def integrate_transient_with_events(
                             lo_t = mid_t
                         else:
                             hi_t = mid_t
-                    t_star = 0.5 * (lo_t + hi_t)
+                    t_star_i = 0.5 * (lo_t + hi_t)
                     trial_state, trial_prev_dt = _rollback(checkpoint, solution)
-                    _ps, u_star = step_from(trial_state, trial_prev_dt, t_star - t_from, t_star)
-                    candidate = (t_star, i, u_star)
-                if best is None or candidate[0] < best[0]:
-                    best = candidate
+                    _ps, u_star_i = step_from(trial_state, trial_prev_dt, t_star_i - t_from, t_star_i)
+                    candidates.append((t_star_i, i, u_star_i))
 
-            assert best is not None, 'at least one event finder must cross in an event bracket'  # type: narrow[None]
-            t_star, i_star, u_star = best
+            assert candidates, 'at least one event finder must cross in an event bracket'  # type: narrow[list]
+            t_star = min(c[0] for c in candidates)
+            simultaneous = [c for c in candidates if c[0] - t_star <= bracket_tol]
             state, prev_dt = _rollback(checkpoint, solution)
             if t_star > t_from:  # land the march exactly on the event
                 state, u_star = step_from(state, prev_dt, t_star - t_from, t_star)
@@ -266,16 +273,17 @@ def integrate_transient_with_events(
                 solution.states.append(u_star)
             else:
                 u_star = np.array(state.last_u, dtype=float, copy=True)
-            solution.events.append((i_star, t_star))
+            for _root, i, _u in simultaneous:
+                solution.events.append((i, t_star))
+                if on_event is not None:
+                    on_event(i, t_star, u_star)
+                last_fired[i] = t_star
             # RESTART the history at the event: the toggle invalidates the pre-event derivative
             # history, so the first post-event step must not read it (see the module docstring for
             # the kink-rounding measurement). The landing step's v/a carry over for second-order
             # integrators; for BDF they are None and the restart is a plain bootstrap.
             state = integrator.start(u_star, t_star, state.v, state.a)
             prev_dt = None
-            if on_event is not None:
-                on_event(i_star, t_star, u_star)
-            last_fired[i_star] = t_star
             g_prev = [float(g(u_star, t_star)) for g in event_fns]
             pending_dt = t_target - t_star  # the genuine remainder of this cell
             events_this_cell += 1
