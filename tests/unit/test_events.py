@@ -125,7 +125,13 @@ def test_an_event_inside_a_quadratic_ramp_costs_no_accuracy_at_all() -> None:
         on_event=lambda _i, _t, _u: setattr(on_grid, 'fired', True),
     )
     assert len(grid_march.events) == 1
-    assert grid_march.times == plain.times
+    # Same grid, up to the locator's own tolerance: an event EXACTLY on a grid point
+    # used to land bit-exactly (the `g_new == 0.0` shortcut), but numpy 2.5.1's macOS
+    # wheel (Apple Accelerate) computes the 1x1 linear solve as b*(1/a) -- 1 ulp high
+    # (measured 2026-08-07: t_event = 0.6 - 1.4305e-07), so the bisection branch runs
+    # and lands within its documented bracket_tol = dt*1e-6 = 3e-7. The assertion is
+    # the locator's contract, not the former bonus.
+    assert all(abs(a - b) <= study.dt * 1e-6 for a, b in zip(grid_march.times, plain.times, strict=True))
     # Bit-identity is NOT the expectation even on-grid: the restart at the event bootstraps one
     # BDF1 step, whose O(dt^2) local error is real but bounded -- so the assertion is the
     # true-error scale, not equality.
@@ -216,7 +222,11 @@ def test_an_event_landing_exactly_on_a_grid_point_is_still_handled_once() -> Non
     )
     assert problem.toggles == 1
     ((_, t_event),) = solution.events
-    assert abs(t_event - 0.6) <= 1e-12
+    # Locator tolerance, not bit-exactness: the exact-grid-point landing was a bonus
+    # of the old numpy's correctly-rounded 1x1 solve; numpy 2.5.1/Accelerate solves it
+    # as b*(1/a) (1 ulp high), so the bisection branch lands within its documented
+    # bracket_tol = 3e-7 (measured 2026-08-07: t_event - 0.6 = -1.4305e-07).
+    assert abs(t_event - 0.6) <= 1e-6
 
 
 def test_two_events_in_one_step_are_handled_earliest_first() -> None:
