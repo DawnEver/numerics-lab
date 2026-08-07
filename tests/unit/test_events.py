@@ -17,6 +17,7 @@ from __future__ import annotations
 import itertools
 
 import numpy as np
+import pytest
 
 from motronics.contracts.study_spec import IntegratorKind, TransientStudy
 from motronics.gauss.time_integrators import integrate_transient
@@ -374,3 +375,79 @@ def test_an_event_within_time_tol_of_the_checkpoint_is_handled_there_not_bisecte
     assert t_event <= 1.0e-3
     ts = solution.times
     assert all(b > a for a, b in itertools.pairwise(ts))
+
+
+def test_time_breakpoints_land_on_the_grid_and_do_not_change_a_breakpointless_march() -> None:
+    """``time_breakpoints`` pins the source edges onto the marched grid -- the W1b seam.
+
+    A breakpoint is a KNOWN non-smooth instant (a PWM edge), so the march clips the cell to it
+    instead of sampling past it: every breakpoint appears in ``solution.times``, the plain march
+    with ``time_breakpoints=()`` is bit-identical to not passing the argument at all, and a
+    breakpoint list that is not strictly inside the study window is refused loudly.
+    """
+
+    class _Linear:
+        def residual(self, u, u_dot, u_ddot, t):
+            return np.asarray(u_dot) - 1.0
+
+        def jacobian(self, u, u_dot, u_ddot, t, weights):
+            return np.array([[weights.alpha1.real]])
+
+    study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
+    problem = _Linear()
+    solution = integrate_transient_with_events(
+        problem, study, np.array([0.0]), time_breakpoints=(0.05, 0.27, 0.8)
+    )
+    ts = np.asarray(solution.times)
+    for bp in (0.05, 0.27, 0.8):
+        assert np.isclose(ts, bp).any(), f'breakpoint {bp} not on the grid'
+
+    plain = integrate_transient_with_events(problem, study, np.array([0.0]))
+    # A clipped cell replaces its nominal target: 0.1 is displaced by the 0.05 breakpoint.
+    assert 0.1 not in ts
+
+    no_bps = integrate_transient_with_events(problem, study, np.array([0.0]), time_breakpoints=())
+    assert np.array_equal(no_bps.times, plain.times)
+
+
+def test_time_breakpoints_and_state_events_coexist() -> None:
+    """A source edge (time breakpoint) must not disturb the state-event locator, and vice versa.
+
+    The laplace shape this pins: a PWM source edge at ``t = 0.3`` plus a threshold switch whose
+    crossing ``u = 0.5`` lies on the nominal grid. Both land exactly -- the breakpoint on the
+    grid, the event by bisection at ``0.5`` -- and a callback-flipping event still fires once.
+    (A breakpoint does NOT change what BDF2 integrates on the edge cell: the endpoint-evaluated
+    residual reads the post-edge value, so the edge cell carries the jump's O(h) share -- the
+    grid alignment, not the integral, is what the seam guarantees.)
+    """
+    problem = _RampWithToggle(level=0.5)
+    study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
+    solution = integrate_transient_with_events(
+        problem,
+        study,
+        np.array([0.0]),
+        event_fns=(problem.event_fn,),
+        on_event=lambda _i, _t, _u: problem.toggle(),
+        time_breakpoints=(0.3,),
+    )
+    ts = np.asarray(solution.times)
+    assert np.isclose(ts, 0.3).any(), 'the time breakpoint must land on the grid'
+    assert problem.toggles == 1
+    ((_, t_event),) = solution.events
+    assert np.isclose(t_event, 0.5, atol=1e-9), 'the state event is located independently of the breakpoint'
+
+
+def test_time_breakpoints_outside_the_study_window_are_refused() -> None:
+    study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
+
+    class _Linear:
+        def residual(self, u, u_dot, u_ddot, t):
+            return np.asarray(u_dot) - 1.0
+
+        def jacobian(self, u, u_dot, u_ddot, t, weights):
+            return np.array([[weights.alpha1.real]])
+
+    with pytest.raises(ValueError, match='study window'):
+        integrate_transient_with_events(_Linear(), study, np.array([0.0]), time_breakpoints=(1.5,))
+    with pytest.raises(ValueError, match='strictly increasing'):
+        integrate_transient_with_events(_Linear(), study, np.array([0.0]), time_breakpoints=(0.2, 0.2))

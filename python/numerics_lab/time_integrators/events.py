@@ -126,6 +126,7 @@ def integrate_transient_with_events(
     *,
     event_fns: Sequence[Callable[[NDArray[np.floating], float], float]] = (),
     on_event: Callable[[int, float, NDArray[np.floating]], None] | None = None,
+    time_breakpoints: Sequence[float] = (),
     v0: NDArray[np.floating] | None = None,
     a0: NDArray[np.floating] | None = None,
     solve=_default_solve,
@@ -152,6 +153,16 @@ def integrate_transient_with_events(
     The initial point is NOT scanned for events: a zero at ``t0`` is the caller's initial
     condition to declare, not an event to locate.
 
+    ``time_breakpoints`` pins KNOWN non-smooth instants (a source edge -- the laplace
+    ``SourceSpec.breakpoints_in`` instants) onto the marched grid: a breakpoint inside a nominal
+    cell clips the cell's target, so the march lands exactly ON the edge instead of sampling past
+    it and integrating a slope that switched mid-cell. A breakpoint is a TIME event, not a
+    state event: no bisection, no ``on_event`` callback -- the grid is simply aligned, and the
+    variable-step BDF2 form keeps the landing accurate. They must be strictly increasing and lie
+    in the open-closed window ``(t0, t1]`` (the same window discipline
+    ``SourceSpec.breakpoints_in`` validates). With ``time_breakpoints`` empty the march is
+    bit-identical to omitting the argument.
+
     ``factor_cache`` (W6) reuses one factorization per reuse key, as in
     :func:`~motronics.gauss.time_integrators.integrate_transient`. No invalidation hook is needed
     here: the key re-derives from the system every solve, so the toggle's changed tangent, the
@@ -170,6 +181,14 @@ def integrate_transient_with_events(
     solution = EventfulTransientSolution(times=[study.t0], states=[u0])
     g_prev = [float(g(u0, study.t0)) for g in event_fns]
     prev_dt: float | None = None
+    breakpoints = list(time_breakpoints)
+    for i, bp in enumerate(breakpoints):
+        if not study.t0 < bp <= study.t1:
+            msg = f'time_breakpoints[{i}]={bp:g} is outside the study window ({study.t0:g}, {study.t1:g}]'
+            raise ValueError(msg)
+        if i and bp <= breakpoints[i - 1]:
+            msg = f'time_breakpoints must be strictly increasing, got {time_breakpoints}'
+            raise ValueError(msg)
     # The last time each function fired. A function lands on its own zero, so on the pass right
     # after firing its sign at the checkpoint is epsilon-arbitrary and reads as a fresh crossing
     # rooted AT the firing instant -- the same event counted twice (measured: a stateless
@@ -206,6 +225,14 @@ def integrate_transient_with_events(
         pending_dt = dt  # dt exactly (not t_target - state.t, which is off by ulps from dt)
         events_this_cell = 0
         while True:  # one nominal cell, possibly interrupted by events
+            # W1b: a time breakpoint inside the cell clips the target -- a known non-smooth
+            # instant is LANDED on the grid, never sampled past (a landed point is already
+            # reached, so it is consumed and the next one examined).
+            while breakpoints and breakpoints[0] <= state.t + bracket_tol:
+                breakpoints.pop(0)
+            if breakpoints and breakpoints[0] <= t_target:
+                t_target = breakpoints[0]
+                pending_dt = t_target - state.t
             checkpoint = _take_checkpoint(state, prev_dt, solution)
             t_from = state.t
             probe_state, u_probe = step_from(state, prev_dt, pending_dt, t_target)
