@@ -9,6 +9,8 @@ DerivativeWeights of each integrator and exercise a tiny fake SemiDiscreteProble
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 
@@ -194,3 +196,84 @@ def test_registry_covers_every_integrator_kind() -> None:
 def test_unknown_integrator_raises() -> None:
     with pytest.raises(KeyError):
         get_integrator('not-a-kind')  # type: ignore[arg-type]
+
+
+def test_an_exhausted_newton_ceiling_labels_the_solution(caplog) -> None:
+    """The CONVERGENCE CONTRACT: a step that exhausts its Newton ceiling is LABELLED, never
+    silent -- the solution carries the worst step residual and the offending times, the
+    marcher warns (AGENTS.md: the caller can tell), and the caller reads the ``converged``
+    tag. The DC-op precedent is the raise; the transient's contract is label-don't-block
+    (the FVS plan's replacement for the old silent accept, measured 2026-08-07: the
+    transient's per-step Newton used to return the unconverged iterate with no flag).
+    """
+
+    class _QuadraticDrift:
+        """``u_dot = u^2``: the implicit BDF step's Newton needs several iterations at a coarse dt."""
+
+        def residual(self, u, u_dot, u_ddot, t):
+            return np.asarray(u_dot) - np.asarray(u) ** 2
+
+        def jacobian(self, u, u_dot, u_ddot, t, weights):
+            return np.array([[weights.alpha1.real - 2.0 * float(u[0]) * weights.alpha0.real]])
+
+    problem = _QuadraticDrift()
+    study = TransientStudy(t0=0.0, t1=0.5, dt=0.1, integrator=IntegratorKind.BDF2)
+    with caplog.at_level('WARNING', logger='motronics.gauss.time_integrators'):
+        coarse = integrate_transient(problem, study, np.array([1.0]), max_newton=1, tol=1e-12)
+    assert not coarse.converged
+    assert coarse.nonconverged_times, 'an exhausted step must be named on the solution'
+    assert coarse.worst_step_residual > 0.0
+    assert any('did not converge' in rec.message for rec in caplog.records)
+    # The controlled comparison: with enough Newton iterations the same march converges.
+    fine = integrate_transient(problem, study, np.array([1.0]), max_newton=20, tol=1e-12)
+    assert fine.converged and not fine.nonconverged_times
+
+
+def test_adaptive_stepping_keeps_accuracy_with_fewer_steps_on_the_smooth_tail() -> None:
+    """W6 adaptive dt (OTSF): the BDF2's LTE controller sizes the steps -- the march takes
+    the large steps on the smooth tail where the fixed march wastes them, at the same
+    accuracy per tolerance. ``u_dot = -u`` has the exact ``u = e^{-t}``.
+    """
+
+    class _Decay:
+        def residual(self, u, u_dot, u_ddot, t):
+            return np.asarray(u_dot) + np.asarray(u)
+
+        def jacobian(self, u, u_dot, u_ddot, t, weights):
+            return np.array([[weights.alpha1.real + weights.alpha0.real]])
+
+    problem = _Decay()
+    study = TransientStudy(t0=0.0, t1=5.0, dt=1e-3, integrator=IntegratorKind.BDF2)
+    fixed = integrate_transient(problem, study, np.array([1.0]))
+    # atol = 1e-6: the extrapolation-based LTE ~ u'' h^2 puts the controller's equilibrium at
+    # h ~ sqrt(atol/u'') ~ 1e-3 -- the fixed march's own scale, so the comparison is fair.
+    adaptive = integrate_transient(problem, study, np.array([1.0]), adaptive=True, atol=1e-6)
+
+    def err(sol):
+        return max(abs(float(u[0]) - math.exp(-t)) for t, u in zip(sol.times, sol.states, strict=True))
+
+    assert err(adaptive) <= max(err(fixed) * 10.0, 1e-8), (
+        f'adaptive true error {err(adaptive):g} vs fixed {err(fixed):g} -- the LTE controller '
+        'must not trade accuracy for steps'
+    )
+    steps = np.diff(np.asarray(adaptive.times))
+    assert steps.max() > 10.0 * steps.min(), (
+        f'adaptive steps span only {steps.min():.2e}..{steps.max():.2e} -- the controller must '
+        'size the steps (small in the transient, large on the smooth tail)'
+    )
+    assert adaptive.converged
+
+
+def test_adaptive_stepping_rejects_bdf1_with_a_named_error() -> None:
+    """The LTE controller is BDF2-specific (the second-order difference is its estimator)."""
+    study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF1)
+
+    class _Decay:
+        def residual(self, u, u_dot, u_ddot, t):
+            return np.asarray(u_dot) + np.asarray(u)
+
+        def jacobian(self, u, u_dot, u_ddot, t, weights):
+            return np.array([[weights.alpha1.real + weights.alpha0.real]])
+
+    with pytest.raises(ValueError, match='BDF2 only'):
+        integrate_transient(_Decay(), study, np.array([1.0]), adaptive=True)

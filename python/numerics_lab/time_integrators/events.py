@@ -59,13 +59,12 @@ from dataclasses import dataclass, field
 import numpy as np
 from numpy.typing import NDArray
 
-from motronics.contracts.analysis_formulation import DerivativeWeights
 from motronics.contracts.study_spec import TransientStudy
 from motronics.gauss.time_integrators import (
     FactorCache,
     IntegratorState,
-    StepForm,
     TransientSolution,
+    _bdf2_variable_form,
     _default_solve,
     _solve_step,
     get_integrator,
@@ -118,18 +117,6 @@ def _rollback(checkpoint: _Checkpoint, solution: TransientSolution) -> tuple[Int
 def _sign(value: float) -> bool:
     """The bisection's sign bit: ``g >= 0``. A landing exactly on zero reads as the far side."""
     return value >= 0.0
-
-
-def _bdf2_variable_form(state: IntegratorState, dt: float, h: float, t_new: float) -> StepForm:
-    """The variable-spacing BDF2 step form (see the module docstring); ``h`` is the previous step."""
-    u_n, u_nm1 = state.us[-1], state.us[-2]
-    return StepForm(
-        weights=DerivativeWeights(alpha0=1.0, alpha1=(2.0 * dt + h) / (dt * (dt + h))),
-        h_u=np.zeros_like(u_n),
-        h_dot=-(dt + h) / (dt * h) * u_n + dt / (h * (dt + h)) * u_nm1,
-        h_ddot=np.zeros_like(u_n),
-        t_eval=t_new,
-    )
 
 
 def integrate_transient_with_events(
@@ -204,9 +191,14 @@ def integrate_transient_with_events(
             form = _bdf2_variable_form(from_state, dt_step, from_prev_dt, t_new)
         else:
             form = integrator.prepare(from_state, dt_step, t_new)
-        u_new = _solve_step(
+        u_new, converged, _iterations, residual = _solve_step(
             problem, form, from_state.last_u, solve=solve, max_newton=max_newton, tol=tol, factor_cache=factor_cache
         )
+        # The convergence contract rides the eventful march too: a probe or a landed step
+        # that exhausted the ceiling is labelled on the solution, never silent.
+        solution.worst_step_residual = max(solution.worst_step_residual, residual)
+        if not converged:
+            solution.nonconverged_times.append(t_new)
         return integrator.advance(from_state, u_new, dt_step, t_new), u_new
 
     for k in range(n_steps):
