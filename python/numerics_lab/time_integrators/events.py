@@ -252,9 +252,16 @@ def integrate_transient_with_events(
             # (SR-038: the round-2 adjudication wrongly claimed integrate_transient lands
             # past t1; the eventful march did, and the bit-identity promise broke).
             if k >= n_steps:
-                break
-            t_target = study.t0 + (k + 1) * dt
-            pending_dt = dt  # dt exactly (not t_target - state.t, which is off by ulps from dt)
+                # Preserve the plain march's truncated grid only when there is nothing left
+                # to consume.  A breakpoint in the final partial interval makes that interval
+                # part of the eventful march, including the remainder from the edge to t1.
+                if bp_index >= len(breakpoints):
+                    break
+                t_target = study.t1
+                pending_dt = t_target - state.t
+            else:
+                t_target = study.t0 + (k + 1) * dt
+                pending_dt = dt  # dt exactly (not t_target - state.t, which is off by ulps from dt)
         k += 1
         events_this_cell = 0
         while True:  # one nominal cell, possibly interrupted by events

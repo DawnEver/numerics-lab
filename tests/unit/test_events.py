@@ -527,6 +527,26 @@ def test_a_final_cell_breakpoint_is_a_partial_step_not_a_full_dt() -> None:
     assert 0.95 in ts
 
 
+@pytest.mark.parametrize('breakpoint', [0.95, 1.0])
+def test_a_breakpoint_in_a_non_integral_final_interval_is_consumed(breakpoint: float) -> None:
+    """SR-049: a breakpoint after the last nominal step still lands and finishes at t1."""
+
+    class _Linear:
+        def residual(self, u, u_dot, u_ddot, t):
+            return np.asarray(u_dot) - 1.0
+
+        def jacobian(self, u, u_dot, u_ddot, t, weights):
+            return np.array([[weights.alpha1.real]])
+
+    study = TransientStudy(t0=0.0, t1=1.0, dt=0.3, integrator=IntegratorKind.BDF2)
+    solution = integrate_transient_with_events(
+        _Linear(), study, np.array([0.0]), time_breakpoints=(breakpoint,)
+    )
+
+    assert solution.times[-1] == pytest.approx(study.t1)
+    assert any(t == pytest.approx(breakpoint) for t in solution.times)
+
+
 def test_a_non_integral_window_is_bit_identical_to_the_plain_march() -> None:
     """SR-038 regression: without breakpoints the eventful march takes EXACTLY the plain
     march's steps -- truncating at its fixed count (round((t1-t0)/dt)) when t1 is not a
