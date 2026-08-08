@@ -234,12 +234,22 @@ def integrate_transient_with_events(
     # clipping inserts grid points: the march ends at t1, not at a fixed step count.
     while state.t < study.t1 - bracket_tol:
         if resume_from is not None:
+            # The re-anchored grid continues from the last breakpoint; the t1 clamp makes the
+            # FINAL re-anchored cell a PARTIAL step, so its dt is the true remainder -- a full
+            # dt there advanced the physics past t1 while labelling it t1 (SR-025, measured
+            # max |u - t| = 0.05 on a final-cell clip).
             t_target = min(resume_from, study.t1)
             resume_from = t_target + dt
+            pending_dt = t_target - state.t
         else:
+            # Without breakpoints the grid is the plain nominal one -- IDENTICAL to
+            # integrate_transient's fixed step count, including its last nominal step landing
+            # past t1 when t1 is not a multiple of dt (SR-026 misread that as an overshoot;
+            # bit-for-bit identity with the plain march is the promise, and it requires the
+            # same steps). The while condition then ends the march on state.t >= t1.
             t_target = study.t0 + (k + 1) * dt
+            pending_dt = dt  # dt exactly (not t_target - state.t, which is off by ulps from dt)
         k += 1
-        pending_dt = dt  # dt exactly (not t_target - state.t, which is off by ulps from dt)
         events_this_cell = 0
         while True:  # one nominal cell, possibly interrupted by events
             # W1b: a time breakpoint inside the cell clips the target -- a known non-smooth

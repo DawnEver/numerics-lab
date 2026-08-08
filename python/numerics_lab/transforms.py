@@ -72,7 +72,9 @@ def park_inverse(
 
     Args:
         d, q, zero: rotor-frame components, each ``(n_theta,)`` or scalar.
-        theta_e: rotor electrical angle (rad), broadcastable to ``d``.
+        theta_e: rotor electrical angle (rad), broadcastable to ``d``; must be 1-D or scalar
+            (a 2-D grid is refused -- the phase axis is the ``n_phase`` parameter's, never an
+            input axis).
         n_phase: number of phases to reconstruct (default 3).
 
     Returns:
@@ -83,6 +85,19 @@ def park_inverse(
     q = np.asarray(q, dtype=float)
     zero = np.asarray(zero, dtype=float)
     theta_e = np.asarray(theta_e, dtype=float)
+    # A 2-D theta_e is REFUSED (SR-031): after the broadcast its leading axis would be
+    # silently consumed as the phase axis -- a (3, n) angle grid whose leading axis equals
+    # n_phase returns wrong numbers with NO error, and other 2-D shapes surface as a raw
+    # numpy broadcast failure. The sample axis is 1-D by contract; an (n_phase, n) phase
+    # grid is the n_phase parameter's job, never an input grid.
+    if theta_e.ndim > 1:
+        msg = (
+            f'theta_e must be 1-D or scalar (the SAMPLE axis), got {theta_e.ndim} axes of '
+            f'shape {theta_e.shape}: an (n_phase, n) phase grid is the n_phase parameter\'s '
+            'job, never an input grid -- a 2-D theta_e whose leading axis equals n_phase '
+            'would otherwise be silently consumed as the phase axis.'
+        )
+        raise ValueError(msg)
     # Broadcast the commands AND the angle to a common sample shape FIRST (the docstring's
     # "broadcastable to d" contract): the sample axis is established by the broadcast, never
     # inferred from theta_e.ndim alone. A (3,) command vector with a scalar angle is

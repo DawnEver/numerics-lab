@@ -108,6 +108,21 @@ def test_park_inverse_refuses_incompatible_command_shapes() -> None:
         park_inverse(np.zeros(3), np.zeros(4), 0.0, np.linspace(0.0, 1.0, 5))
 
 
+def test_park_inverse_refuses_a_2d_theta_grid() -> None:
+    """SR-031: a 2-D theta_e must be refused loudly -- the sample axis is 1-D by contract,
+    and an (n_phase, n) phase grid is the n_phase parameter's job, never an input grid. The
+    dangerous case: a (3, n) angle array whose leading axis EQUALS n_phase would otherwise be
+    silently consumed as the phase axis (wrong numbers, no error); other 2-D shapes would
+    surface as a raw numpy broadcast failure.
+    """
+    with pytest.raises(ValueError, match='theta_e'):
+        park_inverse(1.0, 0.0, 0.0, np.zeros((3, 4)))
+    with pytest.raises(ValueError, match='theta_e'):
+        park_inverse(np.zeros((3, 4)), np.zeros((3, 4)), np.zeros((3, 4)), np.zeros((3, 4)))
+    with pytest.raises(ValueError, match='theta_e'):
+        park_inverse(np.zeros((2, 4)), np.zeros((2, 4)), np.zeros((2, 4)), np.zeros((2, 4)))
+
+
 def test_park_and_clarke_agree_on_a_balanced_set_at_theta_zero() -> None:
     """The two transforms are one convention: at theta_e = 0 the d-axis equals alpha."""
     rng = np.random.default_rng(2)

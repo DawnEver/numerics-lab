@@ -504,3 +504,29 @@ def test_breakpoint_clipping_never_drifts_the_time_base() -> None:
     us = np.asarray([float(s[0]) for s in solution.states])
     assert np.max(np.abs(us - ts)) < 1.0e-12, f'time base drifted: max |u - t| = {np.max(np.abs(us - ts))}'
     assert ts[-1] == pytest.approx(1.0)  # the march ends exactly at t1
+
+
+def test_a_final_cell_breakpoint_is_a_partial_step_not_a_full_dt() -> None:
+    """SR-025 regression: a breakpoint inside the LAST cell clips to t1 with a PARTIAL step.
+
+    The round-1 re-anchor marched the final clipped cell a full dt while labelling it t1
+    (measured max |u - t| = 0.05 on a linear ramp) -- the regression test passed only because
+    its last breakpoint landed exactly on t1. Here the breakpoint sits at 0.95 (dt = 0.1):
+    the march must land 0.95 then finish with a 0.05 step to t1, riding its labels exactly.
+    """
+    class _Linear:
+        def residual(self, u, u_dot, u_ddot, t):
+            return np.asarray(u_dot) - 1.0
+
+        def jacobian(self, u, u_dot, u_ddot, t, weights):
+            return np.array([[weights.alpha1.real]])
+
+    study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
+    solution = integrate_transient_with_events(
+        _Linear(), study, np.array([0.0]), time_breakpoints=(0.95,)
+    )
+    ts = np.asarray(solution.times)
+    us = np.asarray([float(s[0]) for s in solution.states])
+    assert np.max(np.abs(us - ts)) < 1.0e-12
+    assert ts[-1] == pytest.approx(1.0)
+    assert 0.95 in ts
