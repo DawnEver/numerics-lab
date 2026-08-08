@@ -83,7 +83,9 @@ def park_inverse(
     q = np.asarray(q, dtype=float)
     zero = np.asarray(zero, dtype=float)
     theta_e = np.asarray(theta_e, dtype=float)
-    axes = _phase_axes(n_phase)[:, None] if d.ndim else _phase_axes(n_phase)
+    # The output grid is theta_e's: scalar commands broadcast over a theta array (the FOC
+    # signal-chain shape -- constant (v_d, v_q) modulated at a rotating theta_e).
+    axes = _phase_axes(n_phase)[:, None] if theta_e.ndim else _phase_axes(n_phase)
     angle = theta_e - axes
     return d * np.cos(angle) - q * np.sin(angle) + zero
 
