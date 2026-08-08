@@ -451,3 +451,56 @@ def test_time_breakpoints_outside_the_study_window_are_refused() -> None:
         integrate_transient_with_events(_Linear(), study, np.array([0.0]), time_breakpoints=(1.5,))
     with pytest.raises(ValueError, match='strictly increasing'):
         integrate_transient_with_events(_Linear(), study, np.array([0.0]), time_breakpoints=(0.2, 0.2))
+
+
+def test_thousands_of_time_breakpoints_all_land_on_the_grid() -> None:
+    """SR-014: the breakpoint queue is consumed by a cursor, not ``pop(0)`` -- a PWM march's
+    thousands of edges must all land (behavior identical to the list queue, pinned here at
+    the scale that would expose the per-edge O(n) list shift as O(n^2)).
+    """
+    n_edges = 4000  # a 20 kHz carrier over 100 ms -- the SR-014 scale
+    t1 = 0.1
+    study = TransientStudy(t0=0.0, t1=t1, dt=1.0e-5, integrator=IntegratorKind.BDF2)
+    bps = tuple(np.linspace(t1 / n_edges, t1, n_edges))  # every 2.5 cells, off-grid
+
+    class _Linear:
+        def residual(self, u, u_dot, u_ddot, t):
+            return np.asarray(u_dot) - 1.0
+
+        def jacobian(self, u, u_dot, u_ddot, t, weights):
+            return np.array([[weights.alpha1.real]])
+
+    solution = integrate_transient_with_events(_Linear(), study, np.array([0.0]), time_breakpoints=bps)
+    ts = np.asarray(solution.times)
+    for bp in (bps[0], bps[1000], bps[3000], bps[-1]):
+        assert np.isclose(ts, bp).any(), f'breakpoint {bp} not on the grid'
+    us = np.asarray([float(s[0]) for s in solution.states])
+    assert np.max(np.abs(us - ts)) < 1.0e-12, f'time base drifted: max |u - t| = {np.max(np.abs(us - ts))}'
+    assert ts[-1] == pytest.approx(t1)
+
+
+def test_breakpoint_clipping_never_drifts_the_time_base() -> None:
+    """SR-022 regression: the clipped march's states ride their labels EXACTLY.
+
+    The W1b round shipped a march whose nominal targets drifted ahead of the physics after
+    the first clipped cell (a linear ramp with a breakpoint at 0.05, dt=0.1: times carried
+    [0, 0.05, 0.2, ...] while the states were [0, 0.05, 0.15, ...] -- max |u - t| = 0.08, and
+    every switched-circuit transient after the first edge was silently wrong). The grid must
+    re-anchor at each breakpoint: u(t) == t to the ulp, all the way to t1.
+    """
+
+    class _Linear:
+        def residual(self, u, u_dot, u_ddot, t):
+            return np.asarray(u_dot) - 1.0
+
+        def jacobian(self, u, u_dot, u_ddot, t, weights):
+            return np.array([[weights.alpha1.real]])
+
+    study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
+    solution = integrate_transient_with_events(
+        _Linear(), study, np.array([0.0]), time_breakpoints=(0.05, 0.27, 0.8)
+    )
+    ts = np.asarray(solution.times)
+    us = np.asarray([float(s[0]) for s in solution.states])
+    assert np.max(np.abs(us - ts)) < 1.0e-12, f'time base drifted: max |u - t| = {np.max(np.abs(us - ts))}'
+    assert ts[-1] == pytest.approx(1.0)  # the march ends exactly at t1

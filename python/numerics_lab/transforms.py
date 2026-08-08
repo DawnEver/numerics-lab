@@ -83,9 +83,14 @@ def park_inverse(
     q = np.asarray(q, dtype=float)
     zero = np.asarray(zero, dtype=float)
     theta_e = np.asarray(theta_e, dtype=float)
-    # The output grid is theta_e's: scalar commands broadcast over a theta array (the FOC
-    # signal-chain shape -- constant (v_d, v_q) modulated at a rotating theta_e).
-    axes = _phase_axes(n_phase)[:, None] if theta_e.ndim else _phase_axes(n_phase)
+    # Broadcast the commands AND the angle to a common sample shape FIRST (the docstring's
+    # "broadcastable to d" contract): the sample axis is established by the broadcast, never
+    # inferred from theta_e.ndim alone. A (3,) command vector with a scalar angle is
+    # n_theta = 3 SAMPLES at one angle, not three phases -- keying the phase axis on
+    # theta_e.ndim conflated the two and returned a (3,) result (SR-024). The phase axis is
+    # prepended AFTER the broadcast, so the sample axis can never collide with it.
+    d, q, zero, theta_e = np.broadcast_arrays(d, q, zero, theta_e)
+    axes = _phase_axes(n_phase)[:, None] if d.ndim else _phase_axes(n_phase)
     angle = theta_e - axes
     return d * np.cos(angle) - q * np.sin(angle) + zero
 

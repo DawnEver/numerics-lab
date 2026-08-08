@@ -65,6 +65,49 @@ def test_clarke_amplitude_invariant() -> None:
     assert np.allclose(np.hypot(alpha, beta), peak, atol=1e-12)
 
 
+def test_park_inverse_vector_commands_with_scalar_angle_broadcast_to_samples() -> None:
+    """SR-024: vector (d, q, zero) at ONE angle is n_theta SAMPLES, not n_phase phases --
+    the promised 'theta_e broadcastable to d' shape is ``(n_phase, n)``, never a ``(3,)``
+    array that conflates samples with phases (and never a broadcast error).
+    """
+    rng = np.random.default_rng(3)
+    n = 7
+    d, q, zero = rng.standard_normal((3, n))
+    theta = 0.7
+    out = park_inverse(d, q, zero, theta_e=theta)
+    assert out.shape == (3, n)
+    axes = 2.0 * np.pi * np.arange(3, dtype=float) / 3
+    expect = d * np.cos(theta - axes[:, None]) - q * np.sin(theta - axes[:, None]) + zero
+    np.testing.assert_allclose(out, expect, atol=1e-12)
+    # And the forward map recovers the commands: the (3, n) output is per-sample phases.
+    d_back, q_back, zero_back = park_forward(out, np.array(theta))
+    np.testing.assert_allclose(d_back, d, atol=1e-12)
+    np.testing.assert_allclose(q_back, q, atol=1e-12)
+    np.testing.assert_allclose(zero_back, zero, atol=1e-12)
+
+
+def test_park_inverse_scalar_commands_with_vector_angle_broadcast() -> None:
+    """Scalar (d, q, zero) over a vector theta_e: one constant command modulated at n angles
+    -- the FOC signal-chain shape (constant commands at a rotating theta_e).
+    """
+    n_theta = 16
+    theta_e = np.linspace(0.0, 2.0 * np.pi, n_theta)
+    d, q, zero = 1.5, -2.0, 0.25
+    out = park_inverse(d, q, zero, theta_e)
+    assert out.shape == (3, n_theta)
+    axes = 2.0 * np.pi * np.arange(3, dtype=float) / 3
+    expect = d * np.cos(theta_e[None, :] - axes[:, None]) - q * np.sin(theta_e[None, :] - axes[:, None]) + zero
+    np.testing.assert_allclose(out, expect, atol=1e-12)
+
+
+def test_park_inverse_refuses_incompatible_command_shapes() -> None:
+    """Commands that cannot broadcast to one sample shape are refused -- never silently
+    conflated (a (3,) d with a (4,) q is not three phases by accident).
+    """
+    with pytest.raises(ValueError, match='broadcast'):
+        park_inverse(np.zeros(3), np.zeros(4), 0.0, np.linspace(0.0, 1.0, 5))
+
+
 def test_park_and_clarke_agree_on_a_balanced_set_at_theta_zero() -> None:
     """The two transforms are one convention: at theta_e = 0 the d-axis equals alpha."""
     rng = np.random.default_rng(2)
