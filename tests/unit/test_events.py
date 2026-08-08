@@ -395,9 +395,7 @@ def test_time_breakpoints_land_on_the_grid_and_do_not_change_a_breakpointless_ma
 
     study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
     problem = _Linear()
-    solution = integrate_transient_with_events(
-        problem, study, np.array([0.0]), time_breakpoints=(0.05, 0.27, 0.8)
-    )
+    solution = integrate_transient_with_events(problem, study, np.array([0.0]), time_breakpoints=(0.05, 0.27, 0.8))
     ts = np.asarray(solution.times)
     for bp in (0.05, 0.27, 0.8):
         assert np.isclose(ts, bp).any(), f'breakpoint {bp} not on the grid'
@@ -497,9 +495,7 @@ def test_breakpoint_clipping_never_drifts_the_time_base() -> None:
             return np.array([[weights.alpha1.real]])
 
     study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
-    solution = integrate_transient_with_events(
-        _Linear(), study, np.array([0.0]), time_breakpoints=(0.05, 0.27, 0.8)
-    )
+    solution = integrate_transient_with_events(_Linear(), study, np.array([0.0]), time_breakpoints=(0.05, 0.27, 0.8))
     ts = np.asarray(solution.times)
     us = np.asarray([float(s[0]) for s in solution.states])
     assert np.max(np.abs(us - ts)) < 1.0e-12, f'time base drifted: max |u - t| = {np.max(np.abs(us - ts))}'
@@ -514,6 +510,7 @@ def test_a_final_cell_breakpoint_is_a_partial_step_not_a_full_dt() -> None:
     its last breakpoint landed exactly on t1. Here the breakpoint sits at 0.95 (dt = 0.1):
     the march must land 0.95 then finish with a 0.05 step to t1, riding its labels exactly.
     """
+
     class _Linear:
         def residual(self, u, u_dot, u_ddot, t):
             return np.asarray(u_dot) - 1.0
@@ -522,9 +519,7 @@ def test_a_final_cell_breakpoint_is_a_partial_step_not_a_full_dt() -> None:
             return np.array([[weights.alpha1.real]])
 
     study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
-    solution = integrate_transient_with_events(
-        _Linear(), study, np.array([0.0]), time_breakpoints=(0.95,)
-    )
+    solution = integrate_transient_with_events(_Linear(), study, np.array([0.0]), time_breakpoints=(0.95,))
     ts = np.asarray(solution.times)
     us = np.asarray([float(s[0]) for s in solution.states])
     assert np.max(np.abs(us - ts)) < 1.0e-12
@@ -537,7 +532,8 @@ def test_a_non_integral_window_is_bit_identical_to_the_plain_march() -> None:
     march's steps -- truncating at its fixed count (round((t1-t0)/dt)) when t1 is not a
     multiple of dt, never a full step past t1. The round-2 adjudication wrongly claimed
     integrate_transient lands past t1; the eventful march did (plain [0,.3,.6,.9] vs
-    eventful [0,.3,.6,.9,1.2] for t1=1.0, dt=0.3) and the bit-identity promise broke."""
+    eventful [0,.3,.6,.9,1.2] for t1=1.0, dt=0.3) and the bit-identity promise broke.
+    """
 
     class _Linear:
         def residual(self, u, u_dot, u_ddot, t):
