@@ -530,3 +530,25 @@ def test_a_final_cell_breakpoint_is_a_partial_step_not_a_full_dt() -> None:
     assert np.max(np.abs(us - ts)) < 1.0e-12
     assert ts[-1] == pytest.approx(1.0)
     assert 0.95 in ts
+
+
+def test_a_non_integral_window_is_bit_identical_to_the_plain_march() -> None:
+    """SR-038 regression: without breakpoints the eventful march takes EXACTLY the plain
+    march's steps -- truncating at its fixed count (round((t1-t0)/dt)) when t1 is not a
+    multiple of dt, never a full step past t1. The round-2 adjudication wrongly claimed
+    integrate_transient lands past t1; the eventful march did (plain [0,.3,.6,.9] vs
+    eventful [0,.3,.6,.9,1.2] for t1=1.0, dt=0.3) and the bit-identity promise broke."""
+
+    class _Linear:
+        def residual(self, u, u_dot, u_ddot, t):
+            return np.asarray(u_dot) - 1.0
+
+        def jacobian(self, u, u_dot, u_ddot, t, weights):
+            return np.array([[weights.alpha1.real]])
+
+    study = TransientStudy(t0=0.0, t1=1.0, dt=0.3, integrator=IntegratorKind.BDF2)
+    plain = integrate_transient(_Linear(), study, np.array([0.0]))
+    eventful = integrate_transient_with_events(_Linear(), study, np.array([0.0]))
+    assert np.array_equal(plain.times, eventful.times)
+    assert np.array_equal(np.asarray(plain.states), np.asarray(eventful.states))
+    assert eventful.times[-1] == pytest.approx(0.9)  # the truncating count, not 1.2

@@ -223,6 +223,9 @@ def integrate_transient_with_events(
             solution.nonconverged_times.append(t_new)
         return integrator.advance(from_state, u_new, dt_step, t_new), u_new
 
+    # The plain march's fixed step count -- integrate_transient's own n_steps; the eventful
+    # march without breakpoints must take exactly these (SR-038), so the count lives here.
+    n_steps = round((study.t1 - study.t0) / dt)
     resume_from: float | None = None
     k = 0
     # A clipped cell RE-ANCHORS the nominal grid at the breakpoint (resume_from keeps the
@@ -242,11 +245,14 @@ def integrate_transient_with_events(
             resume_from = t_target + dt
             pending_dt = t_target - state.t
         else:
-            # Without breakpoints the grid is the plain nominal one -- IDENTICAL to
-            # integrate_transient's fixed step count, including its last nominal step landing
-            # past t1 when t1 is not a multiple of dt (SR-026 misread that as an overshoot;
-            # bit-for-bit identity with the plain march is the promise, and it requires the
-            # same steps). The while condition then ends the march on state.t >= t1.
+            # Without breakpoints the grid is the plain nominal one, and it must be BIT-
+            # IDENTICAL to integrate_transient's: that march stops after its fixed step count
+            # n_steps = round((t1-t0)/dt) -- which TRUNCATES at the last nominal step before
+            # t1 (plain [0, .3, .6, .9] for t1=1.0, dt=0.3) -- never a full step past t1
+            # (SR-038: the round-2 adjudication wrongly claimed integrate_transient lands
+            # past t1; the eventful march did, and the bit-identity promise broke).
+            if k >= n_steps:
+                break
             t_target = study.t0 + (k + 1) * dt
             pending_dt = dt  # dt exactly (not t_target - state.t, which is off by ulps from dt)
         k += 1
