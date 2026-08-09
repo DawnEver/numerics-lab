@@ -419,6 +419,8 @@ def _solve_step(
     tol: float,
     tol_rel: float | None = None,
     factor_cache: FactorCache | None = None,
+    backtrack_band: float | None = None,
+    backtrack_cap: int = 8,
 ) -> NDArray[np.floating]:
     """Advance one step by a Newton loop on ``residual(u_arg, u_dot, u_ddot, t)`` for ``u_{n+1}``.
 
@@ -431,6 +433,16 @@ def _solve_step(
     ``factor_cache`` (W6) engages only when the problem exposes ``factor_reuse_key``: while the
     derived key holds, the tangent is neither rebuilt nor re-factored -- the cached factorization
     back-substitutes. A problem without the seam takes the per-solve path exactly as before.
+
+    The BACKTRACKING line search (MANUAL-632/634): a Newton step that would RAISE the residual
+    (the sharp GaN channel's overshoot at the commutation -- the measured two-cycle between the
+    physical state and the nonphysical ~824 V state) is halved up to ``backtrack_cap`` times,
+    accepting the first half-step whose residual drops below ``backtrack_band * r_current``
+    (``None`` = the strict monotone: accept only a strict decrease). The calibration (measured
+    on the GaN bridge with the CORRECTED root-find): the STRICT band with cap 8 drops the
+    exhausted steps 82 -> 33 at the same converged trajectory -- the simple circuit's ON drop
+    stays 0.4674 V in every variant, where the earlier measured 'path-change' was the wrong
+    root-find's artifact. ``backtrack_cap = 0`` restores the bare Newton.
 
     Returns ``(u, converged, iterations, residual)`` -- the CONVERGENCE CONTRACT: the caller
     (the marcher) labels an exhausted step rather than taking it silently (the FVS plan's
@@ -468,7 +480,21 @@ def _solve_step(
                 factor_cache.solve(key, lambda: problem.jacobian(u_arg, u_dot, u_ddot, t, form.weights), -r),
                 dtype=float,
             )
-        u = u + du.reshape(u.shape)
+        step = du.reshape(u.shape)
+        if max_newton > 1 and backtrack_cap > 0:
+            for _ in range(backtrack_cap):
+                u_try = u + step
+                u_arg, u_dot, u_ddot = form.u_arg(u_try), form.u_dot(u_try), form.u_ddot(u_try)
+                r_try = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
+                limit = residual if backtrack_band is None else backtrack_band * residual
+                if float(np.linalg.norm(r_try)) < limit:
+                    u = u_try
+                    break
+                step = 0.5 * step
+            else:
+                u = u + step
+        else:
+            u = u + step
     else:
         # The ceiling exhausted: re-evaluate the residual at the FINAL u (the last solve's
         # result). The loop's last check read the PRE-solve guess -- reporting that would
@@ -493,6 +519,8 @@ def integrate_transient(
     tol: float = 1e-12,
     tol_rel: float | None = None,
     factor_cache: FactorCache | None = None,
+    backtrack_band: float = 1.5,
+    backtrack_cap: int = 4,
     adaptive: bool = False,
     atol: float = 1e-6,
     h_min: float | None = None,
@@ -560,6 +588,8 @@ def integrate_transient(
                 tol=max(tol, 1e-10),
                 tol_rel=tol_rel,
                 factor_cache=factor_cache,
+                backtrack_band=backtrack_band,
+                backtrack_cap=backtrack_cap,
             )
             # The LTE: |u_new - u_extrap| where u_extrap is the linear continuation from the
             # last two states, SCALED by the spacing ratio h/h_prev -- the naive 2u1-u0 form
@@ -606,6 +636,8 @@ def integrate_transient(
             tol=tol,
             tol_rel=tol_rel,
             factor_cache=factor_cache,
+            backtrack_band=backtrack_band,
+            backtrack_cap=backtrack_cap,
         )
         solution.worst_step_residual = max(solution.worst_step_residual, residual)
         if not converged:

@@ -527,8 +527,8 @@ def test_a_final_cell_breakpoint_is_a_partial_step_not_a_full_dt() -> None:
     assert 0.95 in ts
 
 
-@pytest.mark.parametrize('breakpoint', [0.95, 1.0])
-def test_a_breakpoint_in_a_non_integral_final_interval_is_consumed(breakpoint: float) -> None:
+@pytest.mark.parametrize('bp', [0.95, 1.0])
+def test_a_breakpoint_in_a_non_integral_final_interval_is_consumed(bp: float) -> None:
     """SR-049: a breakpoint after the last nominal step still lands and finishes at t1."""
 
     class _Linear:
@@ -539,12 +539,10 @@ def test_a_breakpoint_in_a_non_integral_final_interval_is_consumed(breakpoint: f
             return np.array([[weights.alpha1.real]])
 
     study = TransientStudy(t0=0.0, t1=1.0, dt=0.3, integrator=IntegratorKind.BDF2)
-    solution = integrate_transient_with_events(
-        _Linear(), study, np.array([0.0]), time_breakpoints=(breakpoint,)
-    )
+    solution = integrate_transient_with_events(_Linear(), study, np.array([0.0]), time_breakpoints=(bp,))
 
     assert solution.times[-1] == pytest.approx(study.t1)
-    assert any(t == pytest.approx(breakpoint) for t in solution.times)
+    assert any(t == pytest.approx(bp) for t in solution.times)
 
 
 def test_a_non_integral_window_is_bit_identical_to_the_plain_march() -> None:
@@ -585,7 +583,8 @@ def test_the_relative_tolerance_labels_a_scale_stalled_step_converged() -> None:
     class _Stalled:
         """A residual that reads 1e3 on the first evaluation and 1e-1 forever after --
         the Newton stalls by scale (the solve is an identity, the residual never drops
-        further)."""
+        further).
+        """
 
         def residual(self, u_arg, u_dot, u_ddot, t):
             self.calls = getattr(self, 'calls', 0) + 1
@@ -614,3 +613,60 @@ def test_the_relative_tolerance_labels_a_scale_stalled_step_converged() -> None:
         'tol_rel * r0 = 1e-4 * 1e3 = 0.1)'
     )
 
+
+def test_the_backtracking_line_search_halves_an_overshooting_step() -> None:
+    """MANUAL-632/634: a Newton step that RAISES the residual (the sharp GaN channel's
+    overshoot at the commutation) is halved up to ``backtrack_cap`` times, accepting the
+    first half-step whose residual drops below ``backtrack_band * r_current``. The
+    calibration (band 1.5, cap 4): the GaN bridge's exhausted steps 233 -> 82 at the same
+    converged trajectory. The bare Newton (``backtrack_cap = 0``) takes the full step and
+    the divergence runs away.
+    """
+    from motronics.gauss.time_integrators import IntegratorState, _solve_step
+    from motronics.gauss.time_integrators.events import _bdf2_variable_form
+
+    class _Quadratic:
+        """f(u) = u^2 with the solve's 10x OVERSTEP: the full step u: 1 -> -9 RAISES the
+        residual (1 -> 81); the 4th halving lands at u = 0.25 (r = 0.0625 < 1.5 * r0).
+        """
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def residual(self, u_arg, u_dot, u_ddot, t):
+            self.calls += 1
+            u = float(u_arg[0])
+            # Saturated at 1e300: the bare Newton's u explodes (1 -> -9 -> -819 -> ...),
+            # and the raw square overflows float64 at |u| ~ 1e154 -- the saturation keeps
+            # the divergence measurable instead of crashing the test.
+            return np.array([u * u if abs(u) < 1.0e150 else 1.0e300])
+
+        def jacobian(self, u_arg, u_dot, u_ddot, t, weights):
+            return np.array([[1.0]])
+
+    state = IntegratorState(us=[np.array([1.0]), np.array([1.0])], t=0.0)
+    form = _bdf2_variable_form(state, 0.1, 0.1, 0.1)
+    # The seam hands the solve the NEGATED residual, so 10 * (-r) = -10r: the right
+    # direction at 10x the honest Newton step (the sharp channel's overshoot).
+    overshoot_solve = lambda _j, r: 10.0 * r  # noqa: E731 -- the seam's 10x overstep
+
+    problem_bt = _Quadratic()
+    u_bt, _converged, _it, _residual = _solve_step(
+        problem_bt, form, np.array([1.0]), solve=overshoot_solve, max_newton=2, tol=1e-12
+    )
+    problem_bare = _Quadratic()
+    u_bare, _converged, _it, _residual = _solve_step(
+        problem_bare,
+        form,
+        np.array([1.0]),
+        solve=overshoot_solve,
+        max_newton=2,
+        tol=1e-12,
+        backtrack_cap=0,
+    )
+    # The backtracking's first iteration evaluates the residual at the halved steps --
+    # the 10x full step (r = 81) is rejected, the 4th halving (u = 0.25, r = 0.0625)
+    # accepted. The bare Newton takes the full step both times (u ~ -9, then -819).
+    assert problem_bt.calls > problem_bare.calls, 'the backtracking must probe the halved steps'
+    assert abs(float(u_bt[0])) < 1.0, f'backtracked u {u_bt[0]:g} -- the full overshoot was taken'
+    assert abs(float(u_bare[0])) > 100.0, f'bare u {u_bare[0]:g} -- the overshoot did not run away'

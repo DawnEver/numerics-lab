@@ -135,6 +135,8 @@ def integrate_transient_with_events(
     tol_rel: float | None = None,
     time_tol: float | None = None,
     factor_cache: FactorCache | None = None,
+    backtrack_band: float | None = None,
+    backtrack_cap: int = 8,
 ) -> EventfulTransientSolution:
     """March ``problem`` over ``study``, stopping the grid at every zero of ``event_fns``.
 
@@ -223,6 +225,8 @@ def integrate_transient_with_events(
             tol=tol,
             tol_rel=tol_rel,
             factor_cache=factor_cache,
+            backtrack_band=backtrack_band,
+            backtrack_cap=backtrack_cap,
         )
         # The convergence contract rides the eventful march too: a probe or a landed step
         # that exhausted the ceiling is labelled on the solution, never silent.
@@ -252,24 +256,23 @@ def integrate_transient_with_events(
             t_target = min(resume_from, study.t1)
             resume_from = t_target + dt
             pending_dt = t_target - state.t
+        # Without breakpoints the grid is the plain nominal one, and it must be BIT-
+        # IDENTICAL to integrate_transient's: that march stops after its fixed step count
+        # n_steps = round((t1-t0)/dt) -- which TRUNCATES at the last nominal step before
+        # t1 (plain [0, .3, .6, .9] for t1=1.0, dt=0.3) -- never a full step past t1
+        # (SR-038: the round-2 adjudication wrongly claimed integrate_transient lands
+        # past t1; the eventful march did, and the bit-identity promise broke).
+        elif k >= n_steps:
+            # Preserve the plain march's truncated grid only when there is nothing left
+            # to consume.  A breakpoint in the final partial interval makes that interval
+            # part of the eventful march, including the remainder from the edge to t1.
+            if bp_index >= len(breakpoints):
+                break
+            t_target = study.t1
+            pending_dt = t_target - state.t
         else:
-            # Without breakpoints the grid is the plain nominal one, and it must be BIT-
-            # IDENTICAL to integrate_transient's: that march stops after its fixed step count
-            # n_steps = round((t1-t0)/dt) -- which TRUNCATES at the last nominal step before
-            # t1 (plain [0, .3, .6, .9] for t1=1.0, dt=0.3) -- never a full step past t1
-            # (SR-038: the round-2 adjudication wrongly claimed integrate_transient lands
-            # past t1; the eventful march did, and the bit-identity promise broke).
-            if k >= n_steps:
-                # Preserve the plain march's truncated grid only when there is nothing left
-                # to consume.  A breakpoint in the final partial interval makes that interval
-                # part of the eventful march, including the remainder from the edge to t1.
-                if bp_index >= len(breakpoints):
-                    break
-                t_target = study.t1
-                pending_dt = t_target - state.t
-            else:
-                t_target = study.t0 + (k + 1) * dt
-                pending_dt = dt  # dt exactly (not t_target - state.t, which is off by ulps from dt)
+            t_target = study.t0 + (k + 1) * dt
+            pending_dt = dt  # dt exactly (not t_target - state.t, which is off by ulps from dt)
         k += 1
         events_this_cell = 0
         while True:  # one nominal cell, possibly interrupted by events

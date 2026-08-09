@@ -93,7 +93,7 @@ def park_inverse(
     if theta_e.ndim > 1:
         msg = (
             f'theta_e must be 1-D or scalar (the SAMPLE axis), got {theta_e.ndim} axes of '
-            f'shape {theta_e.shape}: an (n_phase, n) phase grid is the n_phase parameter\'s '
+            f"shape {theta_e.shape}: an (n_phase, n) phase grid is the n_phase parameter's "
             'job, never an input grid -- a 2-D theta_e whose leading axis equals n_phase '
             'would otherwise be silently consumed as the phase axis.'
         )
