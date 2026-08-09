@@ -568,3 +568,48 @@ def test_a_non_integral_window_is_bit_identical_to_the_plain_march() -> None:
     assert np.array_equal(plain.times, eventful.times)
     assert np.array_equal(np.asarray(plain.states), np.asarray(eventful.states))
     assert eventful.times[-1] == pytest.approx(0.9)  # the truncating count, not 1.2
+
+
+def test_the_relative_tolerance_labels_a_scale_stalled_step_converged() -> None:
+    """MANUAL-628: the per-step Newton's absolute tol (1e-12) is unreachable when the
+    residual's scale is huge -- the SRDAB closed loop's switch ramp: the KCL rows carry
+    ~5400 A (270 V / 0.05 ohm), so a residual of 1.1e-1 is 2e-5 RELATIVE, and the Newton
+    stalls there by SCALE, not by error. The opt-in ``tol_rel`` accepts a step whose
+    residual dropped below ``tol_rel * r0`` (r0 = the first iteration's norm): a stall
+    at 1e-1 from a 1e3-scale start is a 1e-4-relative residual -- converged with
+    tol_rel = 1e-4, exhausted without it.
+    """
+    from motronics.gauss.time_integrators import IntegratorState, _solve_step
+    from motronics.gauss.time_integrators.events import _bdf2_variable_form
+
+    class _Stalled:
+        """A residual that reads 1e3 on the first evaluation and 1e-1 forever after --
+        the Newton stalls by scale (the solve is an identity, the residual never drops
+        further)."""
+
+        def residual(self, u_arg, u_dot, u_ddot, t):
+            self.calls = getattr(self, 'calls', 0) + 1
+            norm = 1.0e3 if self.calls == 1 else 1.0e-1
+            return np.array([norm])
+
+        def jacobian(self, u_arg, u_dot, u_ddot, t, weights):
+            return np.array([[1.0]])
+
+    problem = _Stalled()
+    state = IntegratorState(us=[np.array([0.0]), np.array([0.0])], t=0.0)
+    form = _bdf2_variable_form(state, 0.1, 0.1, 0.1)
+
+    _u, converged_abs, _it, residual = _solve_step(
+        problem, form, state.last_u, solve=lambda _j, r: -r, max_newton=5, tol=1e-12
+    )
+    assert not converged_abs, 'the absolute contract must label the scale stall exhausted'
+    assert residual == pytest.approx(1.0e-1, rel=1e-9)
+
+    problem.calls = 0  # the relative run starts its own stall
+    _u, converged_rel, _it, residual = _solve_step(
+        problem, form, state.last_u, solve=lambda _j, r: -r, max_newton=5, tol=1e-12, tol_rel=1e-4
+    )
+    assert converged_rel, (
+        f'the relative contract must accept a 1e-4-relative stall (residual {residual:g} vs '
+        'tol_rel * r0 = 1e-4 * 1e3 = 0.1)'
+    )

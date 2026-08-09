@@ -417,6 +417,7 @@ def _solve_step(
     solve,
     max_newton: int,
     tol: float,
+    tol_rel: float | None = None,
     factor_cache: FactorCache | None = None,
 ) -> NDArray[np.floating]:
     """Advance one step by a Newton loop on ``residual(u_arg, u_dot, u_ddot, t)`` for ``u_{n+1}``.
@@ -441,12 +442,21 @@ def _solve_step(
     converged = False
     iterations = 0
     residual = float('inf')
+    residual_0 = float('inf')
     for _it in range(1, max_newton + 1):
         iterations = _it
         u_arg, u_dot, u_ddot = form.u_arg(u), form.u_dot(u), form.u_ddot(u)
         r = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
         residual = float(np.linalg.norm(r))
-        if residual <= tol:
+        if _it == 1:
+            residual_0 = residual
+        # The RELATIVE contract (MANUAL-628): the absolute tol is scale-blind -- a
+        # residual that stalls at 1e-1 on a ~5400 A switch-current scale is 2e-5
+        # relative, and the Newton cannot reach 1e-12 there by SCALE, not by error.
+        # The opt-in ``tol_rel`` accepts a step whose residual dropped below
+        # ``tol_rel * r0`` (r0 = the first iteration's norm). Off by default: every
+        # existing march keeps the absolute contract unchanged.
+        if residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0):
             converged = True
             break
         if key_fn is None:
@@ -466,7 +476,7 @@ def _solve_step(
         u_arg, u_dot, u_ddot = form.u_arg(u), form.u_dot(u), form.u_ddot(u)
         r = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
         residual = float(np.linalg.norm(r))
-        if residual <= tol:
+        if residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0):
             converged = True
     return u, converged, iterations, residual
 
@@ -481,6 +491,7 @@ def integrate_transient(
     solve=_default_solve,
     max_newton: int = 1,
     tol: float = 1e-12,
+    tol_rel: float | None = None,
     factor_cache: FactorCache | None = None,
     adaptive: bool = False,
     atol: float = 1e-6,
@@ -547,6 +558,7 @@ def integrate_transient(
                 solve=solve,
                 max_newton=max_newton,
                 tol=max(tol, 1e-10),
+                tol_rel=tol_rel,
                 factor_cache=factor_cache,
             )
             # The LTE: |u_new - u_extrap| where u_extrap is the linear continuation from the
@@ -586,7 +598,14 @@ def integrate_transient(
         t_new = study.t0 + (k + 1) * dt
         form = integrator.prepare(state, dt, t_new)
         u_new, converged, _iterations, residual = _solve_step(
-            problem, form, state.last_u, solve=solve, max_newton=max_newton, tol=tol, factor_cache=factor_cache
+            problem,
+            form,
+            state.last_u,
+            solve=solve,
+            max_newton=max_newton,
+            tol=tol,
+            tol_rel=tol_rel,
+            factor_cache=factor_cache,
         )
         solution.worst_step_residual = max(solution.worst_step_residual, residual)
         if not converged:

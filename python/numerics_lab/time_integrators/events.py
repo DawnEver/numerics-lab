@@ -132,6 +132,7 @@ def integrate_transient_with_events(
     solve=_default_solve,
     max_newton: int = 1,
     tol: float = 1e-12,
+    tol_rel: float | None = None,
     time_tol: float | None = None,
     factor_cache: FactorCache | None = None,
 ) -> EventfulTransientSolution:
@@ -214,7 +215,14 @@ def integrate_transient_with_events(
         else:
             form = integrator.prepare(from_state, dt_step, t_new)
         u_new, converged, _iterations, residual = _solve_step(
-            problem, form, from_state.last_u, solve=solve, max_newton=max_newton, tol=tol, factor_cache=factor_cache
+            problem,
+            form,
+            from_state.last_u,
+            solve=solve,
+            max_newton=max_newton,
+            tol=tol,
+            tol_rel=tol_rel,
+            factor_cache=factor_cache,
         )
         # The convergence contract rides the eventful march too: a probe or a landed step
         # that exhausted the ceiling is labelled on the solution, never silent.
