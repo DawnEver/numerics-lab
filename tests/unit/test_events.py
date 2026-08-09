@@ -613,3 +613,4 @@ def test_the_relative_tolerance_labels_a_scale_stalled_step_converged() -> None:
         f'the relative contract must accept a 1e-4-relative stall (residual {residual:g} vs '
         'tol_rel * r0 = 1e-4 * 1e3 = 0.1)'
     )
+
