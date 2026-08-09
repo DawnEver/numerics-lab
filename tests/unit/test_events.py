@@ -603,7 +603,7 @@ def test_the_relative_tolerance_labels_a_scale_stalled_step_converged() -> None:
         problem, form, state.last_u, solve=lambda _j, r: -r, max_newton=5, tol=1e-12
     )
     assert not converged_abs, 'the absolute contract must label the scale stall exhausted'
-    assert residual == pytest.approx(1.0e-1, rel=1e-9)
+    assert residual == pytest.approx(1.0e-1, rel=1e-9, abs=0.0)
 
     problem.calls = 0  # the relative run starts its own stall
     _u, converged_rel, _it, residual = _solve_step(
