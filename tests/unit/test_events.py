@@ -771,4 +771,4 @@ def test_the_stall_polish_switches_to_the_tangent_and_converges() -> None:
         problem, form, guess, solve=solve, max_newton=30, tol=1e-12, tol_rel=1e-6
     )
     assert converged, f'the stall-polish must converge (residual {residual:g})'
-    assert problem.tangent_calls > 0, 'the stall-polish must engage the problem\'s jacobian_tangent'
+    assert problem.tangent_calls > 0, "the stall-polish must engage the problem's jacobian_tangent"
