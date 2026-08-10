@@ -704,3 +704,71 @@ def test_the_backtracking_line_search_halves_an_overshooting_step() -> None:
     assert problem_bt.calls > problem_bare.calls, 'the backtracking must probe the halved steps'
     assert abs(float(u_bt[0])) < 1.0, f'backtracked u {u_bt[0]:g} -- the full overshoot was taken'
     assert abs(float(u_bare[0])) > 100.0, f'bare u {u_bare[0]:g} -- the overshoot did not run away'
+
+
+def test_the_stall_polish_switches_to_the_tangent_and_converges() -> None:
+    """MANUAL-627 (i): the chord jacobian (the switch's secant i/v) stalls at a floor off
+    the root -- the measured three-cycle (creep ~0.996, jump 8-260, drop 0.004) on the
+    GaN channel-toggle steps. The stall-polish: after TWO consecutive stalled iterations
+    (the per-iteration residual ratio > 0.9 -- the normal phase's ratios are all below),
+    the Newton switches its jacobian source to the problem's ``jacobian_tangent`` (the
+    local derivative): the chord's basin keeps the global exploration, the tangent
+    finishes the convergence the chord cannot (the bridge's toggle step: 60-exhausted
+    at the ~1e-3-relative floor vs 16 iterations to 4e-5).
+    """
+    from motronics.gauss.time_integrators import IntegratorState, _solve_step
+    from motronics.gauss.time_integrators.events import _bdf2_variable_form
+
+    class _CouplingChord:
+        """Two switches coupled through G: the ON channel's saturation
+        (i = c u/(1+m u), the chord = i/u, the tangent = 1/(1+m u)^2) beside the OFF
+        channel's near-zero chord (joff) -- the chord jacobian is near-singular and the
+        Newton stalls; the tangent's fixed point is the root. The chord-alone exhausts
+        (measured: 30 iterations at the 3.6e-1 residual); the polish converges (16
+        iterations, rel 1.6e-9).
+        """
+
+        def __init__(self) -> None:
+            self.c, self.m, self.G, self.joff, self.s = 1000.0, 50.0, 1.0, 1.0e-6, 20.0
+            self.tangent_calls = 0
+
+        def residual(self, u_arg, u_dot, u_ddot, t):
+            u1, u2 = u_arg
+            i1 = self.c * u1 / (1.0 + self.m * u1)
+            return np.array([i1 + self.G * (u1 - u2) - self.s, self.joff * u2 + self.G * (u2 - u1)])
+
+        def jacobian(self, u_arg, u_dot, u_ddot, t, weights):
+            u1, _u2 = u_arg
+            d1 = self.c / (1.0 + self.m * u1) if u1 != 0.0 else self.c
+            return np.array([[d1 + self.G, -self.G], [-self.G, self.joff + self.G]])
+
+        def jacobian_tangent(self, u_arg, u_dot, u_ddot, t, weights):
+            self.tangent_calls += 1
+            u1, _u2 = u_arg
+            d1 = self.c / (1.0 + self.m * u1) ** 2
+            return np.array([[d1 + self.G, -self.G], [-self.G, self.joff + self.G]])
+
+    class _ChordOnly(_CouplingChord):
+        """No jacobian_tangent seam (the attribute shadowed to None) -- the pure chord
+        Newton, the pre-polish behavior.
+        """
+
+        jacobian_tangent = None  # type: ignore[assignment] -- the seam's absence
+
+    solve = lambda j, r: np.linalg.solve(np.asarray(j), r)  # noqa: E731 -- the seam's solve
+    state = IntegratorState(us=[np.array([0.5, 0.5]), np.array([0.5, 0.5])], t=0.0)
+    form = _bdf2_variable_form(state, 0.1, 0.1, 0.1)
+    guess = np.array([0.5, 0.5])
+
+    problem = _ChordOnly()
+    _u, converged_chord, _it, residual = _solve_step(
+        problem, form, guess, solve=solve, max_newton=30, tol=1e-12, tol_rel=1e-6
+    )
+    assert not converged_chord, f'the chord jacobian must stall (the precondition, residual {residual:g})'
+
+    problem = _CouplingChord()
+    _u, converged, _it, residual = _solve_step(
+        problem, form, guess, solve=solve, max_newton=30, tol=1e-12, tol_rel=1e-6
+    )
+    assert converged, f'the stall-polish must converge (residual {residual:g})'
+    assert problem.tangent_calls > 0, 'the stall-polish must engage the problem\'s jacobian_tangent'

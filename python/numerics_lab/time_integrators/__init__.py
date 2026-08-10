@@ -30,6 +30,7 @@ mesh, no material, no solver.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -409,6 +410,14 @@ def _default_solve(matrix: object, rhs: NDArray[np.floating]) -> NDArray[np.floa
     return np.linalg.solve(m, b)
 
 
+#: The stall-polish's ratio threshold (MANUAL-627 (i)): a per-iteration residual ratio
+#: above this marks the direction stalled. Calibrated on the GaN bridge's toggle steps:
+#: the normal phase's ratios are ALL below 0.9, the stall's three-cycle (creep ~0.996,
+#: jump 8-260, drop 0.004) trips twice consecutively (the creep + the jump) -- 0.9
+#: separates them; a monotone creep (0.968 per iteration, MANUAL-627 (d)) also trips.
+_STALL_RATIO = 0.9
+
+
 def _solve_step(
     problem: SemiDiscreteProblem,
     form: StepForm,
@@ -421,6 +430,7 @@ def _solve_step(
     factor_cache: FactorCache | None = None,
     backtrack_band: float | None = None,
     backtrack_cap: int = 8,
+    jacobian_tangent: Callable | None = None,
 ) -> NDArray[np.floating]:
     """Advance one step by a Newton loop on ``residual(u_arg, u_dot, u_ddot, t)`` for ``u_{n+1}``.
 
@@ -444,17 +454,33 @@ def _solve_step(
     stays 0.4674 V in every variant, where the earlier measured 'path-change' was the wrong
     root-find's artifact. ``backtrack_cap = 0`` restores the bare Newton.
 
+    The STALL-POLISH (MANUAL-627 (i)): when the backtracking still cannot break a direction
+    (the per-iteration residual ratio > :data:`_STALL_RATIO` for two consecutive iterations --
+    the fixed jacobian's step is nearly perpendicular to the residual's gradient, the measured
+    three-cycle on the GaN toggle steps), the jacobian source switches to ``jacobian_tangent``
+    -- the problem's local-derivative tangent, or the explicitly passed callable. A problem
+    without the seam keeps the single-source Newton unchanged.
+
     Returns ``(u, converged, iterations, residual)`` -- the CONVERGENCE CONTRACT: the caller
     (the marcher) labels an exhausted step rather than taking it silently (the FVS plan's
     replacement for the old silent accept; the DC-op precedent is :class:`OpNonConvergence`).
     """
     key_fn = getattr(problem, 'factor_reuse_key', None) if factor_cache is not None else None
+    # The stall-polish's phase-2 source (MANUAL-627 (i)): the problem's local-derivative
+    # jacobian, engaged when the default jacobian's per-iteration creep marks a stalled
+    # direction. The default ``None`` reads the problem's optional ``jacobian_tangent``
+    # seam; a problem without it keeps the single-source Newton unchanged.
+    tangent_source = jacobian_tangent if jacobian_tangent is not None else getattr(problem, 'jacobian_tangent', None)
     u = np.asarray(guess, dtype=float).copy()
     t = form.t_eval
     converged = False
     iterations = 0
     residual = float('inf')
     residual_0 = float('inf')
+    prev_residual = None
+    slow = 0
+    tangent_active = False
+    capped = False
     for _it in range(1, max_newton + 1):
         iterations = _it
         u_arg, u_dot, u_ddot = form.u_arg(u), form.u_dot(u), form.u_ddot(u)
@@ -471,7 +497,27 @@ def _solve_step(
         if residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0):
             converged = True
             break
-        if key_fn is None:
+        # The STALL-POLISH (MANUAL-627 (i)): the fixed jacobian (the switch's chord i/v)
+        # creeps -- the per-iteration residual ratio ~1 -- when its direction is nearly
+        # perpendicular to the residual's gradient: the measured three-cycle on the GaN
+        # channel-toggle steps (creep 0.996, jump 8-260, drop 0.004) exhausts the ceiling
+        # at a ~1e-3-relative floor OFF the root. After TWO consecutive stalled
+        # iterations the jacobian source switches to the problem's local-derivative
+        # tangent: the chord's basin keeps the global exploration, the tangent finishes
+        # the local convergence the chord cannot (measured: the toggle step -- 60-exhausted
+        # at the floor vs 16 iterations to 4e-5). The factor cache is bypassed while the
+        # tangent drives: its reuse key proves constancy for the default stamps only.
+        if prev_residual is not None:
+            ratio = residual / prev_residual
+            slow = slow + 1 if (capped or ratio > _STALL_RATIO) else 0
+            if slow >= 2 and tangent_source is not None:
+                tangent_active = True
+        prev_residual = residual
+        capped = False
+        if tangent_active:
+            jac = tangent_source(u_arg, u_dot, u_ddot, t, form.weights)
+            du = np.asarray(solve(jac, -r), dtype=float)
+        elif key_fn is None:
             jac = problem.jacobian(u_arg, u_dot, u_ddot, t, form.weights)
             du = np.asarray(solve(jac, -r), dtype=float)
         else:
@@ -493,6 +539,7 @@ def _solve_step(
                 step = 0.5 * step
             else:
                 u = u + step
+                capped = True
         else:
             u = u + step
     else:
