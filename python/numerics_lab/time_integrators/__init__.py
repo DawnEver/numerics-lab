@@ -469,8 +469,14 @@ def _solve_step(
     # The stall-polish's phase-2 source (MANUAL-627 (i)): the problem's local-derivative
     # jacobian, engaged when the default jacobian's per-iteration creep marks a stalled
     # direction. The default ``None`` reads the problem's optional ``jacobian_tangent``
-    # seam; a problem without it keeps the single-source Newton unchanged.
+    # seam; a problem without it keeps the single-source Newton unchanged. The
+    # ``has_tangent_jacobian`` flag (the laplace's channel-switch presence) gates the
+    # ENGAGEMENT: a circuit whose tangent equals its default jacobian (the RON/ROFF
+    # switches, the diodes -- their stamps already ARE the local derivative) would pay
+    # the tangent phase's factor-cache bypass for nothing (measured: the buck's reuse
+    # counts broke without the gate).
     tangent_source = jacobian_tangent if jacobian_tangent is not None else getattr(problem, 'jacobian_tangent', None)
+    tangent_helpful = tangent_source is not None and bool(getattr(problem, 'has_tangent_jacobian', True))
     u = np.asarray(guess, dtype=float).copy()
     t = form.t_eval
     converged = False
@@ -510,7 +516,7 @@ def _solve_step(
         if prev_residual is not None:
             ratio = residual / prev_residual
             slow = slow + 1 if (capped or ratio > _STALL_RATIO) else 0
-            if slow >= 2 and tangent_source is not None:
+            if slow >= 2 and tangent_helpful:
                 tangent_active = True
         prev_residual = residual
         capped = False
