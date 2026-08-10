@@ -42,6 +42,13 @@ from motronics.gauss.linear.dirichlet import apply_dirichlet_triplets
 from motronics.gauss.linear.pin_rows import pin_rows
 from motronics.gauss.linear.ssor import ssor_preconditioner
 
+try:  # heavy optional dep (Intel MKL, the multi-threaded sparse LU -- MATLAB-parity on
+    # the solver). The registry entry exists only when pypardiso is installed; a
+    # 'pardiso' request without it is refused by name with the install hint below.
+    from pypardiso import spsolve as _pardiso_spsolve
+except ImportError:
+    _pardiso_spsolve = None
+
 __all__ = [
     'LINEAR_SOLVER_REGISTRY',
     'PRECONDITIONER_REGISTRY',
@@ -173,9 +180,21 @@ def requires_symmetric(name: str) -> bool:
     return bool(getattr(LINEAR_SOLVER_REGISTRY[name], 'requires_symmetric', False))
 
 
+def _pardiso(matrix, rhs, *, x0=None, M=None):  # noqa: ARG001 -- the direct-shaped signature
+    """Intel MKL PARDISO sparse LU -- the multi-threaded direct solver (MATLAB-parity).
+
+    The direct counterpart of scipy's single-threaded SuperLU: PARDISO threads the
+    factorization, the same gap laplace has vs MATLAB today (whose sparse LU threads).
+    The singular guard rides with the caller's ``_check_finite`` + the relative-residual
+    belt (extended to this name in :func:`solve_linear_system`), exactly like ``direct``.
+    """
+    return _pardiso_spsolve(matrix, rhs)
+
+
 # name -> LinearSolver. 'direct' is the bit-for-bit default (spsolve); the Krylov peers each reach the
 # same solution within _KRYLOV_RTOL. cg/minres want a symmetric/SPD operator (the magnetostatic
 # secant stiffness is SPD-ish); gmres/bicgstab/qmr handle general (non-symmetric, e.g. eddy-current).
+# 'pardiso' joins when pypardiso is installed (the optional MKL entry above).
 LINEAR_SOLVER_REGISTRY: dict[str, LinearSolver] = {
     'direct': _direct,
     'cg': _krylov(cg, symmetric=True),
@@ -184,6 +203,8 @@ LINEAR_SOLVER_REGISTRY: dict[str, LinearSolver] = {
     'bicgstab': _krylov(bicgstab, symmetric=False),
     'qmr': _krylov(qmr, symmetric=False),
 }
+if _pardiso_spsolve is not None:
+    LINEAR_SOLVER_REGISTRY['pardiso'] = _pardiso
 
 
 def _jacobi_preconditioner(matrix) -> LinearOperator:
@@ -228,7 +249,12 @@ def get_linear_solver(name: str | None) -> LinearSolver:
     try:
         return LINEAR_SOLVER_REGISTRY[name]
     except KeyError as e:
-        msg = f'unknown linear solver {name!r}; known: {sorted(LINEAR_SOLVER_REGISTRY)}'
+        hint = (
+            " ('pardiso' needs the optional pypardiso package: pip install pypardiso)"
+            if name == 'pardiso'
+            else ''
+        )
+        msg = f'unknown linear solver {name!r}; known: {sorted(LINEAR_SOLVER_REGISTRY)}{hint}'
         raise KeyError(msg) from e
 
 
@@ -264,11 +290,12 @@ def solve_linear_system(
     M = make_preconditioner(preconditioner, matrix) if linear_solver not in (None, 'direct') else None
     x = _check_finite(np.asarray(backend(matrix, rhs, x0=x0, M=M)), name)
     # Direct-solve residual guard (suspenders to _direct's MatrixRankWarning belt): a singular
-    # SuperLU factorization can return a FINITE vector that does not satisfy A x = b. Reject a large
-    # relative residual so such a solve raises rather than reporting garbage as ``status=ok``. Only
-    # the direct backend needs this -- the Krylov backends already raise on a non-zero convergence
-    # ``info`` and asserting their (looser) residual here would clash with their own stop criterion.
-    if name == 'direct':
+    # factorization can return a FINITE vector that does not satisfy A x = b. Reject a large
+    # relative residual so such a solve raises rather than reporting garbage as ``status=ok``.
+    # Only the direct backends need this (SuperLU and PARDISO alike) -- the Krylov backends
+    # already raise on a non-zero convergence ``info`` and asserting their (looser) residual
+    # here would clash with their own stop criterion.
+    if name in ('direct', 'pardiso'):
         b = np.asarray(rhs, dtype=float).ravel()
         b_norm = float(np.linalg.norm(b))
         if b_norm > 0.0:
