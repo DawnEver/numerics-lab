@@ -330,6 +330,40 @@ def test_a_checkpoint_rolls_the_solution_back_without_aliasing() -> None:
     assert any(abs(t - t_event) <= 1e-12 for t in ts)
 
 
+def test_a_pure_time_sawtooth_event_fires_every_step() -> None:
+    """MANUAL-635: a pure-time event -- the continuous-PI's sample clock, ``t - next``
+    with ``next`` advancing per firing -- must fire at EVERY cell target. The old
+    suppression measured the distance from the cell START, which after an event sits
+    exactly at the last firing, so the dense samples were suppressed as duplicates
+    forever (measured: the sampling_divisor = 200 PI fired exactly once). The
+    suppression now measures to the cell TARGET (a genuinely later crossing reads its
+    true distance) and drops the re-detected landings by their located INSTANT.
+    """
+    problem = _RampWithToggle(level=99.0)  # the ramp never crosses -- only the clock fires
+
+    class _Clock:
+        def __init__(self, dt: float) -> None:
+            self.dt = dt
+            self.next = dt
+
+        def __call__(self, u, t) -> float:
+            return float(t) - self.next
+
+        def advance(self) -> None:
+            self.next += self.dt
+
+    clock = _Clock(0.3)
+    study = TransientStudy(t0=0.0, t1=0.9, dt=0.3, integrator=IntegratorKind.BDF2)
+    solution = integrate_transient_with_events(
+        problem,
+        study,
+        np.array([0.0]),
+        event_fns=(clock,),
+        on_event=lambda _i, _t, _u: clock.advance(),
+    )
+    assert len(solution.events) == 3, f'every step must fire the clock, got {solution.events}'
+
+
 def test_a_second_crossing_after_the_toggle_does_not_retrigger() -> None:
     """Hysteresis-free but state-flipped: the same fn must not fire again on the way back down."""
     problem = _RampWithToggle(level=1.0)

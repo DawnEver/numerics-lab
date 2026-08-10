@@ -74,8 +74,12 @@ __all__ = ['EventfulTransientSolution', 'integrate_transient_with_events']
 
 #: Events tolerated inside ONE nominal cell before the function is declared chattering. A genuine
 #: circuit sees a handful of crossings per cell at most (a PWM edge and a state ripple); past this
-#: the event function is re-triggering on its own zero, which no march can progress past.
-_MAX_EVENTS_PER_CELL = 32
+#: the event function is re-triggering on its own zero, which no march can progress past. The
+#: ceiling is sized for the CONTINUOUS-PI reproduction (MANUAL-635: the laplace FmDrive's
+#: sampling_divisor = 200 samples the PI at the march's step rate -- one legitimately-located
+#: sample per step, ~200 per nominal cell -- the dense-but-genuine event stream the locator
+#: resolves, not chatter).
+_MAX_EVENTS_PER_CELL = 512
 
 
 @dataclass
@@ -199,9 +203,16 @@ def integrate_transient_with_events(
     # after firing its sign at the checkpoint is epsilon-arbitrary and reads as a fresh crossing
     # rooted AT the firing instant -- the same event counted twice (measured: a stateless
     # u-level function double-fired [0, 1, 1]). Suppress re-detection while the march is still
-    # within one bracket_tol of the firing. NAMED HOLE: a GENUINE re-crossing of the same
-    # function inside that window is suppressed with the spurious one -- physically
-    # indistinguishable from chatter, which _MAX_EVENTS_PER_CELL already refuses.
+    # within one bracket_tol of the firing. The suppression's distance is measured to the CELL
+    # TARGET, not the cell start: after an event the march RE-MARCHES from the fired instant, so
+    # the cell start sits exactly at last_fired forever -- a pure-time sawtooth event (the
+    # continuous-PI's every-step samples, MANUAL-635) with a GENUINE new crossing at every cell
+    # target would be suppressed as a duplicate forever (measured: the sampling_divisor = 200's
+    # PI fired exactly once). The target distance is the new-instant test: the same-instant
+    # re-triggering reads ~0 and stays suppressed; a genuinely later crossing reads its true
+    # distance. NAMED HOLE: a GENUINE re-crossing inside one bracket_tol of the firing is
+    # suppressed with the spurious one -- physically indistinguishable from chatter, which
+    # _MAX_EVENTS_PER_CELL already refuses.
     last_fired: dict[int, float] = {}
 
     def step_from(
@@ -292,7 +303,7 @@ def integrate_transient_with_events(
             crossed = [
                 i
                 for i in range(len(event_fns))
-                if _sign(g_new[i]) != _sign(g_prev[i]) and t_from - last_fired.get(i, -np.inf) > bracket_tol
+                if _sign(g_new[i]) != _sign(g_prev[i]) and t_target - last_fired.get(i, -np.inf) > bracket_tol
             ]
             if not crossed:
                 state = probe_state
@@ -334,7 +345,22 @@ def integrate_transient_with_events(
                     _ps, u_star_i = step_from(trial_state, trial_prev_dt, t_star_i - t_from, t_star_i)
                     candidates.append((t_star_i, i, u_star_i))
 
-            assert candidates, 'at least one event finder must cross in an event bracket'  # type: narrow[list]
+            # The suppression's SECOND half, where the landing INSTANT is known: a crossing
+            # located within the tolerance of the function's last firing is the same instant's
+            # re-detection (the re-marched remainder re-finds the just-fired zero on the other
+            # side of the bisect's convergence -- measured [0, 1, 1] on a two-level ramp). The
+            # crossed pre-filter's t_target proxy cannot tell that from a genuinely new crossing
+            # (the continuous-PI's every-step samples land at every cell target, MANUAL-635),
+            # so the drop happens HERE. A dropped remainder means the crossing was spurious:
+            # the cell is consumed as if nothing crossed.
+            candidates = [c for c in candidates if c[0] - last_fired.get(c[1], -np.inf) > bracket_tol]
+            if not candidates:
+                state = probe_state
+                prev_dt = pending_dt
+                solution.times.append(t_target)
+                solution.states.append(u_probe)
+                g_prev = g_new
+                break
             t_star = min(c[0] for c in candidates)
             simultaneous = [c for c in candidates if c[0] - t_star <= bracket_tol]
             state, prev_dt = _rollback(checkpoint, solution)
