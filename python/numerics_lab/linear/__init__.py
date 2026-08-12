@@ -249,11 +249,7 @@ def get_linear_solver(name: str | None) -> LinearSolver:
     try:
         return LINEAR_SOLVER_REGISTRY[name]
     except KeyError as e:
-        hint = (
-            " ('pardiso' needs the optional pypardiso package: pip install pypardiso)"
-            if name == 'pardiso'
-            else ''
-        )
+        hint = " ('pardiso' needs the optional pypardiso package: pip install pypardiso)" if name == 'pardiso' else ''
         msg = f'unknown linear solver {name!r}; known: {sorted(LINEAR_SOLVER_REGISTRY)}{hint}'
         raise KeyError(msg) from e
 

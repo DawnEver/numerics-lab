@@ -100,15 +100,15 @@ every governing equation. Kills the array-tuple plumbing AND the `fea_mesh`/`mec
 ```python
 @dataclass(frozen=True)
 class DiscreteModel:
-    ele: list[np.ndarray]          # per-element vertex ids (valence 3/4/N -> already mixed-valence ok)
-    vert: np.ndarray               # (n,2/3)
+    ele: list[np.ndarray]  # per-element vertex ids (valence 3/4/N -> already mixed-valence ok)
+    vert: np.ndarray  # (n,2/3)
     group_of_ele: np.ndarray
     group_material: list[tuple]
     materials: MaterialSet
-    sources: Sources               # conductor current density + magnet Br
-    boundaries: Boundaries         # dirichlet / periodic / sliding / hanging constraints
+    sources: Sources  # conductor current density + magnet Br
+    boundaries: Boundaries  # dirichlet / periodic / sliding / hanging constraints
     depth: float
-    provenance: MeshVariant        # 'tri'|'quad'|'hybrid'|'tri->quad-merged'|'rect-merged' -- the LABEL
+    provenance: MeshVariant  # 'tri'|'quad'|'hybrid'|'tri->quad-merged'|'rect-merged' -- the LABEL
 ```
 Mesh builders become pure producers: `build_tri`, `build_quad`, `build_hybrid` (tri-pair merge),
 `build_rect_merged` (aligned_merge_regions) all return a `DiscreteModel`. The `provenance` field is
@@ -121,7 +121,7 @@ The equation knows how to ASSEMBLE; it does not know HOW to iterate.
 ```python
 class NonlinearSystem(Protocol):
     def initial_guess(self) -> np.ndarray: ...
-    def residual(self, A: np.ndarray) -> ResidualState:      # R(A), B(A), energy, ν(B) -- reused by both methods
+    def residual(self, A: np.ndarray) -> ResidualState:  # R(A), B(A), energy, ν(B) -- reused by both methods
         ...
     def secant_operator(self, st: ResidualState) -> spmatrix:  # K(ν(B)) with BC/periodic/hanging folded
         ...
@@ -136,7 +136,8 @@ kernels; only the LOOP moves out.
 ### Seam 3 — the pluggable `IterationStrategy` (the heart of the directive)
 ```python
 class IterationStrategy(Protocol):
-    name: str                                   # 'picard' | 'picard-damped' | 'newton'
+    name: str  # 'picard' | 'picard-damped' | 'newton'
+
     def solve(self, sys: NonlinearSystem, *, max_iter: int, rtol: float) -> IterationResult: ...
 ```
 Registered in a strategy registry (mirrors `SOLVER_REGISTRY`), selectable per solve:
