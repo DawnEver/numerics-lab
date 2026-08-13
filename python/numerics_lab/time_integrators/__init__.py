@@ -418,6 +418,59 @@ def _default_solve(matrix: object, rhs: NDArray[np.floating]) -> NDArray[np.floa
 _STALL_RATIO = 0.9
 
 
+#: The gmin retry stages (the SPICE-standard continuation, the DC-op's own :data:`_GMIN_STAGES`
+#: shape): when a step's plain Newton exhausts, the diagonal gmin is added to the tangent and
+#: stepped down geometrically, so a near-singular node's step is bounded and the iterate follows
+#: the damped path to the root (the final stage IS the plain solver). Opt-in -- a march that does
+#: not pass ``gmin_stages`` takes the plain Newton, byte-identical (MEASURED 2026-08-13: the
+#: SRDAB runner config's 55 exhausted steps at the compound channel+SR toggle drop to 0 with the
+#: retry; the laplace power stage / buck marches are untouched because they never ask for it).
+_GMIN_RETRY_STAGES = (1.0e-2, 1.0e-4, 1.0e-6, 1.0e-8, 1.0e-10, 1.0e-12)
+
+
+def _gmin_continue(
+    problem: SemiDiscreteProblem,
+    form: StepForm,
+    guess: NDArray[np.floating],
+    *,
+    solve,
+    max_newton: int,
+    tol: float,
+    tol_rel: float | None,
+    residual_0: float,
+    gmin_stages: tuple[float, ...],
+) -> tuple[NDArray[np.floating], bool, float]:
+    """The gmin continuation for an exhausted step: solve ``(J + gmin I) delta = -R`` for
+    each stage, the residual always the TRUE one (the same contract the DC-op's
+    :func:`~motronics.laplace.circuit.core.mna_solves._gmin_stepped` follows). Each stage is
+    seeded by the previous stage's iterate; the bar is the caller's own (``tol`` or
+    ``tol_rel * residual_0`` -- the plain Newton's first-iteration residual, the same bar the
+    step already failed).
+    """
+    t = form.t_eval
+    u = np.asarray(guess, dtype=float).copy()
+    for gmin in gmin_stages:
+        for _it in range(max(2, max_newton)):
+            u_arg, u_dot, u_ddot = form.u_arg(u), form.u_dot(u), form.u_ddot(u)
+            r = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
+            residual = float(np.linalg.norm(r))
+            if residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0):
+                return u, True, residual
+            jac = problem.jacobian(u_arg, u_dot, u_ddot, t, form.weights)
+            if sp.issparse(jac):
+                damped = jac + gmin * sp.eye(jac.shape[0], format='csc')
+            else:
+                damped = jac + gmin * np.eye(jac.shape[0])
+            delta = np.asarray(solve(damped, -r), dtype=float)
+            u = u + delta.reshape(u.shape)
+    u_arg, u_dot, u_ddot = form.u_arg(u), form.u_dot(u), form.u_ddot(u)
+    r = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
+    residual = float(np.linalg.norm(r))
+    if residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0):
+        return u, True, residual
+    return u, False, residual
+
+
 def _solve_step(
     problem: SemiDiscreteProblem,
     form: StepForm,
@@ -431,6 +484,7 @@ def _solve_step(
     backtrack_band: float | None = None,
     backtrack_cap: int = 8,
     jacobian_tangent: Callable | None = None,
+    gmin_stages: tuple[float, ...] | None = None,
 ) -> NDArray[np.floating]:
     """Advance one step by a Newton loop on ``residual(u_arg, u_dot, u_ddot, t)`` for ``u_{n+1}``.
 
@@ -557,6 +611,30 @@ def _solve_step(
         residual = float(np.linalg.norm(r))
         if residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0):
             converged = True
+    if not converged and gmin_stages is not None:
+        # The SPICE-standard gmin continuation (opt-in): a fresh damped Newton path from the
+        # clean guess, stepping a diagonal gmin down geometrically. The plain Newton's stall at
+        # a near-singular node is a non-solution fixed point (MEASURED 2026-08-13: the SRDAB
+        # runner config's compound channel+SR toggle flings the state ~2e7 V across the SR's
+        # PWL body-diode knee); the damped path bounds the step and lands where the plain one
+        # cannot. If the continuation ALSO fails, the plain Newton's exhausted iterate stands
+        # (the label carries the outcome either way).
+        u_g, conv_g, residual_g = _gmin_continue(
+            problem,
+            form,
+            guess,
+            solve=solve,
+            max_newton=max_newton,
+            tol=tol,
+            tol_rel=tol_rel,
+            residual_0=residual_0,
+            gmin_stages=gmin_stages,
+        )
+        if conv_g:
+            u = u_g
+            converged = True
+            residual = residual_g
+        iterations += max(2, max_newton) * len(gmin_stages)
     return u, converged, iterations, residual
 
 
@@ -574,6 +652,7 @@ def integrate_transient(
     factor_cache: FactorCache | None = None,
     backtrack_band: float = 1.5,
     backtrack_cap: int = 4,
+    gmin_stages: tuple[float, ...] | None = None,
     adaptive: bool = False,
     atol: float = 1e-6,
     h_min: float | None = None,
@@ -643,6 +722,7 @@ def integrate_transient(
                 factor_cache=factor_cache,
                 backtrack_band=backtrack_band,
                 backtrack_cap=backtrack_cap,
+                gmin_stages=gmin_stages,
             )
             # The LTE: |u_new - u_extrap| where u_extrap is the linear continuation from the
             # last two states, SCALED by the spacing ratio h/h_prev -- the naive 2u1-u0 form
@@ -691,6 +771,7 @@ def integrate_transient(
             factor_cache=factor_cache,
             backtrack_band=backtrack_band,
             backtrack_cap=backtrack_cap,
+            gmin_stages=gmin_stages,
         )
         solution.worst_step_residual = max(solution.worst_step_residual, residual)
         if not converged:

@@ -141,6 +141,7 @@ def integrate_transient_with_events(
     factor_cache: FactorCache | None = None,
     backtrack_band: float | None = None,
     backtrack_cap: int = 8,
+    gmin_stages: tuple[float, ...] | None = None,
 ) -> EventfulTransientSolution:
     """March ``problem`` over ``study``, stopping the grid at every zero of ``event_fns``.
 
@@ -238,6 +239,7 @@ def integrate_transient_with_events(
             factor_cache=factor_cache,
             backtrack_band=backtrack_band,
             backtrack_cap=backtrack_cap,
+            gmin_stages=gmin_stages,
         )
         # The convergence contract rides the eventful march too: a probe or a landed step
         # that exhausted the ceiling is labelled on the solution, never silent.
