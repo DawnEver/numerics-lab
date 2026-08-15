@@ -294,20 +294,29 @@ class DampedPicardStrategy:
             if converged:
                 break
             err = _energy_error_pct(state.total_energy, last_energy)
+            # BOTH ratchets need the oscillation to be BIGGER THAN THE CONVERGENCE TOLERANCE. Below
+            # it the energy is at its own floating-point noise floor, where `delta`'s sign flips at
+            # random -- and a sign flip is what the second ratchet reads as a limit cycle. Measured
+            # on ipm_uv_cummins mec:quad: the energy error reached 0.00% early, the sign then
+            # alternated on noise for the rest of the solve, alpha was driven to 0.108 and pinned
+            # there, and each rotor position spent 44-61 iterations crawling to the increment bar at
+            # a tenth of the step size. A limit cycle is BY DEFINITION an oscillation that does not
+            # decay; one already inside the tolerance is not one.
+            meaningful = err >= rtol_energy_pct
+            alpha_before = alpha
             disturbed = False
-            if np.isfinite(prev_err) and err > prev_err:
-                alpha_cap = alpha
+            if meaningful and np.isfinite(prev_err) and err > prev_err:
                 alpha = max(_ALPHA_MIN, alpha * 0.5)
                 disturbed = True
             if last_energy is not None:
                 delta = state.total_energy - last_energy
                 sign = (delta > 0) - (delta < 0)
-                if prev_delta_sign != 0 and sign not in (0, prev_delta_sign):
-                    alpha_cap = min(alpha_cap, alpha)
+                if meaningful and prev_delta_sign != 0 and sign not in (0, prev_delta_sign):
                     alpha = max(_ALPHA_MIN, alpha * 0.6)
                     disturbed = True
                 prev_delta_sign = sign
             if disturbed:
+                alpha_cap = alpha_before  # the step size that MISBEHAVED, never retried
                 calm = 0
             else:
                 calm += 1
