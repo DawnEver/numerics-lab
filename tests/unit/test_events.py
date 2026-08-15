@@ -772,3 +772,55 @@ def test_the_stall_polish_switches_to_the_tangent_and_converges() -> None:
     )
     assert converged, f'the stall-polish must converge (residual {residual:g})'
     assert problem.tangent_calls > 0, "the stall-polish must engage the problem's jacobian_tangent"
+
+
+def test_a_discarded_bisection_probe_does_not_count_as_a_nonconverged_STEP() -> None:
+    """``converged`` must mean what it says: every step OF THE SOLUTION met the tolerance.
+
+    The event locator bisects by RE-STEPPING from a checkpoint and throwing the result away
+    (``_rollback``). Those probe steps go through the same ``_solve_step`` as a real step, so an
+    exhausted probe used to land in ``nonconverged_times`` -- the list ``converged`` is derived
+    from. A march whose every LANDED step converged perfectly therefore reported
+    ``converged == False``, and no caller could ask the question it actually cares about.
+
+    Measured consequence (srdab_closed_loop, 2026-08-15): 2094 "non-converged" at 100 steps per
+    switching period, of which only 239 landed -- 1855 were discarded probes. The tag was ~9x
+    pessimistic and read as a broken march.
+
+    The discriminator: a landed step's time is IN ``solution.times``; a discarded probe's is not.
+    """
+
+    class _NonlinearRampWithToggle(_RampWithToggle):
+        """``u_dot = slope + u^2`` -- nonlinear, so a starved Newton ceiling genuinely exhausts.
+
+        A LINEAR problem is useless here: its single Newton step is exact, nothing ever fails,
+        and the assertion passes vacuously without the probe path ever reporting anything.
+        """
+
+        def residual(self, u, u_dot, u_ddot, t):
+            return np.asarray(u_dot) - self.slope - np.asarray(u) ** 2
+
+        def jacobian(self, u, u_dot, u_ddot, t, weights):
+            return np.array([[weights.alpha1.real - 2.0 * float(u[0]) * weights.alpha0.real]])
+
+    problem = _NonlinearRampWithToggle(level=0.35)
+    study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
+    # A starved ceiling on a nonlinear problem: steps DO exhaust, so the bisection's discarded
+    # probes exhaust too -- which is the situation the tag has to classify correctly.
+    sol = integrate_transient_with_events(
+        problem,
+        study,
+        np.array([0.0]),
+        event_fns=[problem.event_fn],
+        on_event=lambda _i, _t, _u: problem.toggle(),
+        max_newton=1,
+        tol=1.0e-12,
+    )
+    assert problem.toggles == 1, 'the event must actually fire (else the probe path never runs)'
+    assert sol.nonconverged_times, 'the starved ceiling must exhaust somewhere (the precondition)'
+    landed = set(sol.times)
+    stray = [t for t in sol.nonconverged_times if t not in landed]
+    assert not stray, (
+        f'nonconverged_times must contain only times that LANDED in the solution; '
+        f'{len(stray)} of {len(sol.nonconverged_times)} are discarded bisection probes: {stray[:5]}'
+    )

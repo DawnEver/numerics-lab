@@ -111,7 +111,18 @@ def _take_checkpoint(state: IntegratorState, prev_dt: float | None, solution: Tr
 
 
 def _rollback(checkpoint: _Checkpoint, solution: TransientSolution) -> tuple[IntegratorState, float | None]:
-    """Retract every point appended past the checkpoint; hand back its history (re-copied) + spacing."""
+    """Retract every point appended past the checkpoint; hand back its history (re-copied) + spacing.
+
+    A retracted point is no longer a step OF the solution, so any exhaustion promoted to
+    ``nonconverged_times`` when it landed is DEMOTED back to a discarded probe here -- otherwise a
+    rolled-back step would keep clearing :meth:`converged` for a trajectory it is not part of.
+    """
+    for t_gone in solution.times[checkpoint.n_points :]:
+        for j in range(len(solution.nonconverged_times) - 1, -1, -1):
+            if solution.nonconverged_times[j] == t_gone:
+                del solution.nonconverged_times[j]
+                solution.nonconverged_probe_times.append(t_gone)
+                break
     del solution.times[checkpoint.n_points :]
     del solution.states[checkpoint.n_points :]
     restored = _take_checkpoint(checkpoint.state, checkpoint.prev_dt, solution)
@@ -241,12 +252,29 @@ def integrate_transient_with_events(
             backtrack_cap=backtrack_cap,
             gmin_stages=gmin_stages,
         )
-        # The convergence contract rides the eventful march too: a probe or a landed step
-        # that exhausted the ceiling is labelled on the solution, never silent.
+        # The convergence contract rides the eventful march too: an exhausted step is labelled on
+        # the solution, never silent. But WHICH list it belongs in is not knowable here -- this
+        # helper is called both for steps that will land and for bisection probes the rollback
+        # throws away. So it records the failure as PROVISIONALLY a probe, and the commit sites
+        # (`_commit`) promote it when the point actually joins the trajectory. Recording it as
+        # landed here made `converged` ~9x pessimistic on a switching march and useless.
         solution.worst_step_residual = max(solution.worst_step_residual, residual)
         if not converged:
-            solution.nonconverged_times.append(t_new)
+            solution.nonconverged_probe_times.append(t_new)
         return integrator.advance(from_state, u_new, dt_step, t_new), u_new
+
+    def _commit(t_new: float, u_new: NDArray) -> None:
+        """Append a point to the trajectory, promoting its exhaustion label from probe to landed."""
+        solution.times.append(t_new)
+        solution.states.append(u_new)
+        # The step that produced this point recorded any failure against t_new; it landed, so it
+        # is a real non-converged STEP. Only the most recent such record is promoted -- an earlier
+        # discarded probe at the same instant stays a probe.
+        for j in range(len(solution.nonconverged_probe_times) - 1, -1, -1):
+            if solution.nonconverged_probe_times[j] == t_new:
+                del solution.nonconverged_probe_times[j]
+                solution.nonconverged_times.append(t_new)
+                break
 
     # The plain march's fixed step count -- integrate_transient's own n_steps; the eventful
     # march without breakpoints must take exactly these (SR-038), so the count lives here.
@@ -310,8 +338,7 @@ def integrate_transient_with_events(
             if not crossed:
                 state = probe_state
                 prev_dt = pending_dt
-                solution.times.append(t_target)
-                solution.states.append(u_probe)
+                _commit(t_target, u_probe)
                 g_prev = g_new
                 break
 
@@ -359,8 +386,7 @@ def integrate_transient_with_events(
             if not candidates:
                 state = probe_state
                 prev_dt = pending_dt
-                solution.times.append(t_target)
-                solution.states.append(u_probe)
+                _commit(t_target, u_probe)
                 g_prev = g_new
                 break
             t_star = min(c[0] for c in candidates)
@@ -368,8 +394,7 @@ def integrate_transient_with_events(
             state, prev_dt = _rollback(checkpoint, solution)
             if t_star > t_from:  # land the march exactly on the event
                 state, u_star = step_from(state, prev_dt, t_star - t_from, t_star)
-                solution.times.append(t_star)
-                solution.states.append(u_star)
+                _commit(t_star, u_star)
             else:
                 u_star = np.array(state.last_u, dtype=float, copy=True)
             for _root, i, _u in simultaneous:

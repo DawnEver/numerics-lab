@@ -369,16 +369,28 @@ class TransientSolution:
     and the offending step times ride the solution, and :meth:`converged` is the machine-
     readable tag. The structured warning is emitted by the marcher at the first exhaustion
     (AGENTS.md: a log is a signal only when the CALLER can tell -- the caller reads the tag).
+
+    ``nonconverged_times`` names only steps that LANDED in ``times``. The eventful march also
+    takes bisection probe steps that ``_rollback`` discards; an exhausted probe costs time and
+    slightly degrades the located instant, but its error never enters the trajectory, so it is
+    recorded separately in ``nonconverged_probe_times`` and does NOT clear :meth:`converged`.
+    Conflating the two made the tag ~9x pessimistic on a switching march (srdab_closed_loop,
+    2026-08-15: 2094 reported, 239 landed) -- always False wherever it mattered, so no caller
+    could use it.
     """
 
     times: list[float] = field(default_factory=list)
     states: list[NDArray[np.floating]] = field(default_factory=list)
     worst_step_residual: float = 0.0
     nonconverged_times: list[float] = field(default_factory=list)
+    #: Exhausted steps that were DISCARDED by an event rollback (bisection probes). Diagnostic
+    #: only -- these never reached ``times``. A large count means the locator worked hard at the
+    #: toggles, not that the answer is contaminated.
+    nonconverged_probe_times: list[float] = field(default_factory=list)
 
     @property
     def converged(self) -> bool:
-        """The accuracy tag: every step met the per-step Newton tolerance."""
+        """The accuracy tag: every step IN THIS SOLUTION met the per-step Newton tolerance."""
         return not self.nonconverged_times
 
 
