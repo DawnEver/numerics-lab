@@ -9,61 +9,84 @@ order-dependence. One scheme, one copy.
 
 from __future__ import annotations
 
+import numpy as np
+
 __all__ = ['resolve_constraint_chains']
 
 
 def resolve_constraint_chains(constraints):
-    """Substitute a master that is ITSELF hanging until every constraint names free DOFs only.
+    """Rewrite every constraint in terms of UNCONSTRAINED targets only, chains and cycles alike.
 
-    ``refine_quads_2to1`` performs no 2:1 balancing, so a refined region routinely produces a
-    hanging node whose master lies on a finer edge and is hanging in turn. The fold eliminates
-    one constraint at a time and replaces the slave's equation with an identity row, so a chain
-    folded in declaration order lands on a row that is already eliminated: no error, no warning,
-    and an answer that CHANGES WITH THE DECLARATION ORDER.
+    ``constraints`` is ``[(slave, [(master, weight), ...]), ...]``. A master that is itself a
+    slave is substituted out; the result names free targets only, so whatever consumes it can
+    fold in any order.
 
-    Measured on a 5x5 unit-quad grid carrying ``A = 0.3x - 0.7y`` -- exactly representable, and
-    every planted constraint exactly satisfied by it, so a correct fold cannot move the solution:
-    independent constraints left ``max|A - exact|`` at 4e-16, while the chain
-    ``12 <- {11, 13}`` with ``11 <- {6, 16}`` gave 5.500e-01 declared one way and 2.983e-07 the
-    other. Two different wrong answers for one problem is what identifies the elimination rather
-    than the physics. On ipm_uv_cummins it is why two mesh operators with different mechanisms
-    and nearly double the hanging count between them (870 vs 1570) produce the same field error
-    to four figures and the same zero torque.
+    WHY THIS EXISTS. Both solvers eliminated one constraint at a time in DECLARATION ORDER --
+    the FEA fold replacing the slave's row with an identity, MEC reading the current ``p_lil``
+    rows and calling it "chains resolve in list order". Neither resolves: they resolve if the
+    list happens to be topologically sorted, and nothing produces it that way. Measured on a 5x5
+    unit-quad grid carrying ``A = 0.3x - 0.7y`` (exactly representable, every planted constraint
+    exactly satisfied, so a correct fold cannot move the solution): independent constraints left
+    ``max|A - exact|`` at 4e-16, while the chain ``12 <- {11, 13}`` with ``11 <- {6, 16}`` gave
+    5.500e-01 declared one way and 2.983e-07 the other. Two different wrong answers for one
+    problem is what identifies the elimination rather than the physics.
 
-    Resolution is exact substitution: ``A[h] = sum_m w_m A[m]`` with ``A[m] = sum_k u_k A[k]``
-    becomes ``A[h] = sum_k (w_m u_k) A[k]``, weights multiplying and repeated targets summing.
-    A CYCLE has no such resolution and raises rather than picking an arbitrary entry point
-    (invariant.md: an unsupported combo raises, never silently wrong).
+    A CYCLE IS NOT AUTOMATICALLY CONTRADICTORY, and refusing one was this function's own earlier
+    mistake. For a mutual pair ``P = w_a A + w_b B`` and ``A = u_p P + u_c C``, substitution
+    gives ``P (1 - w_a u_p) = w_a u_c C + w_b B`` -- a unique solution whenever
+    ``w_a u_p != 1``. So the general form is a small linear solve, not a topological sort:
+    with ``A_c = W_cc A_c + W_cf A_f``, the resolved rows are
+    ``A_c = (I - W_cc)^-1 W_cf A_f``. Only a SINGULAR ``I - W_cc`` is genuinely unsolvable, and
+    that alone raises. ipm_uv_cummins under ``--max-aspect 4`` carries exactly this shape: of
+    3892 hanging nodes, 4 are chained and those 4 form two mutual pairs
+    (2590 <-> 8105, 7744 <-> 7803).
 
-    The resolved masters are what the caller folds AND what it recovers from. Recovering from the
-    DECLARED masters would reintroduce the ordering problem in the recovery step, since a declared
-    master's own value is only available after ITS recovery; the resolved form references free
-    DOFs whose values the solve already gives, and it is an exact rewrite of the declared
-    constraint, so the declared relation holds after recovery either way.
+    Only the nodes actually entangled are solved; every other row is returned untouched, and a
+    constraint set with no chains at all is returned AS THE SAME OBJECT, so meshes that never had
+    the defect stay bit-for-bit.
     """
     declared = {int(h): [(int(m), float(w)) for m, w in masters] for h, masters in constraints}
-    if not any(m in declared for masters in declared.values() for m, _w in masters):
-        return constraints  # no chains: bit-for-bit the previous behaviour
-    memo: dict[int, list[tuple[int, float]]] = {}
+    entangled = {h for h, ms in declared.items() if any(m in declared for m, _w in ms)}
+    if not entangled:
+        return constraints
 
-    def resolve(h: int, path: tuple[int, ...]) -> list[tuple[int, float]]:
-        if h in memo:
-            return memo[h]
-        if h in path:
-            cycle = ' -> '.join(str(n) for n in (*path[path.index(h) :], h))
-            msg = (
-                f'hanging constraints form a cycle ({cycle}): a node is transitively its own master, '
-                f'so the relation has no resolution in terms of free DOFs and cannot be folded'
-            )
-            raise ValueError(msg)
-        out: dict[int, float] = {}
+    # Grow to the closure: a node the entangled set depends on must be solved with it.
+    frontier = list(entangled)
+    while frontier:
+        h = frontier.pop()
+        for m, _w in declared[h]:
+            if m in declared and m not in entangled:
+                entangled.add(m)
+                frontier.append(m)
+
+    order = sorted(entangled)
+    pos = {h: i for i, h in enumerate(order)}
+    n = len(order)
+    free_targets = sorted({m for h in order for m, _w in declared[h] if m not in declared})
+    fpos = {m: j for j, m in enumerate(free_targets)}
+    a_mat = np.eye(n)
+    b_mat = np.zeros((n, len(free_targets)))
+    for h in order:
+        i = pos[h]
         for m, w in declared[h]:
-            if m in declared:
-                for k, u in resolve(m, (*path, h)):
-                    out[k] = out.get(k, 0.0) + w * u
+            if m in pos:
+                a_mat[i, pos[m]] -= w
+            elif m in declared:  # constrained but outside the closure cannot happen
+                msg = f'constraint {h} references constrained node {m} outside the solved closure'
+                raise ValueError(msg)
             else:
-                out[m] = out.get(m, 0.0) + w
-        memo[h] = [(k, v) for k, v in out.items() if v != 0.0]
-        return memo[h]
+                b_mat[i, fpos[m]] += w
+    try:
+        x_mat = np.linalg.solve(a_mat, b_mat)
+    except np.linalg.LinAlgError as exc:
+        loop = ' -> '.join(str(h) for h in order)
+        msg = (
+            f'hanging constraints form a SINGULAR system over nodes ({loop}): the relations are '
+            f'mutually dependent with no solution in terms of free DOFs, so no fold can satisfy '
+            f'them. This is not a chain (chains resolve); it is a contradictory constraint set '
+            f'and the mesh that produced it is wrong.'
+        )
+        raise ValueError(msg) from exc
 
-    return [(h, resolve(h, ())) for h in declared]
+    resolved = {h: [(free_targets[j], float(x_mat[pos[h], j])) for j in np.flatnonzero(x_mat[pos[h]])] for h in order}
+    return [(h, resolved.get(h, ms)) for h, ms in declared.items()]
