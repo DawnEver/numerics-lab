@@ -47,6 +47,13 @@ __all__ = [
 _ALPHA_MIN = 0.1  # floor for the adaptive under-relaxation factor
 _ALPHA_GROW = 1.5  # adaptive-Picard recovery factor: grow alpha back toward 1 on a progressing step
 _RTOL_ENERGY_PCT = 0.01  # convergence: total-energy change below this fraction of a percent
+#: Consecutive UNDISTURBED steps (no energy-error growth, no energy-delta sign flip) before the
+#: damped Picard loop grows ``alpha`` back. The ratchet used to be one-way, so a single early
+#: overshoot damped the whole smooth tail: measured on ipm_uv_cummins mec:quad, alpha stuck at
+#: ``1.0 x 0.5 x 0.6**3 = 0.108`` and every rotor position took 44-61 iterations at ~3 s each.
+#: Recovery is capped at ``alpha_cap`` -- the step size that last misbehaved is never retried --
+#: so a genuine limit cycle still settles instead of oscillating between the two regimes.
+_ALPHA_CALM_STEPS = 3
 
 
 @dataclass
@@ -176,6 +183,37 @@ def _energy_error_pct(total_energy: float, last_energy: float | None) -> float:
     return abs(total_energy - last_energy) / denom * 100.0
 
 
+def _has_converged(
+    err: float,
+    x: np.ndarray,
+    x_next: np.ndarray,
+    rtol_energy_pct: float,
+) -> bool:
+    """The ONE convergence rule: the energy has settled AND the iterate has stopped moving.
+
+    A FLAT ENERGY IS NOT A FIXED POINT. `total_energy` can sit on a near-flat plateau that is not
+    the solution -- measured on a saturating-BH case, which read 0.00% energy change for 20+
+    iterations at an energy level ~14x the physical one before escaping and reaching the genuine
+    fixed point ~15 iterations later. On an energy-only test that is a `converged=True` return at a
+    wrong answer, and the caller cannot tell.
+
+    That failure mode is a property of the ENERGY CRITERION, not of any one strategy. It was
+    previously guarded inside :class:`DampedPicardStrategy` alone, and even there only behind
+    ``if ratcheted`` -- so it did not fire on an undamped run of the very strategy that owned it,
+    and the other eleven strategies never had it. Hence one function, consulted by all of them.
+
+    The second half is the direct fixed-point test ``x_next == x``, immune to a flat-but-wrong
+    energy plateau, on the step the strategy is ABOUT to take. It costs nothing: every strategy has
+    already computed ``x_next`` by the time it asks. ``rtol_energy_pct`` is a PERCENT and the
+    increment is a FRACTION, so the ``/ 100`` is the unit conversion between them, not a second,
+    tighter tolerance.
+    """
+    if not err < rtol_energy_pct:
+        return False
+    x_scale = max(float(np.linalg.norm(x)), 1e-12)
+    return float(np.linalg.norm(np.asarray(x_next) - np.asarray(x))) / x_scale < rtol_energy_pct / 100.0
+
+
 def _energy_flux_convergence(
     total_energy: float,
     total_flux: float,
@@ -211,7 +249,7 @@ class DampedPicardStrategy:
     energy change drops below :data:`_RTOL_ENERGY_PCT`, and damp the update ``x += alpha*(solve-x)``.
     A linear system converges after one solve.
 
-    Also ratchets ``alpha`` down (x0.6, floored at :data:`_ALPHA_MIN`, never raised again) on an
+    Also ratchets ``alpha`` down (x0.6, floored at :data:`_ALPHA_MIN`) on an
     energy-delta SIGN FLIP -- the same class of damping the FEA frozen-damped loop applies
     (``discretizations/fem/_newton.py``). The ``err > prev_err`` rule above only fires on a
     MONOTONICALLY growing relative error; a period-2 limit cycle (energy alternating between two
@@ -220,14 +258,20 @@ class DampedPicardStrategy:
     follow-up: MEC's Picard loop never converged on the FEMM-matching PCHIP BH spline). The sign-flip
     trigger catches exactly that oscillation.
 
-    Once alpha has EVER been ratcheted below 1.0, the energy criterion alone is no longer trusted:
-    a heavily-damped iterate can sit on a near-flat plateau of ``total_energy`` that is NOT the true
-    Picard fixed point (measured: a saturating-BH case read 0.00% energy change for 20+ iterations
-    at a spurious energy level ~14x the physical one, only escaping and reaching the genuine
-    fixed point ~15 iterations later when left to run). So once damped, convergence ALSO requires
-    the RAW (undamped) Picard increment ``x_solve - x`` to be small -- the direct fixed-point test
-    ``x_solve == x``, immune to a flat-but-wrong energy plateau. A run that never ratchets (today's
-    common case) never evaluates this extra test: bit-for-bit with the pre-ratchet loop.
+    Convergence is :func:`_has_converged` -- energy AND iterate, UNCONDITIONALLY. That test used to
+    live here, behind ``if ratcheted``, on the reasoning that only a damped iterate can sit on a
+    flat-but-wrong energy plateau. Both halves of that were wrong: the plateau is a property of the
+    ENERGY CRITERION (so the other eleven strategies needed it too), and gating it on an earlier,
+    unrelated damping event meant the strategy that OWNED the protection did not apply it on an
+    undamped run -- which its own text conceded was "today's common case". It is now one shared
+    function; see its docstring for the measurement.
+
+    ALPHA RECOVERS. The ratchet was one-way, so a single early overshoot damped the entire smooth
+    tail: measured on ipm_uv_cummins mec:quad, alpha sat at ``1.0 x 0.5 x 0.6**3 = 0.108`` while the
+    energy error read 0.00%, and each rotor position spent 44-61 iterations at ~3 s crawling to the
+    increment bar. After :data:`_ALPHA_CALM_STEPS` undisturbed steps alpha grows back by
+    :data:`_ALPHA_GROW`, capped at ``alpha_cap`` -- the step size that last misbehaved, never
+    retried. This changes the RATE, not the criterion: the fixed point and the test are unchanged.
     """
 
     name = 'picard-damped'
@@ -241,7 +285,8 @@ class DampedPicardStrategy:
         converged = False
         alpha, prev_err = 1.0, np.inf
         prev_delta_sign = 0
-        ratcheted = False
+        alpha_cap = 1.0  # never recover back to a step size that already misbehaved
+        calm = 0  # consecutive steps with neither an error growth nor a sign flip
         ran = 0
         for i in range(max_iter):
             ran = i + 1
@@ -249,26 +294,29 @@ class DampedPicardStrategy:
             if converged:
                 break
             err = _energy_error_pct(state.total_energy, last_energy)
+            disturbed = False
             if np.isfinite(prev_err) and err > prev_err:
+                alpha_cap = alpha
                 alpha = max(_ALPHA_MIN, alpha * 0.5)
-                ratcheted = True
+                disturbed = True
             if last_energy is not None:
                 delta = state.total_energy - last_energy
                 sign = (delta > 0) - (delta < 0)
                 if prev_delta_sign != 0 and sign not in (0, prev_delta_sign):
+                    alpha_cap = min(alpha_cap, alpha)
                     alpha = max(_ALPHA_MIN, alpha * 0.6)
-                    ratcheted = True
+                    disturbed = True
                 prev_delta_sign = sign
+            if disturbed:
+                calm = 0
+            else:
+                calm += 1
+                if calm >= _ALPHA_CALM_STEPS and alpha < alpha_cap:
+                    alpha = min(alpha_cap, alpha * _ALPHA_GROW)
+                    calm = 0
             prev_err = err
             x_solve = system.solve_linear(state)
-            if err < rtol_energy_pct:
-                if not ratcheted:
-                    converged = True
-                else:
-                    x_scale = max(float(np.linalg.norm(x)), 1e-12)
-                    increment_rel = float(np.linalg.norm(x_solve - x)) / x_scale
-                    if increment_rel < rtol_energy_pct / 100.0:
-                        converged = True
+            converged = _has_converged(err, x, x_solve, rtol_energy_pct)
             last_energy = state.total_energy
             x = x + alpha * (x_solve - x)
             if system.is_linear:
@@ -321,10 +369,9 @@ class AdaptiveDampedPicardStrategy:
                 elif err < prev_err:
                     alpha = min(1.0, alpha * self.grow)  # progress -> recover toward the full step
             prev_err = err
-            if err < rtol_energy_pct:
-                converged = True
-            last_energy = state.total_energy
             x_solve = system.solve_linear(state)
+            converged = _has_converged(err, x, x_solve, rtol_energy_pct)
+            last_energy = state.total_energy
             x = x + alpha * (x_solve - x)
             if system.is_linear:
                 converged = True
@@ -463,10 +510,10 @@ class PicardStrategy:
             if converged:
                 break
             err = _energy_error_pct(state.total_energy, last_energy)
-            if err < rtol_energy_pct:
-                converged = True
+            x_solve = system.solve_linear(state)
+            converged = _has_converged(err, x, x_solve, rtol_energy_pct)
             last_energy = state.total_energy
-            x = system.solve_linear(state)  # undamped: take the full substitution
+            x = x_solve  # undamped: take the full substitution
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0)
@@ -500,15 +547,15 @@ class NewtonStrategy:
             if converged:
                 break
             err = _energy_error_pct(state.total_energy, last_energy)
-            if err < rtol_energy_pct:
-                converged = True
             last_energy = state.total_energy
+            x_prev = x
             jac = system.tangent(x, state)
             if jac is None:
                 x = system.solve_linear(state)  # no Jacobian available -> Picard substitution
             else:
                 dx = system.solve_system(jac, -system.residual(x, state))
                 x = x + dx
+            converged = _has_converged(err, x_prev, x, rtol_energy_pct)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0)
@@ -552,9 +599,8 @@ class AndersonStrategy:
             if converged:
                 break
             err = _energy_error_pct(state.total_energy, last_energy)
-            if err < rtol_energy_pct:
-                converged = True
             last_energy = state.total_energy
+            x_prev = x
             gx = system.solve_linear(state)  # one Picard image g(x_k)
             f = gx - x  # fixed-point residual
             x_hist.append(gx)
@@ -575,6 +621,7 @@ class AndersonStrategy:
                 x = gx - dX @ gamma
                 if self.beta != 1.0:
                     x = x + (self.beta - 1.0) * (f - dF @ gamma)
+            converged = _has_converged(err, x_prev, x, rtol_energy_pct)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, self.beta)
@@ -656,9 +703,8 @@ class ModifiedNewtonStrategy:
             if converged:
                 break
             err = _energy_error_pct(state.total_energy, last_energy)
-            if err < rtol_energy_pct:
-                converged = True
             last_energy = state.total_energy
+            x_prev = x
             refresh = i % self.refresh_every == 0 or cached_jac is None
             if refresh:
                 cached_jac = system.tangent(x, state)  # refresh (re-assemble)
@@ -691,6 +737,7 @@ class ModifiedNewtonStrategy:
                         else:
                             dx = cached_lu.solve(-r) if cached_lu is not None else system.solve_system(cached_jac, -r)
                             x = x + dx
+            converged = _has_converged(err, x_prev, x, rtol_energy_pct)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0)
@@ -738,9 +785,8 @@ class BroydenStrategy:
             if converged:
                 break
             err = _energy_error_pct(state.total_energy, last_energy)
-            if err < rtol_energy_pct:
-                converged = True
             last_energy = state.total_energy
+            x_prev = x
             r = system.residual(x, state)
             if prev_r is not None:
                 # Broyden "good" inverse update: H <- H + ((dx - H df) / (dx.H df)) dx.H, applied as a
@@ -756,6 +802,7 @@ class BroydenStrategy:
             dx = -self._apply_inverse(system, state, r, updates)
             x = x + dx
             prev_r, prev_dx = r, dx
+            converged = _has_converged(err, x_prev, x, rtol_energy_pct)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0)
@@ -815,9 +862,8 @@ class BFGSStrategy:
             if converged:
                 break
             err = _energy_error_pct(state.total_energy, last_energy)
-            if err < rtol_energy_pct:
-                converged = True
             last_energy = state.total_energy
+            x_prev = x
             r = system.residual(x, state)
             if prev_r is not None:
                 y = r - prev_r
@@ -829,6 +875,7 @@ class BFGSStrategy:
             dx = -self._apply_inverse(system, state, r, pairs)
             x = x + dx
             prev_r, prev_dx = r, dx
+            converged = _has_converged(err, x_prev, x, rtol_energy_pct)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0)
@@ -882,9 +929,8 @@ class LBFGSStrategy:
             if converged:
                 break
             err = _energy_error_pct(state.total_energy, last_energy)
-            if err < rtol_energy_pct:
-                converged = True
             last_energy = state.total_energy
+            x_prev = x
             r = system.residual(x, state)
             if prev_r is not None:
                 y = r - prev_r
@@ -896,6 +942,7 @@ class LBFGSStrategy:
             dx = -self._two_loop(system, state, r, pairs)
             x = x + dx
             prev_r, prev_dx = r, dx
+            converged = _has_converged(err, x_prev, x, rtol_energy_pct)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0)
@@ -933,9 +980,8 @@ class NewtonLineSearchStrategy:
             if converged:
                 break
             err = _energy_error_pct(state.total_energy, last_energy)
-            if err < rtol_energy_pct:
-                converged = True
             last_energy = state.total_energy
+            x_prev = x
             jac = system.tangent(x, state)
             if jac is None:
                 x = system.solve_linear(state)  # no Jacobian -> Picard substitution
@@ -955,6 +1001,7 @@ class NewtonLineSearchStrategy:
                         break
                     lam *= self.shrink
                 x = x + lam * dx
+            converged = _has_converged(err, x_prev, x, rtol_energy_pct)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0)
@@ -996,9 +1043,8 @@ class NewtonKrylovStrategy:
             if converged:
                 break
             err = _energy_error_pct(state.total_energy, last_energy)
-            if err < rtol_energy_pct:
-                converged = True
             last_energy = state.total_energy
+            x_prev = x
             r = system.residual(x, state)
             jac = system.tangent(x, state)
             n = x.shape[0]
@@ -1025,6 +1071,7 @@ class NewtonKrylovStrategy:
                 if info != 0 or not np.all(np.isfinite(dx)):
                     dx = system.solve_linear(state) - x  # Krylov breakdown -> Picard substitution
             x = x + dx
+            converged = _has_converged(err, x_prev, x, rtol_energy_pct)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0)
