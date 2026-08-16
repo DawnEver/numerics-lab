@@ -74,9 +74,13 @@ class _SharpLayer:
         return np.array([[weights.alpha1.real + self.c * sech2 / self.eps]])
 
     @staticmethod
-    def never(u, t) -> float:  # noqa: ARG004 -- an event function's SIGNATURE is the seam; this
-        # one is deliberately constant, so both arguments are unused by construction.
-        """An event function that never crosses: the cell loop runs, the locator stays out of it."""
+    def never(*_seam) -> float:
+        """An event function that never crosses: the cell loop runs, the locator stays out of it.
+
+        Written ``*_seam`` rather than ``(u, t)`` with a suppression: the arguments are unused BY
+        CONSTRUCTION here, and a starred parameter says that in the signature instead of asking a
+        linter to look away.
+        """
         return 1.0
 
 
