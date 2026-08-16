@@ -153,6 +153,8 @@ def integrate_transient_with_events(
     backtrack_band: float | None = None,
     backtrack_cap: int = 8,
     gmin_stages: tuple[float, ...] | None = None,
+    adaptive: bool = False,
+    h_min: float | None = None,
 ) -> EventfulTransientSolution:
     """March ``problem`` over ``study``, stopping the grid at every zero of ``event_fns``.
 
@@ -171,6 +173,24 @@ def integrate_transient_with_events(
 
     The initial point is NOT scanned for events: a zero at ``t0`` is the caller's initial
     condition to declare, not an event to locate.
+
+    ``adaptive`` (default ``False``, so every existing march is bit-identical) closes a REAL gap
+    this march carried from the start: without it a step whose Newton exhausts is accepted
+    ANYWAY -- the instant is recorded in ``nonconverged_times`` and the march continues from a
+    state its own solver rejected. With it, a failed step is REJECTED and halved (down to
+    ``h_min``, default ``study.dt / 1000``) until it converges or hits the floor; a shortened step
+    lands inside the cell and the march continues to the same nominal target, so the cell's
+    endpoint is unchanged. Only a step that ACTUALLY failed is subdivided: blanket subdivision was
+    measured WORSE (64 -> 98/148/268 exhausted on srdab_closed_loop).
+
+    WHAT IT DOES NOT FIX, on record so the option is not read as a remedy for it: it does NOT
+    close ``srdab_closed_loop``'s 64 exhausted steps. That case's failures are not a step-size
+    problem -- its root is unreachable at any iteration budget (64 exhausted at both 60 and 200
+    Newton iterations, with the residual GROWING 5.5e3 -> 1.1e4), BDF1 fails at exactly the same
+    steps as BDF2, and a leakage-explicit reformulation that cut the assembled jacobian's
+    condition number 169x (9.16e13 -> 5.41e11) left the count at 64 unchanged. The mechanism here
+    is verified on its own terms -- the steps do shrink and the shortened ones land -- and that is
+    the claim it carries, no more.
 
     ``time_breakpoints`` pins KNOWN non-smooth instants (a source edge -- the laplace
     ``SourceSpec.breakpoints_in`` instants) onto the marched grid: a breakpoint inside a nominal
@@ -229,7 +249,7 @@ def integrate_transient_with_events(
 
     def step_from(
         from_state: IntegratorState, from_prev_dt: float | None, dt_step: float, t_new: float
-    ) -> tuple[IntegratorState, NDArray]:
+    ) -> tuple[IntegratorState, NDArray, bool]:
         if (
             integrator.name == 'bdf2'
             and len(from_state.us) >= 2
@@ -261,7 +281,7 @@ def integrate_transient_with_events(
         solution.worst_step_residual = max(solution.worst_step_residual, residual)
         if not converged:
             solution.nonconverged_probe_times.append(t_new)
-        return integrator.advance(from_state, u_new, dt_step, t_new), u_new
+        return integrator.advance(from_state, u_new, dt_step, t_new), u_new, converged
 
     def _commit(t_new: float, u_new: NDArray) -> None:
         """Append a point to the trajectory, promoting its exhaustion label from probe to landed."""
@@ -328,18 +348,38 @@ def integrate_transient_with_events(
                 resume_from = t_target + dt  # the uniform grid continues from the breakpoint
             checkpoint = _take_checkpoint(state, prev_dt, solution)
             t_from = state.t
-            probe_state, u_probe = step_from(state, prev_dt, pending_dt, t_target)
-            g_new = [float(g(u_probe, t_target)) for g in event_fns]
+            step_dt = pending_dt
+            t_step = t_target
+            probe_state, u_probe, step_ok = step_from(state, prev_dt, step_dt, t_step)
+            if adaptive and not step_ok:
+                # REJECT-HALVE-RETRY, the contract `integrate_transient(adaptive=True)` has carried
+                # since W6 and the eventful march never did: without it the caller accepts `u` from
+                # a step its OWN solver rejected, records the instant in `nonconverged_times`, and
+                # marches on from that state. Only a step that ACTUALLY failed is subdivided --
+                # blanket subdivision was MEASURED WORSE (64 -> 98/148/268 exhausted). Each rejected
+                # attempt stays in `nonconverged_probe_times`, which is exactly what that list
+                # means: an iterate the trajectory does not include.
+                floor = h_min if h_min is not None else dt / 1000.0
+                while not step_ok and 0.5 * step_dt >= floor:
+                    step_dt *= 0.5
+                    t_step = t_from + step_dt
+                    probe_state, u_probe, step_ok = step_from(state, prev_dt, step_dt, t_step)
+            g_new = [float(g(u_probe, t_step)) for g in event_fns]
             crossed = [
                 i
                 for i in range(len(event_fns))
-                if _sign(g_new[i]) != _sign(g_prev[i]) and t_target - last_fired.get(i, -np.inf) > bracket_tol
+                if _sign(g_new[i]) != _sign(g_prev[i]) and t_step - last_fired.get(i, -np.inf) > bracket_tol
             ]
             if not crossed:
                 state = probe_state
-                prev_dt = pending_dt
-                _commit(t_target, u_probe)
+                prev_dt = step_dt
+                _commit(t_step, u_probe)
                 g_prev = g_new
+                if t_step < t_target - bracket_tol:
+                    # A SHORTENED step landed inside the cell: the cell is not finished, so the
+                    # march continues toward the same nominal target with the true remainder.
+                    pending_dt = t_target - state.t
+                    continue
                 break
 
             # Bisect each crossed function to its root; the EARLIEST instant wins, and every
@@ -354,24 +394,24 @@ def integrate_transient_with_events(
             candidates: list[tuple[float, int, NDArray[np.floating]]] = []
             for i in crossed:
                 if g_new[i] == 0.0:
-                    candidates.append((t_target, i, u_probe))
-                elif t_target - t_from <= bracket_tol:
+                    candidates.append((t_step, i, u_probe))
+                elif t_step - t_from <= bracket_tol:
                     candidates.append((t_from, i, np.array(checkpoint.state.last_u, dtype=float, copy=True)))
                 else:
                     lo_t, lo_sign = t_from, _sign(g_prev[i])
-                    hi_t = t_target
+                    hi_t = t_step
                     u_mid = u_probe
                     while hi_t - lo_t > bracket_tol:
                         mid_t = 0.5 * (lo_t + hi_t)
                         trial_state, trial_prev_dt = _rollback(checkpoint, solution)
-                        _ps, u_mid = step_from(trial_state, trial_prev_dt, mid_t - t_from, mid_t)
+                        _ps, u_mid, _ok = step_from(trial_state, trial_prev_dt, mid_t - t_from, mid_t)
                         if _sign(float(event_fns[i](u_mid, mid_t))) == lo_sign:
                             lo_t = mid_t
                         else:
                             hi_t = mid_t
                     t_star_i = 0.5 * (lo_t + hi_t)
                     trial_state, trial_prev_dt = _rollback(checkpoint, solution)
-                    _ps, u_star_i = step_from(trial_state, trial_prev_dt, t_star_i - t_from, t_star_i)
+                    _ps, u_star_i, _ok = step_from(trial_state, trial_prev_dt, t_star_i - t_from, t_star_i)
                     candidates.append((t_star_i, i, u_star_i))
 
             # The suppression's SECOND half, where the landing INSTANT is known: a crossing
@@ -385,15 +425,18 @@ def integrate_transient_with_events(
             candidates = [c for c in candidates if c[0] - last_fired.get(c[1], -np.inf) > bracket_tol]
             if not candidates:
                 state = probe_state
-                prev_dt = pending_dt
-                _commit(t_target, u_probe)
+                prev_dt = step_dt
+                _commit(t_step, u_probe)
                 g_prev = g_new
+                if t_step < t_target - bracket_tol:
+                    pending_dt = t_target - state.t
+                    continue
                 break
             t_star = min(c[0] for c in candidates)
             simultaneous = [c for c in candidates if c[0] - t_star <= bracket_tol]
             state, prev_dt = _rollback(checkpoint, solution)
             if t_star > t_from:  # land the march exactly on the event
-                state, u_star = step_from(state, prev_dt, t_star - t_from, t_star)
+                state, u_star, _ok = step_from(state, prev_dt, t_star - t_from, t_star)
                 _commit(t_star, u_star)
             else:
                 u_star = np.array(state.last_u, dtype=float, copy=True)

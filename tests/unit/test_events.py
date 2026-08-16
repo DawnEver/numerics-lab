@@ -52,6 +52,81 @@ class _RampWithToggle:
         self.toggles += 1
 
 
+class _SharpLayer:
+    """``u_dot = -C tanh((u - level)/eps)`` -- a switching layer sharp enough to defeat a full step.
+
+    This is the shape the eventful march actually meets: a device whose conductance turns over
+    within a window far narrower than the grid. Away from the layer the tangent is ``1/h`` and
+    knows nothing about the wall ahead, so a full step drives the iterate straight across it and
+    Newton rings; a shorter step stays on one side and converges. Nothing here is rigged per
+    step -- the residual and the jacobian are the honest ones, and the step size is the only
+    thing that decides.
+    """
+
+    def __init__(self, level: float = 0.5, c: float = 50.0, eps: float = 1.0e-3) -> None:
+        self.level, self.c, self.eps = level, c, eps
+
+    def residual(self, u, u_dot, u_ddot, t):
+        return np.asarray(u_dot) + self.c * np.tanh((np.asarray(u) - self.level) / self.eps)
+
+    def jacobian(self, u, u_dot, u_ddot, t, weights):
+        sech2 = 1.0 - np.tanh((float(np.asarray(u)[0]) - self.level) / self.eps) ** 2
+        return np.array([[weights.alpha1.real + self.c * sech2 / self.eps]])
+
+    @staticmethod
+    def never(u, t) -> float:  # noqa: ARG004 -- an event function's SIGNATURE is the seam; this
+        # one is deliberately constant, so both arguments are unused by construction.
+        """An event function that never crosses: the cell loop runs, the locator stays out of it."""
+        return 1.0
+
+
+def test_the_eventful_march_REJECTS_a_step_its_newton_could_not_take() -> None:
+    """``adaptive=True`` must actually shorten a failed step and land the shortened one.
+
+    The gap it closes: without it this march accepts ``u`` from a step its OWN solver rejected --
+    it records the instant in ``nonconverged_times`` and continues from that state. The plain
+    ``integrate_transient(adaptive=True)`` has had reject-halve-retry since W6; the eventful march
+    never did, and its own docstring named the omission.
+
+    What this pins is the MECHANISM, and only that: the march must land points the fixed grid does
+    not contain. It deliberately does NOT assert that the exhausted count drops -- MEASURED on this
+    problem and on srdab_closed_loop, it does not reliably, and an assertion that the count improves
+    would be a claim the implementation does not support. The step rejection is real; "and therefore
+    the hard case converges" is the part that is false, so it is not asserted here.
+
+    ``backtrack_cap=0`` removes the line search from both arms. The subject is what happens when a
+    step CANNOT be taken, and the default backtracking would rescue this problem before the step
+    size ever came into it -- leaving the test green with the feature under test never exercised.
+    """
+    dt, t1 = 1.0e-3, 2.0e-2
+    study = TransientStudy(t0=0.0, t1=t1, dt=dt, integrator=IntegratorKind.BDF1)
+    common = {
+        'event_fns': (_SharpLayer.never,),
+        'max_newton': 6,
+        'tol': 1.0e-10,
+        'backtrack_cap': 0,
+    }
+    fixed = integrate_transient_with_events(_SharpLayer(), study, np.array([0.0]), **common)
+    # The premise: without the retry this problem DOES exhaust. If it stopped doing so the test
+    # would pass vacuously, proving nothing about the retry -- so the premise is asserted, not
+    # assumed.
+    assert fixed.nonconverged_times, 'the fixed march converged everywhere -- nothing to reject'
+
+    shrunk = integrate_transient_with_events(
+        _SharpLayer(), study, np.array([0.0]), adaptive=True, h_min=dt / 1000.0, **common
+    )
+    off_grid = [t for t in shrunk.times if abs(t / dt - round(t / dt)) > 1.0e-9]
+    assert off_grid, (
+        'no marched instant lies off the nominal grid, so no step was ever shortened -- '
+        f'the retry did not engage (exhausted: {len(shrunk.nonconverged_times)})'
+    )
+    # A shortened step must not corrupt the march: the cell endpoints still arrive, the times stay
+    # monotonic, and the window still closes at t1.
+    times = np.asarray(shrunk.times, dtype=float)
+    assert np.all(np.diff(times) > 0.0), 'the shortened steps left the march non-monotonic'
+    assert times[-1] == pytest.approx(t1, abs=dt), f'the march stopped at {times[-1]}, not {t1}'
+
+
 def test_an_event_inside_a_quadratic_ramp_costs_no_accuracy_at_all() -> None:
     """The variable-step BDF2 form introduces no error of its own -- the trap it closes.
 
