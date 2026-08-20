@@ -155,6 +155,7 @@ def integrate_transient_with_events(
     gmin_stages: tuple[float, ...] | None = None,
     adaptive: bool = False,
     h_min: float | None = None,
+    refine: float | None = None,
 ) -> EventfulTransientSolution:
     """March ``problem`` over ``study``, stopping the grid at every zero of ``event_fns``.
 
@@ -182,6 +183,18 @@ def integrate_transient_with_events(
     lands inside the cell and the march continues to the same nominal target, so the cell's
     endpoint is unchanged. Only a step that ACTUALLY failed is subdivided: blanket subdivision was
     measured WORSE (64 -> 98/148/268 exhausted on srdab_closed_loop).
+
+    ``refine`` (default ``None`` -- bit-identical) is ACCURACY-controlled refinement, the
+    complement of ``adaptive``'s convergence-driven halving: after each converged step that lands
+    WITHOUT crossing an event, the step is re-taken from the same checkpoint at HALF size, and if
+    the two half-steps disagree with the full step beyond ``refine`` (relative), the half-steps
+    are accepted instead -- the grid adapts where the fast dynamics are under-resolved, which a
+    high-Q resonant tank needs (measured 2026-08-20: the K=1 srdab_power_stage tank is grid-
+    dependent 0.17/0.29/0.47/0.44 across dt_factor 505/1010/2020/4040 because the fixed grid
+    under-resolves the Coss-tank ring; ``refine`` lands the step on the finer half-steps there).
+    A step that crosses an event is NOT refined (the bisection already locates it exactly); only
+    steps that land cleanly are accuracy-checked, and only when both half-steps converge and
+    neither crosses. ``refine`` is a RELATIVE tolerance on ``max|u_half - u_full|``.
 
     WHAT IT DOES NOT FIX, on record so the option is not read as a remedy for it: it does NOT
     close ``srdab_closed_loop``'s 64 exhausted steps. That case's failures are not a step-size
@@ -371,6 +384,44 @@ def integrate_transient_with_events(
                 if _sign(g_new[i]) != _sign(g_prev[i]) and t_step - last_fired.get(i, -np.inf) > bracket_tol
             ]
             if not crossed:
+                if refine is not None:
+                    floor = h_min if h_min is not None else dt / 1000.0
+                    if step_dt > 2.0 * floor:
+                        # Accuracy-controlled refinement: re-take the step at half size from the
+                        # same checkpoint and compare. A large discrepancy means the full step
+                        # under-resolved the fast dynamics; the two half-steps then replace it.
+                        h2 = 0.5 * step_dt
+                        t_mid = t_from + h2
+                        cs, cd = checkpoint.state, checkpoint.prev_dt
+                        mid_state, u_mid, mid_ok = step_from(cs, cd, h2, t_mid)
+                        if mid_ok:
+                            half_state, u_half, half_ok = step_from(mid_state, h2, h2, t_step)
+                            if half_ok:
+                                gm = [float(g(u_mid, t_mid)) for g in event_fns]
+                                gh = [float(g(u_half, t_step)) for g in event_fns]
+                                crossed_mid = any(
+                                    _sign(gm[i]) != _sign(g_prev[i])
+                                    and t_mid - last_fired.get(i, -np.inf) > bracket_tol
+                                    for i in range(len(event_fns))
+                                )
+                                crossed_half = any(
+                                    _sign(gh[i]) != _sign(gm[i]) and t_step - last_fired.get(i, -np.inf) > bracket_tol
+                                    for i in range(len(event_fns))
+                                )
+                                if not (crossed_mid or crossed_half):
+                                    u_max = float(np.max(np.abs(u_probe))) if u_probe.size else 1.0
+                                    scale = max(u_max, 1e-12)
+                                    if float(np.max(np.abs(u_half - u_probe))) > refine * scale:
+                                        # Accept the two half-steps instead of the full step.
+                                        state = half_state
+                                        prev_dt = h2
+                                        _commit(t_mid, u_mid)
+                                        _commit(t_step, u_half)
+                                        g_prev = gh
+                                        if t_step < t_target - bracket_tol:
+                                            pending_dt = t_target - state.t
+                                            continue
+                                        break
                 state = probe_state
                 prev_dt = step_dt
                 _commit(t_step, u_probe)

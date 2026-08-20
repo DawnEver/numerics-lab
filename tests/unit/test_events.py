@@ -131,6 +131,60 @@ def test_the_eventful_march_REJECTS_a_step_its_newton_could_not_take() -> None:
     assert times[-1] == pytest.approx(t1, abs=dt), f'the march stopped at {times[-1]}, not {t1}'
 
 
+def test_refine_lands_finer_steps_where_the_full_step_under_resolves() -> None:
+    """``refine`` is ACCURACY-controlled: a converged step whose half-size re-take disagrees
+    beyond the tolerance is replaced by the two half-steps, so the grid adapts where the fast
+    dynamics are under-resolved.
+
+    The ``_SharpLayer``'s tanh turnover is far narrower than the grid at dt=0.05, so the full step
+    smears it; ``refine`` detects the discrepancy and lands the finer steps (21 -> 31 points).
+    At dt=0.02 the grid already resolves the layer, so ``refine`` adds NOTHING (51 == 51) -- the
+    refinement is driven by the local error, not by the option being on. ``refine=None`` is
+    bit-identical to the plain march (the default must not move a single point).
+    """
+    base = integrate_transient_with_events(
+        _SharpLayer(),
+        TransientStudy(t0=0.0, t1=1.0, dt=0.05, integrator=IntegratorKind.BDF2),
+        np.array([0.0]),
+        event_fns=(_SharpLayer.never,),
+    )
+    explicit_none = integrate_transient_with_events(
+        _SharpLayer(),
+        TransientStudy(t0=0.0, t1=1.0, dt=0.05, integrator=IntegratorKind.BDF2),
+        np.array([0.0]),
+        event_fns=(_SharpLayer.never,),
+        refine=None,
+    )
+    assert len(explicit_none.times) == len(base.times), (
+        'refine=None must be bit-identical to the plain march (the shipped cases pass nothing)'
+    )
+    refined = integrate_transient_with_events(
+        _SharpLayer(),
+        TransientStudy(t0=0.0, t1=1.0, dt=0.05, integrator=IntegratorKind.BDF2),
+        np.array([0.0]),
+        event_fns=(_SharpLayer.never,),
+        refine=1.0e-3,
+    )
+    assert len(refined.times) > len(base.times), (
+        'refine must land the half-steps where the full step under-resolves the sharp layer'
+    )
+    fine = integrate_transient_with_events(
+        _SharpLayer(),
+        TransientStudy(t0=0.0, t1=1.0, dt=0.02, integrator=IntegratorKind.BDF2),
+        np.array([0.0]),
+        event_fns=(_SharpLayer.never,),
+        refine=1.0e-3,
+    )
+    assert len(fine.times) == len(
+        integrate_transient_with_events(
+            _SharpLayer(),
+            TransientStudy(t0=0.0, t1=1.0, dt=0.02, integrator=IntegratorKind.BDF2),
+            np.array([0.0]),
+            event_fns=(_SharpLayer.never,),
+        ).times
+    ), 'a grid that already resolves the layer must not be refined -- the option is not a finer grid'
+
+
 def test_an_event_inside_a_quadratic_ramp_costs_no_accuracy_at_all() -> None:
     """The variable-step BDF2 form introduces no error of its own -- the trap it closes.
 
