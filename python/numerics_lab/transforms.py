@@ -123,4 +123,44 @@ def clarke_forward(x_phase: NDArray[np.float64]) -> tuple[NDArray[np.float64], N
     return alpha, beta
 
 
+def phase_L_to_dq_L(
+    L_phase: NDArray[np.float64],
+    theta_e: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    """The Park bridge: a phase-basis inductance matrix -> the dq-basis matrix at rotor angle ``theta_e``.
+
+    The phase-basis ``L_phase`` (``(n_phase, n_phase)``, from the inductance workflow's
+    ``matrix`` method) and the dq-basis ``L_dq`` (``(2, 2)``) are the SAME inductance tensor in
+    two bases -- the dq report is not a second measurement protocol, it is this rotation. The
+    amplitude-invariant relation is ``L_dq = (2/n) M L M^T`` where ``M`` is the ``2 x n``
+    forward-Park matrix whose rows are ``[cos(theta_e - axis_k); -sin(theta_e - axis_k)]``.
+
+    WHY THE ``(2/n)`` AND NOT A BARE ``T L T^T``. The plan's ``L_dq = T L T^T`` notation uses the
+    full forward Park matrix, whose ``d``/``q`` rows each carry the amplitude-invariant ``2/n``
+    scaling; a bare ``T L T^T`` would apply it TWICE and map a balanced diagonal L_phase to dq
+    entries ``(2/n)``-too-small (measured: L_phase = diag(1.0, 1.0, 1.0) with balanced mutuals
+    gives Ld = 1.2 through the direct injection, but 0.8 through ``T L T^T``). This bridge uses
+    the UN-normalised ``M`` and the single ``2/n`` factor, so it reproduces the direct
+    dq-injection route to machine precision (pinned in test_transforms.py).
+
+    ``theta_e`` is the rotor ELECTRICAL angle (rad), scalar or ``(n_theta,)``. A ``theta_e``
+    array returns ``L_dq`` as ``(n_theta, 2, 2)``; a scalar returns ``(2, 2)``.
+    """
+    L = np.asarray(L_phase, dtype=float)
+    n_phase = L.shape[0]
+    axes = _phase_axes(n_phase)
+    theta_e = np.asarray(theta_e, dtype=float)
+
+    def _bridge(angle: float) -> NDArray[np.float64]:
+        M = np.array(
+            [[np.cos(angle - ax) for ax in axes], [-np.sin(angle - ax) for ax in axes]],
+            dtype=float,
+        )
+        return (2.0 / n_phase) * (M @ L @ M.T)
+
+    if theta_e.ndim == 0:
+        return _bridge(float(theta_e))
+    return np.stack([_bridge(float(t)) for t in theta_e.ravel()]).reshape((*theta_e.shape, 2, 2))
+
+
 __all__ = ['clarke_forward', 'park_forward', 'park_inverse']

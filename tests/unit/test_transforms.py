@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from motronics.gauss.transforms import clarke_forward, park_forward, park_inverse
+from motronics.gauss.transforms import clarke_forward, park_forward, park_inverse, phase_L_to_dq_L
 
 
 def test_park_roundtrip_three_phase_identity() -> None:
@@ -131,3 +131,94 @@ def test_park_and_clarke_agree_on_a_balanced_set_at_theta_zero() -> None:
     alpha, beta = clarke_forward(x_abc)
     assert d == pytest.approx(alpha, abs=1e-12)
     assert q == pytest.approx(beta, abs=1e-12)  # both use the q = -sum(x sin(angle)) convention
+
+
+# -- phase_L_to_dq_L: the Park bridge (plan stage 2) ---------------------------------
+#
+# The phase-basis L matrix and the dq-basis L matrix are the SAME inductance tensor in two
+# bases. phase_L_to_dq_L applies the amplitude-invariant Park rotation: L_dq = (2/n) M L M^T
+# where M = [cos(theta_e - axis_k); -sin(theta_e - axis_k)] is the 2 x n forward-Park matrix.
+# The (2/n) factor is the amplitude-invariant scaling -- the plan's "T L T^T" notation with the
+# forward matrix would double-apply it (measured: T L T^T on a diagonal L_phase gives (2/n)
+# too-small dq entries), so the bridge uses the UN-normalised M and the single 2/n factor.
+
+
+def test_phase_L_to_dq_L_identity_maps_a_balanced_phase_matrix() -> None:
+    """A phase matrix with equal diagonal and equal mutuals is rotation-INVARIANT: any theta
+    gives the same diagonal dq inductance (a round stator has no preferred axis).
+    """
+    L_phase = np.array([
+        [1.0, -0.2, -0.2],
+        [-0.2, 1.0, -0.2],
+        [-0.2, -0.2, 1.0],
+    ])
+    L_dq = phase_L_to_dq_L(L_phase, np.array(0.0))
+    assert L_dq.shape == (2, 2)
+    # The direct-injection route pins the VALUE: inject [I, 0] at theta=0, solve lambda = L i,
+    # forward-Park lambda, read Ld = lambda_d / I. Measured Ld = Lq = 1.2 (0.8 from T L T^T).
+    np.testing.assert_allclose(L_dq[0, 0], 1.2, atol=1e-12)
+    np.testing.assert_allclose(L_dq[1, 1], 1.2, atol=1e-12)
+    # Round stator: no off-diagonal dq coupling and no theta dependence.
+    np.testing.assert_allclose(L_dq[0, 1], 0.0, atol=1e-12)
+    L_dq_45 = phase_L_to_dq_L(L_phase, np.array(np.pi / 4))
+    np.testing.assert_allclose(L_dq_45, L_dq, atol=1e-12)
+
+
+def test_phase_L_to_dq_L_matches_the_direct_dq_injection_route() -> None:
+    """The bridge agrees with injecting a dq current set and Park-forwarding the linkage.
+
+    The direct route is the physical measurement: i_abc = park_inverse([I,0], theta), lambda =
+    L_phase @ i_abc, Ld = park_forward(lambda)[0] / I. The bridge must reproduce it for a
+    SALIENT (asymmetric) L_phase at an arbitrary theta -- the balanced case alone cannot tell a
+    bridge from a constant.
+    """
+    np.random.default_rng(3)
+    theta = np.array(0.37)
+    L_phase = np.array([
+        [1.4, -0.11, -0.09],
+        [-0.11, 1.1, -0.13],
+        [-0.09, -0.13, 1.0],
+    ])
+    L_dq = phase_L_to_dq_L(L_phase, theta)
+
+    I_test = 1.0
+    i_abc_d = park_inverse(I_test, 0.0, 0.0, theta, n_phase=3)
+    i_abc_q = park_inverse(0.0, I_test, 0.0, theta, n_phase=3)
+    lam_d = park_forward(L_phase @ i_abc_d, theta)
+    lam_q = park_forward(L_phase @ i_abc_q, theta)
+    np.testing.assert_allclose(L_dq[0, 0], lam_d[0] / I_test, atol=1e-12)
+    np.testing.assert_allclose(L_dq[1, 1], lam_q[1] / I_test, atol=1e-12)
+    # Cross terms too: lambda_q under a d-axis drive is L_dq * I.
+    np.testing.assert_allclose(L_dq[0, 1], lam_q[0] / I_test, atol=1e-12)
+    np.testing.assert_allclose(L_dq[1, 0], lam_d[1] / I_test, atol=1e-12)
+
+
+def test_phase_L_to_dq_L_symmetric_from_a_symmetric_phase_matrix() -> None:
+    """A symmetric L_phase must map to a symmetric L_dq (reciprocity is basis-independent)."""
+    rng = np.random.default_rng(4)
+    A = rng.standard_normal((3, 3))
+    L_phase = A @ A.T + 2.0 * np.eye(3)  # SPD, symmetric
+    theta = np.array(1.1)
+    L_dq = phase_L_to_dq_L(L_phase, theta)
+    np.testing.assert_allclose(L_dq, L_dq.T, atol=1e-12)
+
+
+def test_phase_L_to_dq_L_round_trips_a_given_dq_matrix() -> None:
+    """Given a target L_dq, the inverse map produces a phase matrix whose bridge is the target.
+
+    The inverse of the bridge (phase matrix from a dq matrix) exists because the forward-Park
+    map is a rank-2 projector on the balanced subspace; the round trip on that subspace is the
+    identity. This pins the bridge as the TWO-BASIS SAME-TENSOR relation, not a heuristic.
+    """
+    L_dq_target = np.array([[1.2, 0.05], [0.05, 0.7]])
+    theta = np.array(0.5)
+    n = 3
+    axes = 2.0 * np.pi * np.arange(n) / n
+    M = np.array([
+        [np.cos(theta - ax) for ax in axes],
+        [-np.sin(theta - ax) for ax in axes],
+    ])
+    # The inverse bridge is (2/n) M.T L_dq M: forward = (2/n) M L M.T, and M M.T = (n/2) I,
+    # so the forward of (2/n) M.T L M is (2/n) * (n/2) L (n/2) = L on the balanced subspace.
+    L_phase = (2.0 / n) * (M.T @ L_dq_target @ M)
+    np.testing.assert_allclose(phase_L_to_dq_L(L_phase, theta), L_dq_target, atol=1e-12)
