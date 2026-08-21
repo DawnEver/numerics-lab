@@ -60,7 +60,6 @@ from typing import Protocol, runtime_checkable
 
 import numpy as np
 
-from motronics.core.materials import MaterialRegistry
 from motronics.gauss.nonlinear import AssembledState
 
 __all__ = [
@@ -154,8 +153,7 @@ class ElementFieldEvaluator(FieldEvaluator, Protocol):
 
     def evaluate_element(
         self,
-        material_in_use: MaterialRegistry,
-        material_name: str,
+        law: object,
         b_norm: float,
         max_B_norm: float,
         nu_prev: float,
@@ -178,8 +176,7 @@ class EdgeFieldEvaluator(FieldEvaluator, Protocol):
 
     def evaluate_edges(
         self,
-        material_in_use: MaterialRegistry,
-        material_name: str,
+        law: object,
         current_B: np.ndarray,
         edge_vectors: np.ndarray,
         max_B_norm: float,
