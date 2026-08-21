@@ -52,6 +52,139 @@ class _RampWithToggle:
         self.toggles += 1
 
 
+class _SharpLayer:
+    """``u_dot = -C tanh((u - level)/eps)`` -- a switching layer sharp enough to defeat a full step.
+
+    This is the shape the eventful march actually meets: a device whose conductance turns over
+    within a window far narrower than the grid. Away from the layer the tangent is ``1/h`` and
+    knows nothing about the wall ahead, so a full step drives the iterate straight across it and
+    Newton rings; a shorter step stays on one side and converges. Nothing here is rigged per
+    step -- the residual and the jacobian are the honest ones, and the step size is the only
+    thing that decides.
+    """
+
+    def __init__(self, level: float = 0.5, c: float = 50.0, eps: float = 1.0e-3) -> None:
+        self.level, self.c, self.eps = level, c, eps
+
+    def residual(self, u, u_dot, u_ddot, t):
+        return np.asarray(u_dot) + self.c * np.tanh((np.asarray(u) - self.level) / self.eps)
+
+    def jacobian(self, u, u_dot, u_ddot, t, weights):
+        sech2 = 1.0 - np.tanh((float(np.asarray(u)[0]) - self.level) / self.eps) ** 2
+        return np.array([[weights.alpha1.real + self.c * sech2 / self.eps]])
+
+    @staticmethod
+    def never(*_seam) -> float:
+        """An event function that never crosses: the cell loop runs, the locator stays out of it.
+
+        Written ``*_seam`` rather than ``(u, t)`` with a suppression: the arguments are unused BY
+        CONSTRUCTION here, and a starred parameter says that in the signature instead of asking a
+        linter to look away.
+        """
+        return 1.0
+
+
+def test_the_eventful_march_REJECTS_a_step_its_newton_could_not_take() -> None:
+    """``adaptive=True`` must actually shorten a failed step and land the shortened one.
+
+    The gap it closes: without it this march accepts ``u`` from a step its OWN solver rejected --
+    it records the instant in ``nonconverged_times`` and continues from that state. The plain
+    ``integrate_transient(adaptive=True)`` has had reject-halve-retry since W6; the eventful march
+    never did, and its own docstring named the omission.
+
+    What this pins is the MECHANISM, and only that: the march must land points the fixed grid does
+    not contain. It deliberately does NOT assert that the exhausted count drops -- MEASURED on this
+    problem and on srdab_closed_loop, it does not reliably, and an assertion that the count improves
+    would be a claim the implementation does not support. The step rejection is real; "and therefore
+    the hard case converges" is the part that is false, so it is not asserted here.
+
+    ``backtrack_cap=0`` removes the line search from both arms. The subject is what happens when a
+    step CANNOT be taken, and the default backtracking would rescue this problem before the step
+    size ever came into it -- leaving the test green with the feature under test never exercised.
+    """
+    dt, t1 = 1.0e-3, 2.0e-2
+    study = TransientStudy(t0=0.0, t1=t1, dt=dt, integrator=IntegratorKind.BDF1)
+    common = {
+        'event_fns': (_SharpLayer.never,),
+        'max_newton': 6,
+        'tol': 1.0e-10,
+        'backtrack_cap': 0,
+    }
+    fixed = integrate_transient_with_events(_SharpLayer(), study, np.array([0.0]), **common)
+    # The premise: without the retry this problem DOES exhaust. If it stopped doing so the test
+    # would pass vacuously, proving nothing about the retry -- so the premise is asserted, not
+    # assumed.
+    assert fixed.nonconverged_times, 'the fixed march converged everywhere -- nothing to reject'
+
+    shrunk = integrate_transient_with_events(
+        _SharpLayer(), study, np.array([0.0]), adaptive=True, h_min=dt / 1000.0, **common
+    )
+    off_grid = [t for t in shrunk.times if abs(t / dt - round(t / dt)) > 1.0e-9]
+    assert off_grid, (
+        'no marched instant lies off the nominal grid, so no step was ever shortened -- '
+        f'the retry did not engage (exhausted: {len(shrunk.nonconverged_times)})'
+    )
+    # A shortened step must not corrupt the march: the cell endpoints still arrive, the times stay
+    # monotonic, and the window still closes at t1.
+    times = np.asarray(shrunk.times, dtype=float)
+    assert np.all(np.diff(times) > 0.0), 'the shortened steps left the march non-monotonic'
+    assert times[-1] == pytest.approx(t1, abs=dt), f'the march stopped at {times[-1]}, not {t1}'
+
+
+def test_refine_lands_finer_steps_where_the_full_step_under_resolves() -> None:
+    """``refine`` is ACCURACY-controlled: a converged step whose half-size re-take disagrees
+    beyond the tolerance is replaced by the two half-steps, so the grid adapts where the fast
+    dynamics are under-resolved.
+
+    The ``_SharpLayer``'s tanh turnover is far narrower than the grid at dt=0.05, so the full step
+    smears it; ``refine`` detects the discrepancy and lands the finer steps (21 -> 31 points).
+    At dt=0.02 the grid already resolves the layer, so ``refine`` adds NOTHING (51 == 51) -- the
+    refinement is driven by the local error, not by the option being on. ``refine=None`` is
+    bit-identical to the plain march (the default must not move a single point).
+    """
+    base = integrate_transient_with_events(
+        _SharpLayer(),
+        TransientStudy(t0=0.0, t1=1.0, dt=0.05, integrator=IntegratorKind.BDF2),
+        np.array([0.0]),
+        event_fns=(_SharpLayer.never,),
+    )
+    explicit_none = integrate_transient_with_events(
+        _SharpLayer(),
+        TransientStudy(t0=0.0, t1=1.0, dt=0.05, integrator=IntegratorKind.BDF2),
+        np.array([0.0]),
+        event_fns=(_SharpLayer.never,),
+        refine=None,
+    )
+    assert len(explicit_none.times) == len(base.times), (
+        'refine=None must be bit-identical to the plain march (the shipped cases pass nothing)'
+    )
+    refined = integrate_transient_with_events(
+        _SharpLayer(),
+        TransientStudy(t0=0.0, t1=1.0, dt=0.05, integrator=IntegratorKind.BDF2),
+        np.array([0.0]),
+        event_fns=(_SharpLayer.never,),
+        refine=1.0e-3,
+    )
+    assert len(refined.times) > len(base.times), (
+        'refine must land the half-steps where the full step under-resolves the sharp layer'
+    )
+    fine = integrate_transient_with_events(
+        _SharpLayer(),
+        TransientStudy(t0=0.0, t1=1.0, dt=0.02, integrator=IntegratorKind.BDF2),
+        np.array([0.0]),
+        event_fns=(_SharpLayer.never,),
+        refine=1.0e-3,
+    )
+    assert len(fine.times) == len(
+        integrate_transient_with_events(
+            _SharpLayer(),
+            TransientStudy(t0=0.0, t1=1.0, dt=0.02, integrator=IntegratorKind.BDF2),
+            np.array([0.0]),
+            event_fns=(_SharpLayer.never,),
+        ).times
+    ), 'a grid that already resolves the layer must not be refined -- the option is not a finer grid'
+
+
 def test_an_event_inside_a_quadratic_ramp_costs_no_accuracy_at_all() -> None:
     """The variable-step BDF2 form introduces no error of its own -- the trap it closes.
 
@@ -772,3 +905,55 @@ def test_the_stall_polish_switches_to_the_tangent_and_converges() -> None:
     )
     assert converged, f'the stall-polish must converge (residual {residual:g})'
     assert problem.tangent_calls > 0, "the stall-polish must engage the problem's jacobian_tangent"
+
+
+def test_a_discarded_bisection_probe_does_not_count_as_a_nonconverged_STEP() -> None:
+    """``converged`` must mean what it says: every step OF THE SOLUTION met the tolerance.
+
+    The event locator bisects by RE-STEPPING from a checkpoint and throwing the result away
+    (``_rollback``). Those probe steps go through the same ``_solve_step`` as a real step, so an
+    exhausted probe used to land in ``nonconverged_times`` -- the list ``converged`` is derived
+    from. A march whose every LANDED step converged perfectly therefore reported
+    ``converged == False``, and no caller could ask the question it actually cares about.
+
+    Measured consequence (srdab_closed_loop, 2026-08-15): 2094 "non-converged" at 100 steps per
+    switching period, of which only 239 landed -- 1855 were discarded probes. The tag was ~9x
+    pessimistic and read as a broken march.
+
+    The discriminator: a landed step's time is IN ``solution.times``; a discarded probe's is not.
+    """
+
+    class _NonlinearRampWithToggle(_RampWithToggle):
+        """``u_dot = slope + u^2`` -- nonlinear, so a starved Newton ceiling genuinely exhausts.
+
+        A LINEAR problem is useless here: its single Newton step is exact, nothing ever fails,
+        and the assertion passes vacuously without the probe path ever reporting anything.
+        """
+
+        def residual(self, u, u_dot, u_ddot, t):
+            return np.asarray(u_dot) - self.slope - np.asarray(u) ** 2
+
+        def jacobian(self, u, u_dot, u_ddot, t, weights):
+            return np.array([[weights.alpha1.real - 2.0 * float(u[0]) * weights.alpha0.real]])
+
+    problem = _NonlinearRampWithToggle(level=0.35)
+    study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
+    # A starved ceiling on a nonlinear problem: steps DO exhaust, so the bisection's discarded
+    # probes exhaust too -- which is the situation the tag has to classify correctly.
+    sol = integrate_transient_with_events(
+        problem,
+        study,
+        np.array([0.0]),
+        event_fns=[problem.event_fn],
+        on_event=lambda _i, _t, _u: problem.toggle(),
+        max_newton=1,
+        tol=1.0e-12,
+    )
+    assert problem.toggles == 1, 'the event must actually fire (else the probe path never runs)'
+    assert sol.nonconverged_times, 'the starved ceiling must exhaust somewhere (the precondition)'
+    landed = set(sol.times)
+    stray = [t for t in sol.nonconverged_times if t not in landed]
+    assert not stray, (
+        f'nonconverged_times must contain only times that LANDED in the solution; '
+        f'{len(stray)} of {len(sol.nonconverged_times)} are discarded bisection probes: {stray[:5]}'
+    )
