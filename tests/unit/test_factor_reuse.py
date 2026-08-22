@@ -4,7 +4,7 @@ The cache is a solve-seam object: the problem may expose ``factor_reuse_key(u, u
 t, weights)`` returning a value that DETERMINES the step jacobian; while the key holds, the
 cached factorization back-substitutes instead of re-factoring. gauss trusts the key exactly as it
 trusts ``residual`` / ``jacobian`` -- key SOUNDNESS is the problem's (laplace pins it in
-``tests/unit/laplace/test_factor_reuse.py``); what gauss owns here is the mechanics: hit/miss
+``tests/unit/laplace/solver/test_factor_reuse.py``); what gauss owns here is the mechanics: hit/miss
 accounting, dense/sparse/scalar storage, and that a problem WITHOUT the seam marches untouched.
 """
 # ruff: noqa: PLC0415 -- test-module lazy imports: the module under test is imported inside
