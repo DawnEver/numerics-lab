@@ -19,7 +19,7 @@ import itertools
 import numpy as np
 import pytest
 
-from motronics.contracts.study_spec import IntegratorKind, TransientStudy
+from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
 from motronics.gauss.time_integrators import integrate_transient
 from motronics.gauss.time_integrators.events import integrate_transient_with_events
 

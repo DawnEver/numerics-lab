@@ -3,11 +3,11 @@
 This is the temporal counterpart of ``gauss/nonlinear`` (iteration strategies) and
 ``gauss/linear`` (linear-solve backends): a registry of pluggable TIME INTEGRATORS that a
 transient study marches with, decoupled from any physics. The orthogonality hinge is
-:class:`~motronics.contracts.analysis_formulation.DerivativeWeights`: an analysis formulation
+:class:`~motronics.contracts.spec.analysis_formulation.DerivativeWeights`: an analysis formulation
 supplies ONLY the triple ``(alpha0, alpha1, alpha2)`` weighting the ``u`` / ``u_dot`` /
 ``u_ddot`` operators; a time integrator is exactly the machinery that PRODUCES those weights
 per step (plus the history-dependent affine offsets) and advances a
-:class:`~motronics.contracts.analysis_formulation.SemiDiscreteProblem` one step.
+:class:`~motronics.contracts.spec.analysis_formulation.SemiDiscreteProblem` one step.
 
 The load-bearing idea: an implicit integrator writes each derivative at the new step as an
 AFFINE function of the unknown ``u_{n+1}``,
@@ -39,8 +39,8 @@ import scipy.sparse as sp
 from numpy.typing import NDArray
 from scipy.sparse.linalg import spsolve
 
-from motronics.contracts.analysis_formulation import DerivativeWeights, SemiDiscreteProblem
-from motronics.contracts.study_spec import IntegratorKind, TransientStudy
+from motronics.contracts.spec.analysis_formulation import DerivativeWeights, SemiDiscreteProblem
+from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
 from motronics.gauss.time_integrators.factor_reuse import FactorCache
 
 logger = logging.getLogger(__name__)

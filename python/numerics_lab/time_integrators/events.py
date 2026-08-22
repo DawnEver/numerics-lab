@@ -59,7 +59,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from numpy.typing import NDArray
 
-from motronics.contracts.study_spec import TransientStudy
+from motronics.contracts.spec.study_spec import TransientStudy
 from motronics.gauss.time_integrators import (
     FactorCache,
     IntegratorState,

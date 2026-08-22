@@ -18,8 +18,8 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.sparse import csr_matrix
 
-from motronics.contracts.analysis_formulation import DerivativeWeights
-from motronics.contracts.study_spec import IntegratorKind, TransientStudy
+from motronics.contracts.spec.analysis_formulation import DerivativeWeights
+from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
 from motronics.gauss.time_integrators import _default_solve, integrate_transient
 from motronics.gauss.time_integrators.events import integrate_transient_with_events
 from motronics.gauss.time_integrators.factor_reuse import FactorCache
