@@ -10,7 +10,7 @@ turns at the located instant.
 # ruff: noqa: PLC0415 -- test-module lazy imports: the module under test is imported inside
 # the test/fixture, keeping collection cheap and loading platform-conditional deps (win32com,
 # OCP, FEMM) only on the path that needs them. Hoist a file's imports and DELETE this header;
-# the population is ratcheted by tests/architecture/test_suppression_ratchet.py.
+# the population is ratcheted by tests/architecture/ratchets/test_suppression_ratchet.py.
 
 from __future__ import annotations
 
