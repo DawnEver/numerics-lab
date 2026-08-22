@@ -75,7 +75,7 @@ Saturation levels: sweep excitation on `ipm_uv_cummins` (rated=heavy) and one of
 
 ## Principle-P test shape (nonlinear-accuracy matrix)
 Parametrize (case x solver in {fea,mec} x iteration_strategy x saturation_level) vs a FEMM
-reference bundle. Model on `tests/integration/test_iteration_method_matrix.py` (reference-energy
+reference bundle. Model on `tests/integration/matrix/test_iteration_method_matrix.py` (reference-energy
 fixed point, :29). Per cell assert: converged steel |B| per region within tol of FEMM, total
 energy within tol, airgap Br/Bt NRMSE within tol. Where in-house tracks FEMM -> HARD gate; where
 it diverges -> `xfail(strict=False)` carrying the MEASURED residual (energy %, |B| %, waveform

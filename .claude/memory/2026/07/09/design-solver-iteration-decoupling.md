@@ -204,7 +204,7 @@ Each new `(equation × mesh × iteration)` combo is:
    band): e.g. `('mec:hybrid/newton', '*')` validated if it lands, `('mec:*/picard', '*')` labelled
    `degraded` (oscillatory) — the plain-Picard divergence becomes an HONEST label, not a silent drop;
 2. added to the discovery matrices — the same shape as the just-shipped
-   `tests/integration/test_torque_full_matrix.py`: connect the combo, `xfail(strict=…)` a known miss
+   `tests/integration/matrix/test_torque_full_matrix.py`: connect the combo, `xfail(strict=…)` a known miss
    (e.g. plain-Picard non-convergence → `xfail(strict=False)` until/unless it is fixed), never skip;
 3. a convergence-characterization test (iters-to-tol, final residual) per strategy, tolerances not
    hashes. A method proven worse is KEPT and labelled, so the comparison across methods (the
