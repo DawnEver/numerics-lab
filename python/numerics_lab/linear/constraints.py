@@ -2,7 +2,7 @@
 
 Physics-free constraint algebra, shared by the FEA fold
 (``hamilton/discretizations/fem/_solve.py``) and the MEC reduction
-(``hamilton/formulations/magnetic_circuit/_sparse.py``). It lived in the FEA module and MEC had a
+(``hamilton/formulations/magnetic_circuit/_reduction.py``). It lived in the FEA module and MEC had a
 SECOND implementation of the same idea -- "chains resolve in list order" -- carrying the same
 order-dependence. One scheme, one copy.
 """
