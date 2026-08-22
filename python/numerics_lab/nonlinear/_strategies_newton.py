@@ -18,6 +18,18 @@ from motronics.gauss.nonlinear import (
 )
 from motronics.gauss.nonlinear._strategies_picard import DampedPicardStrategy
 
+__all__ = [
+    'AndersonStrategy',
+    'BFGSStrategy',
+    'BroydenStrategy',
+    'ContinuationStrategy',
+    'LBFGSStrategy',
+    'ModifiedNewtonStrategy',
+    'NewtonKrylovStrategy',
+    'NewtonLineSearchStrategy',
+    'NewtonStrategy',
+]
+
 
 class NewtonStrategy:
     """Newton-Raphson: ``J(x_k) dx = -r(x_k); x_{k+1} = x_k + dx``.

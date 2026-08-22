@@ -20,6 +20,13 @@ from motronics.gauss.nonlinear import (
     _has_converged,
 )
 
+__all__ = [
+    'AdaptiveDampedPicardStrategy',
+    'DampedPicardStrategy',
+    'NuRelaxationDampedPicardStrategy',
+    'PicardStrategy',
+]
+
 
 class DampedPicardStrategy:
     """Successive substitution with adaptive under-relaxation -- the current MEC/FEA production loop.

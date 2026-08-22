@@ -18,6 +18,8 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+__all__ = ['clarke_forward', 'park_forward', 'park_inverse']
+
 
 def _phase_axes(n_phase: int) -> NDArray[np.float64]:
     """Electrical axis angle of each of ``n_phase`` symmetric phases: ``2*pi*k/n_phase``."""
@@ -161,6 +163,3 @@ def phase_L_to_dq_L(
     if theta_e.ndim == 0:
         return _bridge(float(theta_e))
     return np.stack([_bridge(float(t)) for t in theta_e.ravel()]).reshape((*theta_e.shape, 2, 2))
-
-
-__all__ = ['clarke_forward', 'park_forward', 'park_inverse']

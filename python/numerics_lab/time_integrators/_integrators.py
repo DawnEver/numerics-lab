@@ -12,6 +12,15 @@ from motronics.contracts.spec.analysis_formulation import DerivativeWeights
 from motronics.contracts.spec.study_spec import IntegratorKind
 from motronics.gauss.time_integrators import IntegratorState, ITimeIntegrator, StepForm
 
+__all__ = [
+    'INTEGRATOR_REGISTRY',
+    'BDF1Integrator',
+    'BDF2Integrator',
+    'GeneralizedAlphaIntegrator',
+    'NewmarkIntegrator',
+    'get_integrator',
+]
+
 
 def _zeros_like(u: NDArray[np.floating]) -> NDArray[np.floating]:
     return np.zeros_like(np.asarray(u, dtype=float))
