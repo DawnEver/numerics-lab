@@ -16,6 +16,7 @@ This module drives the iterate only; it never assembles physics or touches a mes
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -30,6 +31,7 @@ __all__ = [
     'BroydenStrategy',
     'ContinuationStrategy',
     'DampedPicardStrategy',
+    'IterationBudgetExceeded',
     'IterationResult',
     'IterationStrategy',
     'LBFGSStrategy',
@@ -41,6 +43,7 @@ __all__ = [
     'NuRelaxationDampedPicardStrategy',
     'PicardStrategy',
     'get_strategy',
+    'with_time_budget',
 ]
 
 # Damped-Picard parameters (moved verbatim from mec/_sparse.py so the extracted loop is identical).
@@ -166,6 +169,108 @@ class NonlinearSystem(Protocol):
         the strategy degrades to solving the full-source problem directly. ``lam=1`` returns the
         original (full-source) system.
         """
+
+
+class IterationBudgetExceeded(RuntimeError):
+    """A nonlinear solve ran past the wall-clock it was given, and stopped ITSELF.
+
+    RAISED RATHER THAN RETURNED, and the deciding fact is not a preference: `IterationResult`
+    already carries `converged`, and NOTHING in `hamilton/` reads it -- every occurrence of the word
+    in that package is prose. A solve that returned `converged=False` here would be "a warning on an
+    unchanged success return", and the test of that shape is whether the CALLER can tell. It cannot.
+    """
+
+    def __init__(self, *, budget_s: float, elapsed_s: float, where: str) -> None:
+        self.budget_s = float(budget_s)
+        self.elapsed_s = float(elapsed_s)
+        self.where = where
+        super().__init__(
+            f'nonlinear solve exceeded its {budget_s:g} s budget before {where} '
+            f'({elapsed_s:g} s elapsed). The budget stops the solve at the next expensive call '
+            f'rather than letting the tier be killed around it -- an unbounded solve inside a '
+            f'bounded tier costs every other result in the run its verdict, which is how a heavy '
+            f'run returns INCONCLUSIVE instead of one red test.'
+        )
+
+
+class _TimeBudgetedSystem:
+    """A `NonlinearSystem` that refuses to START another expensive call once its time is spent.
+
+    WRAPPING THE SYSTEM, NOT THE STRATEGY, is the whole design. The cost lives in `solve_linear`
+    (for sdm, a dense truncated-SVD least squares) and `assemble`; putting the check there is
+    putting it where the money is spent, and it leaves all four `IterationStrategy` implementations
+    and their Protocol untouched. A budget threaded through four loops would be four places to
+    forget it.
+
+    OVERSHOOT IS BOUNDED BY ONE CALL, said plainly because the alternative is a promise the code
+    cannot keep: no Python-level check can unwind a call already inside LAPACK. That is the same
+    limitation `pytest.mark.timeout`'s thread method hits on Windows -- it dumps stacks and takes
+    the process -- and the difference here is that the refusal arrives as a typed exception the
+    caller can attribute, instead of as a missing summary nobody can attribute to anything.
+
+    THE BUDGETED SET IS EVERY EXPENSIVE ENTRY POINT, not just the two the Picard default happens to
+    use: `assemble`, `solve_linear`, `solve_system`, `solve_secant` and `tangent`. Leaving the
+    Newton-family calls unbudgeted would put a hole in the guard exactly where a caller who switched
+    strategy would not think to look, and a scope claim with an unbudgeted path in it is the
+    "declaration that lies" shape. `BUDGETED_CALLS` names the set so a test can hold this docstring
+    to it rather than trusting it.
+
+    Everything else delegates, so a budgeted system is the same system: `is_linear`, `initial_guess`,
+    `residual`, `on_iteration` and any implementation-private attribute a strategy reads all pass
+    straight through -- none of them solves anything.
+    """
+
+    #: The calls this wrapper refuses to START once the budget is gone. Declared as data so the
+    #: scope claim above is checkable instead of merely asserted.
+    BUDGETED_CALLS = ('assemble', 'solve_linear', 'solve_system', 'solve_secant', 'tangent')
+
+    def __init__(self, inner, budget_s: float, clock) -> None:
+        self._inner = inner
+        self._budget_s = float(budget_s)
+        self._clock = clock
+        self._started = clock()
+
+    def __getattr__(self, name: str) -> object:
+        # Reached only for names this wrapper does not define, which is every part of the
+        # protocol that costs nothing -- `initial_guess`, `residual`, `on_iteration`, `is_linear`.
+        return getattr(self._inner, name)
+
+    def _check(self, where: str) -> None:
+        elapsed = self._clock() - self._started
+        if elapsed > self._budget_s:
+            raise IterationBudgetExceeded(budget_s=self._budget_s, elapsed_s=elapsed, where=where)
+
+    def assemble(self, x, /):
+        self._check('assemble')
+        return self._inner.assemble(x)
+
+    def solve_linear(self, state, /):
+        self._check('solve_linear')
+        return self._inner.solve_linear(state)
+
+    def solve_system(self, matrix, rhs, /):
+        self._check('solve_system')
+        return self._inner.solve_system(matrix, rhs)
+
+    def solve_secant(self, state, rhs, /):
+        self._check('solve_secant')
+        return self._inner.solve_secant(state, rhs)
+
+    def tangent(self, x, state, /):
+        self._check('tangent')
+        return self._inner.tangent(x, state)
+
+
+def with_time_budget(system, *, seconds: float | None, clock=None):
+    """`system`, refusing to start another expensive call after `seconds`. `None` returns it unchanged.
+
+    Returning the SAME OBJECT for `None` is deliberate: opting out must be indistinguishable from
+    never having opted in, so a caller that passes no budget cannot be running through a wrapper
+    that might behave differently in some path nobody exercised.
+    """
+    if seconds is None:
+        return system
+    return _TimeBudgetedSystem(system, seconds, clock or time.monotonic)
 
 
 class IterationStrategy(Protocol):
