@@ -53,7 +53,7 @@ class _OscillateThenSettle:
     def solve_linear(self, state, /) -> np.ndarray:
         return self.x + 10.0
 
-    def on_iteration(self, i, state, err, alpha) -> None:
+    def on_iteration(self, i, state, err, alpha, increment) -> None:
         self.alphas.append(float(alpha))
 
 
@@ -127,7 +127,7 @@ class _SettleAfter:
     def solve_linear(self, state, /) -> np.ndarray:
         return self.x + 10.0
 
-    def on_iteration(self, i, state, err, alpha) -> None:
+    def on_iteration(self, i, state, err, alpha, increment) -> None:
         self.alphas.append(float(alpha))
 
 

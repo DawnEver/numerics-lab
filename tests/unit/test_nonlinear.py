@@ -45,7 +45,7 @@ class _FixedPointSystem:
     def solve_linear(self, state):
         return self.slope * state.payload + self.b
 
-    def on_iteration(self, i, state, err, alpha):
+    def on_iteration(self, i, state, err, alpha, increment):
         self.alphas.append(alpha)
 
 
@@ -65,7 +65,7 @@ class _LinearSystem:
     def solve_linear(self, state):
         return self.target
 
-    def on_iteration(self, i, state, err, alpha):
+    def on_iteration(self, i, state, err, alpha, increment):
         pass
 
 
@@ -166,7 +166,7 @@ class _NuMixSystem:
     def solve_linear(self, state):
         return np.array([1.0])  # value is irrelevant here: raw_state ignores x and follows k_seq
 
-    def on_iteration(self, i, state, err, alpha):
+    def on_iteration(self, i, state, err, alpha, increment):
         pass
 
 

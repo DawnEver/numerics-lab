@@ -68,7 +68,7 @@ class _RecordingSystem:
     def solve_secant(self, state, rhs, /):
         return np.asarray(rhs, dtype=float)
 
-    def on_iteration(self, i, state, err, alpha, /) -> None:
+    def on_iteration(self, i, state, err, alpha, increment, /) -> None:
         self.alphas.append(float(alpha))
 
     def scale_source(self, lam, /):

@@ -101,7 +101,7 @@ class _PlateauSystem:
         # take real steps, which is what makes them exercise the convergence test at all.
         return np.asarray(rhs, dtype=float)
 
-    def on_iteration(self, i, state, err, alpha, /) -> None:
+    def on_iteration(self, i, state, err, alpha, increment, /) -> None:
         return None
 
     def scale_source(self, lam, /):

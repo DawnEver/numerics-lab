@@ -18,6 +18,7 @@ from motronics.gauss.nonlinear import (
     _energy_error_pct,
     _energy_flux_convergence,
     _has_converged,
+    increment_ratio,
 )
 
 __all__ = [
@@ -145,12 +146,13 @@ class DampedPicardStrategy:
                     calm = 0
             prev_err = err
             x_solve = system.solve_linear(state)
+            increment = increment_ratio(x, x_solve)
             converged = _has_converged(err, x, x_solve, rtol_energy_pct)
             last_energy = state.total_energy
             x = x + alpha * (x_solve - x)
             if system.is_linear:
                 converged = True
-            system.on_iteration(i, state, err, alpha)
+            system.on_iteration(i, state, err, alpha, increment)
         return IterationResult(x=x, state=state, iterations=ran, converged=converged)
 
 
@@ -199,12 +201,13 @@ class AdaptiveDampedPicardStrategy:
                     alpha = min(1.0, alpha * self.grow)  # progress -> recover toward the full step
             prev_err = err
             x_solve = system.solve_linear(state)
+            increment = increment_ratio(x, x_solve)
             converged = _has_converged(err, x, x_solve, rtol_energy_pct)
             last_energy = state.total_energy
             x = x + alpha * (x_solve - x)
             if system.is_linear:
                 converged = True
-            system.on_iteration(i, state, err, alpha)
+            system.on_iteration(i, state, err, alpha, increment)
         return IterationResult(x=x, state=state, iterations=ran, converged=converged)
 
 
@@ -305,11 +308,16 @@ class NuRelaxationDampedPicardStrategy:
                 prev_delta_sign = sign
             last_energy, last_flux = total_energy, total_flux
             prev_s_val, prev_t_mat = mixed_s_val, mixed_t_mat
+            x_prev = x
             x = system.solve_linear(state)
+            # This strategy judges on the energy/flux PAIR, not on `_has_converged`, so it has no
+            # increment of its own; it is measured here purely so the observer sees the same two
+            # numbers everywhere and a capped run is readable without knowing which strategy ran.
+            increment = increment_ratio(x_prev, x)
             ran = i + 1
             if system.is_linear:
                 is_convergence = True
-            system.on_iteration(i, state, err, alpha)
+            system.on_iteration(i, state, err, alpha, increment)
         converged = bool(reached_tol or system.is_linear)
         return IterationResult(x=x, state=state, iterations=ran, converged=converged)
 
@@ -340,10 +348,11 @@ class PicardStrategy:
                 break
             err = _energy_error_pct(state.total_energy, last_energy)
             x_solve = system.solve_linear(state)
+            increment = increment_ratio(x, x_solve)
             converged = _has_converged(err, x, x_solve, rtol_energy_pct)
             last_energy = state.total_energy
             x = x_solve  # undamped: take the full substitution
             if system.is_linear:
                 converged = True
-            system.on_iteration(i, state, err, 1.0)
+            system.on_iteration(i, state, err, 1.0, increment)
         return IterationResult(x=x, state=state, iterations=ran, converged=converged)

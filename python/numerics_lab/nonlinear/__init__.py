@@ -159,8 +159,13 @@ class NonlinearSystem(Protocol):
         """
         return self.solve_system(state.system_matrix, rhs)
 
-    def on_iteration(self, i: int, state: AssembledState, err: float, alpha: float, /) -> None:
-        """Optional per-iteration hook (logging); default no-op."""
+    def on_iteration(self, i: int, state: AssembledState, err: float, alpha: float, increment: float, /) -> None:
+        """Optional per-iteration hook (logging); default no-op.
+
+        ``increment`` is ``||x_next - x|| / ||x||``, the half of the convergence rule the energy
+        error cannot express. Both halves are passed because a hook that saw only ``err`` reported
+        a capped solve and a converged one identically.
+        """
 
     def scale_source(self, lam: float, /) -> NonlinearSystem:
         """Return a copy of this system with its SOURCE scaled by ``lam`` (continuation stepping).
@@ -338,10 +343,21 @@ def _has_converged(
     increment is a FRACTION, so the ``/ 100`` is the unit conversion between them, not a second,
     tighter tolerance.
     """
-    if not err < rtol_energy_pct:
-        return False
+    return err < rtol_energy_pct and increment_ratio(x, x_next) < rtol_energy_pct / 100.0
+
+
+def increment_ratio(x: np.ndarray, x_next: np.ndarray, /) -> float:
+    """``||x_next - x|| / ||x||`` -- the SECOND half of :func:`_has_converged`, on its own.
+
+    Split out so the number can be REPORTED, not only tested. A run that stops at ``max_iter``
+    used to log the energy error alone, and the two states that produces are opposite: an energy
+    plateau at a genuine fixed point (the criterion is too strict) and an energy plateau the
+    iterate is still wandering across (the criterion is right and the solve has not converged).
+    Measured 2026-08-27, one heavy shard capped 104 solves at 100/100 while logging 0.00% energy
+    error, and the log could not distinguish those two -- which is why this is observable now.
+    """
     x_scale = max(float(np.linalg.norm(x)), 1e-12)
-    return float(np.linalg.norm(np.asarray(x_next) - np.asarray(x))) / x_scale < rtol_energy_pct / 100.0
+    return float(np.linalg.norm(np.asarray(x_next) - np.asarray(x))) / x_scale
 
 
 def _energy_flux_convergence(
