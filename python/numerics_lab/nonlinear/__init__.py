@@ -23,6 +23,7 @@ from typing import Protocol
 import numpy as np
 
 __all__ = [
+    'DEFAULT_SOLVE_BUDGET_S',
     'ITERATION_REGISTRY',
     'AdaptiveDampedPicardStrategy',
     'AndersonStrategy',
@@ -259,6 +260,30 @@ class _TimeBudgetedSystem:
     def tangent(self, x, state, /):
         self._check('tangent')
         return self._inner.tangent(x, state)
+
+
+#: Default wall-clock ceiling for ONE nonlinear solve, in seconds. Consumed by the sdm, fea and mec
+#: drivers alike -- the mechanism is physics-free, and so is the reason a solve must be able to stop.
+#:
+#: THE ARITHMETIC THAT PICKS IT is the TIER's, not the solve's. The budget is per solve and a
+#: rotation sweep runs at least one per rotor position, so what has to hold is
+#: ``n_positions * budget < the test's own timeout``. `ipm_uv` declares ``n_positions = 7`` and
+#: `test_torque_ripple_sweep_discovers_and_runs` carries ``@pytest.mark.timeout(5400)``:
+#: 7 x 500 = 3500 s fits. At 900 s it is 6300 s -- over the timeout, so on Windows the firing
+#: `pytest-timeout` ``os._exit``s the WORKER and every result queued behind it is lost. A budget too
+#: GENEROUS is therefore not the safe direction; it is no budget at all.
+#:
+#: THE MEASUREMENTS IT SITS BETWEEN: ~200 s per solve for the cases that complete, and 15-17 min for
+#: the sdm case that hangs. MEASURED 2026-08-27, the reason this is no longer sdm-only: probing the
+#: five `dcm_*` ripple cases whose results were MISSING from a truncated heavy run, `dcm_fdm_pear`
+#: (FEA-Galerkin) and `dcm_fdm_rect` (MEC Picard) both ran past 900 s standalone. Neither is an sdm
+#: solve, so the sdm-only budget could not have reached them.
+#:
+#: WHAT THIS DELIBERATELY COSTS: a solve that legitimately needs longer now RAISES. That trade is
+#: taken knowingly -- a tier that returns INCONCLUSIVE loses EVERY result, so one named red leg is
+#: strictly more information than none. A caller that knows its solve is genuinely long passes its
+#: own ``seconds``.
+DEFAULT_SOLVE_BUDGET_S = 500.0
 
 
 def with_time_budget(system, *, seconds: float | None, clock=None):

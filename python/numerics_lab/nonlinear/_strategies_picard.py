@@ -104,7 +104,16 @@ class DampedPicardStrategy:
                     disturbed = True
                 prev_delta_sign = sign
             if disturbed:
-                alpha_cap = alpha_before  # the step size that MISBEHAVED, never retried
+                # ONLY when the shrink actually MOVED alpha. At the floor `max(_ALPHA_MIN, alpha*k)`
+                # is a no-op, and recording the cap anyway sets `alpha_cap = _ALPHA_MIN` -- after
+                # which the recovery gate `alpha < alpha_cap` reads `0.1 < 0.1` and is false for the
+                # rest of the solve. That is the one-way ratchet this recovery leg was ADDED to
+                # remove, surviving one level down: measured on dcm_fdm_rect, 557 of 605 iterations
+                # pinned at alpha 0.100 with the energy error already at 0.00%, every solve running
+                # to its 100-iteration cap because a tenth-sized step cannot reach the increment bar.
+                # A step size that never actually applied did not misbehave, so it forbids nothing.
+                if alpha < alpha_before:
+                    alpha_cap = alpha_before  # the step size that MISBEHAVED, never retried
                 calm = 0
             else:
                 calm += 1
