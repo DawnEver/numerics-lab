@@ -98,3 +98,73 @@ def test_the_cap_still_forbids_retrying_a_step_size_that_misbehaved() -> None:
     assert max(alphas[9:]) <= disturbed_max, (
         f'alpha recovered to {max(alphas[9:])}, above the {disturbed_max} step size that misbehaved'
     )
+
+
+class _SettleAfter:
+    """Oscillate above tolerance for `disturbed_steps`, then hold the energy exactly flat forever.
+
+    The increment is held CONSTANT so the run cannot converge out from under the question. What is
+    observed is the ceiling alpha is allowed to climb back to once nothing disturbs it again.
+    """
+
+    is_linear = False
+
+    def __init__(self, disturbed_steps: int) -> None:
+        self.n = 0
+        self.disturbed_steps = disturbed_steps
+        self.alphas: list[float] = []
+        self.x = np.zeros(3)
+
+    def initial_guess(self) -> np.ndarray:
+        return np.zeros(3)
+
+    def assemble(self, x, /):
+        self.n += 1
+        self.x = x
+        energy = 100.0 + (5.0 if self.n % 2 else -5.0) if self.n <= self.disturbed_steps else 100.0
+        return AssembledState(system_matrix=None, total_energy=energy, payload=None)
+
+    def solve_linear(self, state, /) -> np.ndarray:
+        return self.x + 10.0
+
+    def on_iteration(self, i, state, err, alpha) -> None:
+        self.alphas.append(float(alpha))
+
+
+def test_the_cap_itself_releases_once_the_solve_has_settled() -> None:
+    """A step size that misbehaved FAR FROM THE SOLUTION must not be forbidden for the whole solve.
+
+    THE SECOND RATCHET, and the one the first fix did not reach. `alpha_cap` records the step size
+    that last misbehaved and `alpha` may climb back to it -- but the cap itself never rises, so an
+    early, genuinely-meaningful disturbance sets a ceiling that outlives the condition that caused
+    it. `mec-picard-runs-to-its-cap-while-already-converged` (2026-08-26) predicted exactly this:
+    *"the `meaningful` guard prevents NEW reductions; it does not release an old cap."*
+
+    MEASURED on dcm_fdm_rect after releasing only the floor: 557 iterations pinned at 0.100 became
+    447 at 0.108 -- recovery fired, and the sweep still needed 658 iterations because 0.108 was the
+    ceiling. The physics near convergence is not the physics that misbehaved at iteration 3.
+
+    A long calm tail must therefore let the CAP grow too, back toward the full Picard step.
+    """
+    system = _SettleAfter(disturbed_steps=8)
+    get_strategy('picard-damped').solve(system, max_iter=120)
+    settled = system.alphas[10:]
+    assert max(settled) > 0.2, (
+        f'alpha never climbed above {max(settled)} across {len(settled)} undisturbed steps -- the cap '
+        f'is still a one-way ratchet, so a disturbance far from the solution throttles the whole tail'
+    )
+
+
+def test_the_released_cap_still_backs_off_when_the_energy_misbehaves_again() -> None:
+    """THE OTHER SIDE: releasing the cap must not disarm the globaliser.
+
+    If a solve starts oscillating again the damping has to return, or the release has traded
+    robustness for speed -- the exact trade the cap existed to prevent.
+    """
+    system = _SettleAfter(disturbed_steps=200)  # never settles
+    get_strategy('picard-damped').solve(system, max_iter=60)
+    tail = system.alphas[20:]
+    assert max(tail) <= 0.7, (
+        f'alpha stayed at {max(tail)} while the energy oscillated the whole time -- the damping no '
+        f'longer responds to a genuine limit cycle'
+    )

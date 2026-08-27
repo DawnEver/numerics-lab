@@ -117,8 +117,31 @@ class DampedPicardStrategy:
                 calm = 0
             else:
                 calm += 1
-                if calm >= _ALPHA_CALM_STEPS and alpha < alpha_cap:
-                    alpha = min(alpha_cap, alpha * _ALPHA_GROW)
+                if calm >= _ALPHA_CALM_STEPS:
+                    if alpha < alpha_cap:
+                        alpha = min(alpha_cap, alpha * _ALPHA_GROW)
+                    else:
+                        # THE CAP ITSELF RELEASES, once alpha has climbed back to it AND the solve
+                        # has stayed calm for another full window. Without this the cap is a second
+                        # one-way ratchet behind the first: a step size that misbehaved FAR FROM THE
+                        # SOLUTION stays forbidden for the whole solve, even after the iterate has
+                        # settled and the energy sits at its noise floor. The physics near
+                        # convergence is not the physics that misbehaved at iteration 3.
+                        #
+                        # MEASURED (dcm_fdm_rect) after releasing only the alpha FLOOR: 557
+                        # iterations pinned at 0.100 became 447 at 0.108 -- recovery fired and the
+                        # sweep still took 658 iterations, because 0.108 was now the ceiling.
+                        # `mec-picard-runs-to-its-cap-while-already-converged` (2026-08-26)
+                        # predicted it: "the `meaningful` guard prevents NEW reductions; it does not
+                        # release an old cap."
+                        #
+                        # SAFE BECAUSE THE GLOBALISER IS UNCHANGED: any real energy growth or sign
+                        # flip above the convergence tolerance re-arms both ratchets on the very
+                        # next step, dropping alpha AND resetting the cap to whatever misbehaved.
+                        # A limit cycle is still damped; what is no longer damped is the smooth
+                        # tail after one early transient.
+                        alpha_cap = min(1.0, alpha_cap * _ALPHA_GROW)
+                        alpha = min(alpha_cap, alpha * _ALPHA_GROW)
                     calm = 0
             prev_err = err
             x_solve = system.solve_linear(state)
