@@ -236,6 +236,17 @@ class _TimeBudgetedSystem:
         self._clock = clock
         self._started = clock()
 
+    @property
+    def unwrapped(self):
+        """The system this one wraps -- what a diagnostic should NAME.
+
+        Defined here rather than left to `_inner` because a caller reaching through a private
+        attribute is a caller that breaks when the private moves, and every diagnostic that wants
+        to say WHICH system lacks a capability needs this. The wrapper delegates missing attributes
+        too, so its own type name never answers that question.
+        """
+        return self._inner
+
     def __getattr__(self, name: str) -> object:
         # Reached only for names this wrapper does not define, which is every part of the
         # protocol that costs nothing -- `initial_guess`, `residual`, `on_iteration`, `is_linear`.

@@ -267,7 +267,17 @@ class NuRelaxationDampedPicardStrategy:
         raw_state = getattr(system, 'raw_state', None)
         fold_raw = getattr(system, 'fold_raw', None)
         if raw_state is None or fold_raw is None:
-            msg = f"'nu-damped' requires a system exposing raw_state/fold_raw; got {type(system).__name__}"
+            # THE WRAPPER IS TRANSPARENT, so naming it is naming the wrong object. A budgeted
+            # system delegates every attribute it does not define, including a MISSING one -- so
+            # `_TimeBudgetedSystem` appearing here says only that a budget was set, while the
+            # system that actually lacks the two attributes is inside it. Measured 2026-08-29:
+            # the message read "got _TimeBudgetedSystem" and sent the reader to the budget wrapper
+            # introduced in 55e8fd37c, which is not the reason this combination cannot run.
+            inner = getattr(system, 'unwrapped', system)
+            named = type(inner).__name__
+            if inner is not system:
+                named = f'{named} (inside {type(system).__name__})'
+            msg = f"'nu-damped' requires a system exposing raw_state/fold_raw; got {named}"
             raise TypeError(msg)
         x = system.initial_guess()
         alpha = 1.0
