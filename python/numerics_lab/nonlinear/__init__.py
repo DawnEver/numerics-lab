@@ -44,6 +44,8 @@ __all__ = [
     'NuRelaxationDampedPicardStrategy',
     'PicardStrategy',
     'get_strategy',
+    'strategy_requires',
+    'strategy_runs_on',
     'with_time_budget',
 ]
 
@@ -435,6 +437,29 @@ ITERATION_REGISTRY: dict[str, IterationStrategy] = {
     'newton-krylov': NewtonKrylovStrategy(),
     'continuation': ContinuationStrategy(),
 }
+
+
+def strategy_requires(name: str) -> tuple[str, ...]:
+    """The system attributes strategy ``name`` needs, or ``()`` when it needs nothing special.
+
+    Every strategy in :data:`ITERATION_REGISTRY` runs on the generic `assemble`/`solve_linear`
+    seam except `nu-damped`, which mixes reluctivity BEFORE the boundary fold and so needs the raw
+    pre-fold pair. That is a capability boundary, not a convergence property: a system without the
+    pair cannot run the strategy at all, and asking beforehand is the difference between a matrix
+    that declares a cell unsupported and one that discovers it as a TypeError.
+    """
+    return tuple(getattr(ITERATION_REGISTRY[name], 'requires', ()))
+
+
+def strategy_runs_on(name: str, system: object) -> bool:
+    """Whether ``system`` supplies everything strategy ``name`` declares it needs.
+
+    The question `test_iteration_method_matrix` has to ask before it generates a cell. It is asked
+    of the SYSTEM rather than of the discretization's name because a budget wrapper, a decorator or
+    a future system type all answer correctly by construction, while a list of solver names would
+    have to be maintained alongside the registry it describes.
+    """
+    return all(getattr(system, attribute, None) is not None for attribute in strategy_requires(name))
 
 
 def get_strategy(name: str | None) -> IterationStrategy:

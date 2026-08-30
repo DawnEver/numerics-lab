@@ -261,6 +261,13 @@ class NuRelaxationDampedPicardStrategy:
 
     name = 'nu-damped'
 
+    #: WHAT THIS STRATEGY NEEDS OF A SYSTEM, as data. The requirement was enforced in `solve` and
+    #: stated in three docstrings, and nothing could ASK it -- so `test_iteration_method_matrix`
+    #: generated a `nu-damped` cell for the MEC `_ReluctanceSystem`, which cannot supply either
+    #: attribute, and read the designed refusal as a red (heavy shard 1, 2026-08-29). A boundary
+    #: only the failure announces is a boundary no caller can plan around.
+    requires = ('raw_state', 'fold_raw')
+
     def solve(
         self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
     ) -> IterationResult:
