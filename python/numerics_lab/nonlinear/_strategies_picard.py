@@ -18,6 +18,7 @@ from motronics.gauss.nonlinear import (
     _energy_error_pct,
     _energy_flux_convergence,
     _has_converged,
+    _StagnationWatch,
     increment_ratio,
 )
 
@@ -77,6 +78,7 @@ class DampedPicardStrategy:
         alpha_cap = 1.0  # never recover back to a step size that already misbehaved
         calm = 0  # consecutive steps with neither an error growth nor a sign flip
         ran = 0
+        watch = _StagnationWatch(rtol_energy_pct)
         for i in range(max_iter):
             ran = i + 1
             state = system.assemble(x)
@@ -147,7 +149,7 @@ class DampedPicardStrategy:
             prev_err = err
             x_solve = system.solve_linear(state)
             increment = increment_ratio(x, x_solve)
-            converged = _has_converged(err, x, x_solve, rtol_energy_pct)
+            converged = _has_converged(err, x, x_solve, rtol_energy_pct) or watch.observe(err, increment)
             last_energy = state.total_energy
             x = x + alpha * (x_solve - x)
             if system.is_linear:
@@ -188,6 +190,7 @@ class AdaptiveDampedPicardStrategy:
         converged = False
         alpha, prev_err = 1.0, np.inf
         ran = 0
+        watch = _StagnationWatch(rtol_energy_pct)
         for i in range(max_iter):
             ran = i + 1
             state = system.assemble(x)
@@ -202,7 +205,7 @@ class AdaptiveDampedPicardStrategy:
             prev_err = err
             x_solve = system.solve_linear(state)
             increment = increment_ratio(x, x_solve)
-            converged = _has_converged(err, x, x_solve, rtol_energy_pct)
+            converged = _has_converged(err, x, x_solve, rtol_energy_pct) or watch.observe(err, increment)
             last_energy = state.total_energy
             x = x + alpha * (x_solve - x)
             if system.is_linear:
@@ -358,6 +361,7 @@ class PicardStrategy:
         last_energy: float | None = None
         converged = False
         ran = 0
+        watch = _StagnationWatch(rtol_energy_pct)
         for i in range(max_iter):
             ran = i + 1
             state = system.assemble(x)
@@ -366,7 +370,7 @@ class PicardStrategy:
             err = _energy_error_pct(state.total_energy, last_energy)
             x_solve = system.solve_linear(state)
             increment = increment_ratio(x, x_solve)
-            converged = _has_converged(err, x, x_solve, rtol_energy_pct)
+            converged = _has_converged(err, x, x_solve, rtol_energy_pct) or watch.observe(err, increment)
             last_energy = state.total_energy
             x = x_solve  # undamped: take the full substitution
             if system.is_linear:

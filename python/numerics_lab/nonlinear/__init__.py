@@ -17,6 +17,7 @@ This module drives the iterate only; it never assembles physics or touches a mes
 from __future__ import annotations
 
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -357,6 +358,61 @@ def _has_converged(
     tighter tolerance.
     """
     return err < rtol_energy_pct and increment_ratio(x, x_next) < rtol_energy_pct / 100.0
+
+
+#: Consecutive steps of the stagnation window. MEASURED (lane K, 2026-09-01): on
+#: `ipm_2u_byd_superdrive` newton's energy error passes rtol by iteration ~12 while the increment
+#: pins at ~3.57e-4 -- the stationary limit of the hanging-fold update -- so `_has_converged`'s
+#: increment floor (rtol/100 = 1e-4, 2-4.5x tighter than the stationary increment on every measured
+#: case) is never met and the solve burns the whole 100-step cap: ~85 wasted iterations, ~123 s.
+#: K must OUTLAST the documented false-plateau hazard -- the saturating-BH plateau that read 0.00%
+#: energy change for 20+ iterations (`_has_converged`'s docstring) -- so K = 25; it fires on
+#: byd-newton at ~iteration 39.
+_STAGNATION_WINDOW = 25
+
+#: How flat the increment must be across the window to count as STATIONARY (max/min). The false
+#: plateau's increment WANDERS, so this band -- not the energy half -- is what refuses it.
+_STAGNATION_MAX_MIN_RATIO = 2.0
+
+
+class _StagnationWatch:
+    """The stagnation break, consulted NEXT TO `_has_converged` -- never instead of it.
+
+    `_has_converged` is the FAST break: energy settled AND the increment below rtol/100, checked
+    on the step about to be taken. It is unreachable when the increment has a stationary floor
+    ABOVE rtol/100 that is not the iterate wandering -- measured above, the hanging-fold update
+    pins it at ~3.5e-4. This watch is the STAGNATION break for exactly that shape: the energy
+    error has been under rtol for `_STAGNATION_WINDOW` CONSECUTIVE steps AND the increment is
+    stationary over the same window (max/min <= `_STAGNATION_MAX_MIN_RATIO`).
+
+    The energy half is NOT weakened -- every window step must independently satisfy `err < rtol`,
+    the same bar the fast break sets. What replaces the increment FLOOR is the increment
+    STATIONARITY test, and the wandering-increment false plateau fails it by construction: a
+    20-step 0.00% energy plateau whose increment moves by more than the 2x band never fires this
+    break, which is the hazard `_has_converged`'s docstring measured and the reason the window is
+    25, not 5.
+
+    A sliding window, so "K consecutive" costs no explicit reset: one step over rtol (or one
+    wandering increment) sits INSIDE the window and blocks the break until it has aged out.
+    """
+
+    def __init__(self, rtol_energy_pct: float, window: int = _STAGNATION_WINDOW) -> None:
+        self._rtol = float(rtol_energy_pct)
+        self._window = int(window)
+        self._errs: deque[float] = deque(maxlen=self._window)
+        self._increments: deque[float] = deque(maxlen=self._window)
+
+    def observe(self, err: float, increment: float, /) -> bool:
+        """Record one iteration's pair; True iff the full window is settled AND stationary."""
+        self._errs.append(float(err))
+        self._increments.append(float(increment))
+        if len(self._errs) < self._window:
+            return False
+        if not all(e < self._rtol for e in self._errs):
+            return False
+        lo = min(self._increments)
+        hi = max(self._increments)
+        return hi <= _STAGNATION_MAX_MIN_RATIO * max(lo, 1e-300)
 
 
 def increment_ratio(x: np.ndarray, x_next: np.ndarray, /) -> float:

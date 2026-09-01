@@ -15,6 +15,7 @@ from motronics.gauss.nonlinear import (
     NonlinearSystem,
     _energy_error_pct,
     _has_converged,
+    _StagnationWatch,
     increment_ratio,
 )
 from motronics.gauss.nonlinear._strategies_picard import DampedPicardStrategy
@@ -53,6 +54,7 @@ class NewtonStrategy:
         last_energy: float | None = None
         converged = False
         ran = 0
+        watch = _StagnationWatch(rtol_energy_pct)
         for i in range(max_iter):
             ran = i + 1
             state = system.assemble(x)
@@ -68,7 +70,7 @@ class NewtonStrategy:
                 dx = system.solve_system(jac, -system.residual(x, state))
                 x = x + dx
             increment = increment_ratio(x_prev, x)
-            converged = _has_converged(err, x_prev, x, rtol_energy_pct)
+            converged = _has_converged(err, x_prev, x, rtol_energy_pct) or watch.observe(err, increment)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0, increment)
@@ -104,6 +106,7 @@ class AndersonStrategy:
         last_energy: float | None = None
         converged = False
         ran = 0
+        watch = _StagnationWatch(rtol_energy_pct)
         x_hist: list[np.ndarray] = []  # past g(x_k) images
         f_hist: list[np.ndarray] = []  # past residuals f_k = g(x_k) - x_k
         for i in range(max_iter):
@@ -135,7 +138,7 @@ class AndersonStrategy:
                 if self.beta != 1.0:
                     x = x + (self.beta - 1.0) * (f - dF @ gamma)
             increment = increment_ratio(x_prev, x)
-            converged = _has_converged(err, x_prev, x, rtol_energy_pct)
+            converged = _has_converged(err, x_prev, x, rtol_energy_pct) or watch.observe(err, increment)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, self.beta, increment)
@@ -209,6 +212,7 @@ class ModifiedNewtonStrategy:
         last_energy: float | None = None
         converged = False
         ran = 0
+        watch = _StagnationWatch(rtol_energy_pct)
         cached_jac = None
         cached_lu = None  # splu factor of cached_jac, reused across the held (non-refresh) steps
         for i in range(max_iter):
@@ -252,7 +256,7 @@ class ModifiedNewtonStrategy:
                             dx = cached_lu.solve(-r) if cached_lu is not None else system.solve_system(cached_jac, -r)
                             x = x + dx
             increment = increment_ratio(x_prev, x)
-            converged = _has_converged(err, x_prev, x, rtol_energy_pct)
+            converged = _has_converged(err, x_prev, x, rtol_energy_pct) or watch.observe(err, increment)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0, increment)
@@ -291,6 +295,7 @@ class BroydenStrategy:
         last_energy: float | None = None
         converged = False
         ran = 0
+        watch = _StagnationWatch(rtol_energy_pct)
         updates: list[tuple] = []  # (s_row_vector, denom, u_column) rank-1 inverse-Jacobian updates
         prev_r = None
         prev_dx = None
@@ -318,7 +323,7 @@ class BroydenStrategy:
             x = x + dx
             prev_r, prev_dx = r, dx
             increment = increment_ratio(x_prev, x)
-            converged = _has_converged(err, x_prev, x, rtol_energy_pct)
+            converged = _has_converged(err, x_prev, x, rtol_energy_pct) or watch.observe(err, increment)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0, increment)
@@ -369,6 +374,7 @@ class BFGSStrategy:
         last_energy: float | None = None
         converged = False
         ran = 0
+        watch = _StagnationWatch(rtol_energy_pct)
         pairs: list[tuple] = []  # (s = dx, y = dr, rho = 1/(y.s)) BFGS secant pairs
         prev_r = None
         prev_dx = None
@@ -392,7 +398,7 @@ class BFGSStrategy:
             x = x + dx
             prev_r, prev_dx = r, dx
             increment = increment_ratio(x_prev, x)
-            converged = _has_converged(err, x_prev, x, rtol_energy_pct)
+            converged = _has_converged(err, x_prev, x, rtol_energy_pct) or watch.observe(err, increment)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0, increment)
@@ -437,6 +443,7 @@ class LBFGSStrategy:
         last_energy: float | None = None
         converged = False
         ran = 0
+        watch = _StagnationWatch(rtol_energy_pct)
         pairs: list[tuple] = []  # (s = dx, y = dr, rho = 1/(y.s)) limited-memory secant pairs
         prev_r = None
         prev_dx = None
@@ -460,7 +467,7 @@ class LBFGSStrategy:
             x = x + dx
             prev_r, prev_dx = r, dx
             increment = increment_ratio(x_prev, x)
-            converged = _has_converged(err, x_prev, x, rtol_energy_pct)
+            converged = _has_converged(err, x_prev, x, rtol_energy_pct) or watch.observe(err, increment)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0, increment)
@@ -492,6 +499,7 @@ class NewtonLineSearchStrategy:
         last_energy: float | None = None
         converged = False
         ran = 0
+        watch = _StagnationWatch(rtol_energy_pct)
         for i in range(max_iter):
             ran = i + 1
             state = system.assemble(x)
@@ -520,7 +528,7 @@ class NewtonLineSearchStrategy:
                     lam *= self.shrink
                 x = x + lam * dx
             increment = increment_ratio(x_prev, x)
-            converged = _has_converged(err, x_prev, x, rtol_energy_pct)
+            converged = _has_converged(err, x_prev, x, rtol_energy_pct) or watch.observe(err, increment)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0, increment)
@@ -556,6 +564,7 @@ class NewtonKrylovStrategy:
         last_energy: float | None = None
         converged = False
         ran = 0
+        watch = _StagnationWatch(rtol_energy_pct)
         for i in range(max_iter):
             ran = i + 1
             state = system.assemble(x)
@@ -591,7 +600,7 @@ class NewtonKrylovStrategy:
                     dx = system.solve_linear(state) - x  # Krylov breakdown -> Picard substitution
             x = x + dx
             increment = increment_ratio(x_prev, x)
-            converged = _has_converged(err, x_prev, x, rtol_energy_pct)
+            converged = _has_converged(err, x_prev, x, rtol_energy_pct) or watch.observe(err, increment)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0, increment)
