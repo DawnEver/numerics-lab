@@ -8,7 +8,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
-from motronics.contracts.spec.analysis_formulation import DerivativeWeights
+from motronics.contracts.spec.analysis_formulation import NEWMARK_BETA, NEWMARK_GAMMA, DerivativeWeights
 from motronics.contracts.spec.study_spec import IntegratorKind
 from motronics.gauss.time_integrators import IntegratorState, ITimeIntegrator, StepForm
 
@@ -95,10 +95,10 @@ class BDF2Integrator:
         return IntegratorState(us=us, t=t_new)
 
 
-# Newmark defaults: average-acceleration (unconditionally stable, second order). Match the
-# contracts formulation_for() defaults so the study-level and integrator-level weights agree.
-_NEWMARK_BETA = 0.25
-_NEWMARK_GAMMA = 0.5
+# Newmark defaults: average-acceleration (unconditionally stable, second order). IMPORTED, not
+# re-declared: contracts is the dependency leaf and owns them, and until 2026-09-03 this module
+# carried its own copy under a comment saying it "matched" the contracts defaults -- an agreement
+# nothing enforced. Now one edit moves both.
 
 
 class NewmarkIntegrator:
@@ -118,7 +118,7 @@ class NewmarkIntegrator:
     name = 'newmark'
     order = 2
 
-    def __init__(self, beta: float = _NEWMARK_BETA, gamma: float = _NEWMARK_GAMMA) -> None:
+    def __init__(self, beta: float = NEWMARK_BETA, gamma: float = NEWMARK_GAMMA) -> None:
         self.beta = beta
         self.gamma = gamma
 
