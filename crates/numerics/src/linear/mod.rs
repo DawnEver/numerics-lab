@@ -31,6 +31,7 @@
 //! vector that passes every finiteness check. Both apply to `faer`'s LU exactly as they applied
 //! to SuperLU's.
 
+pub mod constraints;
 pub mod direct;
 pub mod dirichlet;
 pub mod krylov;
@@ -41,6 +42,7 @@ mod tests;
 
 use contracts::sparse::{Csr, SparseError};
 
+pub use constraints::{resolve_constraint_chains, Constraint, ConstraintError};
 pub use dirichlet::{apply_dirichlet_triplets, pin_rows, DirichletGroup};
 pub use krylov::{
     KrylovFailure, KrylovOutcome, Method, GMRES_RESTART, KRYLOV_ATOL, KRYLOV_MAXITER_FACTOR,
