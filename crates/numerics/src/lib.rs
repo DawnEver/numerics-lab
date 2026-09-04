@@ -11,4 +11,7 @@
 #![forbid(unsafe_code)]
 
 pub mod integrators;
+pub mod linear;
+pub mod marching;
+pub mod nonlinear;
 pub mod transforms;
