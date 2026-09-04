@@ -1,0 +1,16 @@
+[package]
+name = "gauss"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# Mirrors `src/motronics/gauss/` -- the physics-free numerical runtime. The Python arrow puts
+# gauss below hamilton and above core, so this crate may depend on `core_num` and `contracts`
+# and on nothing else in the workspace. Enforced by crates/contracts/tests/crate_dag.rs.
+[dependencies]
+contracts.workspace = true
+core_num.workspace = true
+
+[dev-dependencies]
+serde_json = "1"
