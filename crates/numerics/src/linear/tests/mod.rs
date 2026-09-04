@@ -2,6 +2,7 @@
 //! `test_dirichlet_triplets.py`, and the claim `ssor.py` makes for itself in its docstring.
 
 mod constraints;
+mod direct;
 mod dirichlet;
 mod krylov;
 mod precond;
