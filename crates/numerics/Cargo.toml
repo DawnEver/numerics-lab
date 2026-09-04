@@ -11,6 +11,9 @@ rust-version.workspace = true
 [dependencies]
 contracts.workspace = true
 core_num.workspace = true
+# Direct sparse LU (ruling D4 -- scipy may be replaced). Pure Rust, no SuiteSparse build step.
+# It is faer that raises the workspace rust-version floor to 1.84; see ../../Cargo.toml.
+faer = { version = "0.24.4", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 serde_json = "1"
