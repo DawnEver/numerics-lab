@@ -193,7 +193,10 @@ pub fn park_inverse(
 ///
 /// # Errors
 /// [`TransformError::ShapeMismatch`] when `x_phase` is not `3 * n_theta` long.
-pub fn clarke_forward(x_phase: &[f64], n_theta: usize) -> Result<(Vec<f64>, Vec<f64>), TransformError> {
+pub fn clarke_forward(
+    x_phase: &[f64],
+    n_theta: usize,
+) -> Result<(Vec<f64>, Vec<f64>), TransformError> {
     if x_phase.len() != 3 * n_theta {
         return Err(TransformError::ShapeMismatch {
             what: "x_phase (3, n_theta)",
@@ -206,11 +209,7 @@ pub fn clarke_forward(x_phase: &[f64], n_theta: usize) -> Result<(Vec<f64>, Vec<
     let mut alpha = Vec::with_capacity(n_theta);
     let mut beta = Vec::with_capacity(n_theta);
     for t in 0..n_theta {
-        let (a, b, c) = (
-            x_phase[t],
-            x_phase[n_theta + t],
-            x_phase[2 * n_theta + t],
-        );
+        let (a, b, c) = (x_phase[t], x_phase[n_theta + t], x_phase[2 * n_theta + t]);
         alpha.push(k * (a - 0.5 * b - 0.5 * c));
         beta.push(kb * (b - c));
     }
@@ -261,7 +260,11 @@ pub fn phase_l_to_dq_l(
         // (M L) is 2 x n, then (M L) M^T is 2 x 2.
         for r in 0..2 {
             let ml: Vec<f64> = (0..n_phase)
-                .map(|j| (0..n_phase).map(|i| m[i][r] * l_phase[i * n_phase + j]).sum())
+                .map(|j| {
+                    (0..n_phase)
+                        .map(|i| m[i][r] * l_phase[i * n_phase + j])
+                        .sum()
+                })
                 .collect();
             for c in 0..2 {
                 let v: f64 = (0..n_phase).map(|j| ml[j] * m[j][c]).sum();

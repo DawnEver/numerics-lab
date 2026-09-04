@@ -13,11 +13,11 @@ Regenerate deliberately::
 
 from __future__ import annotations
 
-import json
 import os
 
 import numpy as np
 import pytest
+from tests.port_goldens import dump_golden, load_golden
 
 from motronics.core.utils.config import repo_root
 from motronics.gauss.transforms import (
@@ -105,7 +105,7 @@ def _load() -> dict:
             f'{_GOLDEN} is missing. It is a committed artifact, not a cache -- regenerate it '
             f'deliberately with MOTRONICS_REGEN_PORT_GOLDENS=1 and commit the result.'
         )
-    return json.loads(_GOLDEN.read_text(encoding='utf-8'))
+    return load_golden(_GOLDEN)
 
 
 def _walk(got: object, want: object, path: str) -> None:
@@ -125,8 +125,7 @@ def _walk(got: object, want: object, path: str) -> None:
 def test_the_live_python_still_produces_the_frozen_vectors() -> None:
     """The freeze, enforced: a behaviour change in `transforms.py` reds HERE, not in silence."""
     if os.environ.get('MOTRONICS_REGEN_PORT_GOLDENS'):
-        _GOLDEN.parent.mkdir(parents=True, exist_ok=True)
-        _GOLDEN.write_text(json.dumps(_build(), indent=2) + '\n', encoding='utf-8')
+        dump_golden(_GOLDEN, _build())
         pytest.skip(f'regenerated {_GOLDEN} -- commit it, then run again without the env var')
 
     golden = _load()

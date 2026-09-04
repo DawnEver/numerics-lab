@@ -169,7 +169,10 @@ mod tests {
 
     #[test]
     fn the_default_is_the_stationary_triple() {
-        assert_eq!(DerivativeWeights::default(), DerivativeWeights::stationary());
+        assert_eq!(
+            DerivativeWeights::default(),
+            DerivativeWeights::stationary()
+        );
         assert!(DerivativeWeights::default().collapses_to_stationary());
     }
 
@@ -177,14 +180,20 @@ mod tests {
     fn a_harmonic_study_at_zero_frequency_is_exactly_the_stationary_one() {
         // The orthogonality gate the Python states: HarmonicStudy(omega=0) must collapse onto
         // the magnetostatic operator, not merely approximate it.
-        assert_eq!(DerivativeWeights::harmonic(0.0), DerivativeWeights::stationary());
+        assert_eq!(
+            DerivativeWeights::harmonic(0.0),
+            DerivativeWeights::stationary()
+        );
         assert!(DerivativeWeights::harmonic(0.0).collapses_to_stationary());
     }
 
     #[test]
     fn a_nonzero_frequency_does_not_collapse() {
         assert!(!DerivativeWeights::harmonic(50.0).collapses_to_stationary());
-        assert_eq!(DerivativeWeights::harmonic(50.0).alpha1, Complex64::new(0.0, 50.0));
+        assert_eq!(
+            DerivativeWeights::harmonic(50.0).alpha1,
+            Complex64::new(0.0, 50.0)
+        );
     }
 
     #[test]
