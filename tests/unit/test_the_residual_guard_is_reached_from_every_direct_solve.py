@@ -3,9 +3,14 @@
 # What was actually wrong, measured rather than assumed
 
 The guard is NOT missing. ``motronics.gauss.linear.solve_linear_system`` has carried both halves
-since the seam landed -- the ``MatrixRankWarning`` belt in ``_direct`` and the
-``_DIRECT_RESIDUAL_RTOL`` suspenders in the caller -- and the production CLI already refuses the
-system the 2026-09-04 migration note named:
+since the seam landed -- the ``MatrixRankWarning`` belt in ``_direct`` and the residual suspenders
+in the caller -- and the production CLI already refuses the system the 2026-09-04 migration note
+named:
+
+(``_DIRECT_RESIDUAL_RTOL`` has since become the cheap TRIGGER rather than the verdict, because a
+fixed bar on the relative residual is a disguised CONDITION test -- see
+``test_the_direct_guard_separates_ill_conditioning_from_failure.py``. Nothing in THIS file changes:
+every system it plants is refused or accepted for the same reason it always was.)
 
     motronics run cases/field/magnetics/lipo_inductor --select fea,tri --mesh-size 6mm
     -> failed: direct solve residual ||A x - b|| / ||b|| = 1.608e+01 exceeds 1e-06
