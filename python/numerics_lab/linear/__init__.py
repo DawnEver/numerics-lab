@@ -55,6 +55,7 @@ __all__ = [
     'LinearSolveError',
     'LinearSolver',
     'apply_dirichlet_triplets',
+    'direct_relative_residual',
     'get_linear_solver',
     'make_preconditioner',
     'pin_rows',
@@ -266,6 +267,51 @@ def make_preconditioner(name: str | None, matrix) -> LinearOperator | None:
     return builder(matrix)
 
 
+def direct_relative_residual(matrix, rhs, x) -> float | None:
+    """``||A x - b|| / ||b||`` for a direct solve, or ``None`` when the statistic cannot speak.
+
+    ``None`` means ``b == 0``: EVERY null-space vector satisfies ``A x = 0`` exactly, so a
+    relative residual is 0/0 there and reporting 0.0 would be a green the arithmetic never
+    earned. The caller must treat ``None`` as UNJUDGED, not as a pass.
+
+    NOT cast to ``float``: the time-harmonic operator is COMPLEX, and casting its residual to a
+    real dtype is what kept the harmonic call sites from being able to consult this guard at all.
+    """
+    b = np.asarray(rhs.todense() if sp.issparse(rhs) else rhs)
+    b_norm = float(np.linalg.norm(b.ravel()))
+    if b_norm == 0.0:
+        return None
+    xv = np.asarray(x.todense() if sp.issparse(x) else x).reshape(b.shape)
+    return float(np.linalg.norm(np.asarray(matrix @ xv).ravel() - b.ravel())) / b_norm
+
+
+def _reject_high_direct_residual(matrix, rhs, x, backend: str) -> None:
+    """Raise :class:`LinearSolveError` when a DIRECT solve did not actually solve its system.
+
+    The suspenders half of the singular guard, and the half that catches FINITE garbage: SuperLU
+    emits a :class:`MatrixRankWarning` on a zero pivot and then returns either NaNs (the belt and
+    :func:`_check_finite` catch those) or a finite vector that does not satisfy ``A x = b`` at all.
+    Measured on the production CLI at ``lipo_inductor --mesh-size 6mm``: order 157, condition
+    estimate 1.5e17, relative residual **1.6e+01**.
+
+    The message names the residual, the ORDER, and what the caller can do -- a bare "singular"
+    tells a caller nothing it can act on.
+    """
+    residual = direct_relative_residual(matrix, rhs, x)
+    if residual is None or residual <= _DIRECT_RESIDUAL_RTOL:
+        return
+    n = int(np.shape(matrix)[0])
+    msg = (
+        f'direct solve residual ||A x - b|| / ||b|| = {residual:.3e} exceeds '
+        f'{_DIRECT_RESIDUAL_RTOL:.0e} on an n={n} system solved by {backend!r}; the system is '
+        'singular / rank-deficient and the factorization returned a finite but meaningless '
+        'solution. Check that a gauge / Dirichlet reference is set, that no DOF is left orphaned '
+        'by a degenerate or merged element, and that the mesh is not so coarse that a region '
+        'collapses (a coarser mesh is the usual cause).'
+    )
+    raise LinearSolveError(msg)
+
+
 def solve_linear_system(
     matrix,
     rhs: np.ndarray,
@@ -292,15 +338,5 @@ def solve_linear_system(
     # already raise on a non-zero convergence ``info`` and asserting their (looser) residual
     # here would clash with their own stop criterion.
     if name in ('direct', 'pardiso'):
-        b = np.asarray(rhs, dtype=float).ravel()
-        b_norm = float(np.linalg.norm(b))
-        if b_norm > 0.0:
-            residual = float(np.linalg.norm(np.asarray(matrix @ x, dtype=float).ravel() - b)) / b_norm
-            if residual > _DIRECT_RESIDUAL_RTOL:
-                msg = (
-                    f'direct solve residual ||A x - b|| / ||b|| = {residual:.3e} exceeds '
-                    f'{_DIRECT_RESIDUAL_RTOL:.0e}; the system is singular / rank-deficient '
-                    '(the factorization returned a finite but meaningless solution)'
-                )
-                raise LinearSolveError(msg)
+        _reject_high_direct_residual(matrix, rhs, x, name)
     return x
