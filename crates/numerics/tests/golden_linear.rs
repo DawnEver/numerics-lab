@@ -19,6 +19,18 @@
 //!   `kappa * eps ~ 1e-14`. The bar is set at `1e-8`, six orders looser than that so a pivot-order
 //!   difference can never red it, and still six orders tighter than the `1e-6` residual guard —
 //!   which is to say, far too tight for a wrong answer to slip through.
+//!
+//! THE 2.3e-10 QUESTION IS SETTLED, and settling it changed nothing here. A 2026-09-04 sweep
+//! measured `faer` departing from `spsolve` by up to **2.3e-10** on production-sized systems and
+//! flagged it as above "the 1e-10 that was assumed". That 1e-10 was never this file's bar — it was
+//! the assumed SIZE of the departure, and the bar has stood at 1e-8 throughout, so the measured
+//! 2.3e-10 was inside it by two orders the whole time. The user accepted the departure on
+//! 2026-09-05 ("暂时接受"), which removes it as an objection and leaves the constant untouched.
+//!
+//! It does NOT reopen the wiring decision. `gauss::linear::direct` is unwired because there is no
+//! size crossover to defend -- 31,901 -> 0.81x, 32,572 -> 1.70x, 35,430 -> 0.78x, reproduced at 9
+//! repeats with non-overlapping ranges -- and a tolerance ruling says nothing about a speed one.
+//! See `scripts/gate/seam_profile.py` for that verdict and its numbers.
 
 use contracts::sparse::{Coo, Csr};
 use gauss::linear::{
