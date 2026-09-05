@@ -12,6 +12,31 @@ use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
+/// Narrow one `i64` index to the `u32` [`Coo`] wants, REFUSING anything that would not survive.
+///
+/// `as u32` is a wrapping cast, and that is the whole reason this function exists. Measured
+/// 2026-09-05 against the shadowed build: a row index of `2**32 + 1` handed to
+/// [`py_solve_linear_system`] on a declared 3x3 wrapped to row 1 and the solve RETURNED
+/// `[1.0, 0.5714285714285714, 3.0]` -- the exact solution of a DIFFERENT matrix, with the stray
+/// value summed into `A[1,1]`. `scipy.sparse.coo_matrix` refuses the same triplet outright
+/// ("axis 0 index 4294967297 exceeds matrix dimension 3"). A plausible-looking wrong answer
+/// returned as a success is what `.claude/rules/invariant.md` forbids, so the narrowing is
+/// checked here at the marshalling boundary rather than trusted.
+///
+/// Negative ids wrapped too, and the resulting `4294967295` is what the downstream bound check
+/// reported -- so its message named a number the caller never passed. Refusing here keeps the
+/// CALLER's number in the message.
+fn narrow_index(value: i64, bound: usize, axis: &str) -> PyResult<u32> {
+    if value < 0 || value as u128 >= bound as u128 {
+        return Err(PyValueError::new_err(format!(
+            "{axis} index {value} is outside [0, {bound}); a sparse index is narrowed to u32 on \
+             the wire, so an out-of-range value would WRAP into a valid-looking index and solve \
+             a different matrix"
+        )));
+    }
+    Ok(value as u32)
+}
+
 /// `solve_linear_system(n_rows, n_cols, rows, cols, values, rhs, solver=None, preconditioner=None, x0=None)`
 ///
 /// Solve `A @ x = rhs` where `A` is given as COO triplets. `solver` is `None` (the default
@@ -39,8 +64,16 @@ pub fn py_solve_linear_system<'py>(
     preconditioner: Option<&str>,
     x0: Option<PyReadonlyArray1<'py, f64>>,
 ) -> PyResult<Bound<'py, PyArray1<f64>>> {
-    let r: Vec<u32> = rows.as_array().iter().map(|&i| i as u32).collect();
-    let c: Vec<u32> = cols.as_array().iter().map(|&i| i as u32).collect();
+    let r: Vec<u32> = rows
+        .as_array()
+        .iter()
+        .map(|&i| narrow_index(i, n_rows, "row"))
+        .collect::<PyResult<_>>()?;
+    let c: Vec<u32> = cols
+        .as_array()
+        .iter()
+        .map(|&i| narrow_index(i, n_cols, "column"))
+        .collect::<PyResult<_>>()?;
     let v: Vec<f64> = values.as_array().to_vec();
     let coo = Coo::from_triplets(n_rows, n_cols, r, c, v)
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
@@ -86,13 +119,43 @@ impl PyDirectFactorization {
         indices: PyReadonlyArray1<'py, i64>,
         values: PyReadonlyArray1<'py, f64>,
     ) -> PyResult<Self> {
-        let ptr: Vec<usize> = indptr.as_array().iter().map(|&i| i as usize).collect();
-        let idx: Vec<u32> = indices.as_array().iter().map(|&i| i as u32).collect();
+        // `indptr` is validated BEFORE it is narrowed, because the row-expansion loop below
+        // turns a bad offset straight into an allocation. Measured 2026-09-05: `indptr =
+        // [0, -1, 2, 3]` passes both of the checks that used to be here (it is n_rows+1 long
+        // and ends at nnz), then `-1 as usize` makes the range `0..18446744073709551615` and
+        // the process ABORTS -- "memory allocation of 51539607552 bytes failed". That is not
+        // an exception a caller can catch; it takes the interpreter with it.
+        let raw_ptr = indptr.as_array();
+        let mut ptr: Vec<usize> = Vec::with_capacity(raw_ptr.len());
+        let mut previous = 0i64;
+        for (row, &offset) in raw_ptr.iter().enumerate() {
+            if offset < 0 || offset < previous {
+                return Err(PyValueError::new_err(format!(
+                    "indptr must be non-negative and non-descending; entry {row} is {offset} \
+                     after {previous}. A descending or negative offset becomes an enormous \
+                     unsigned range here and aborts the process rather than raising"
+                )));
+            }
+            previous = offset;
+            ptr.push(offset as usize);
+        }
+        let idx: Vec<u32> = indices
+            .as_array()
+            .iter()
+            .map(|&i| narrow_index(i, n_cols, "column"))
+            .collect::<PyResult<_>>()?;
         let val: Vec<f64> = values.as_array().to_vec();
         if ptr.len() != n_rows + 1 || ptr.last().copied().unwrap_or(0) != idx.len() {
             return Err(PyValueError::new_err(
                 "indptr must be n_rows+1 long and end at nnz",
             ));
+        }
+        if val.len() != idx.len() {
+            return Err(PyValueError::new_err(format!(
+                "values and indices must agree; got {} values for {} indices",
+                val.len(),
+                idx.len()
+            )));
         }
         let mut rows: Vec<u32> = Vec::with_capacity(idx.len());
         for r in 0..n_rows {
