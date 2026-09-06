@@ -57,6 +57,7 @@ march, and its FactorCache count is reconciled against the sample count the CLI 
 
 from __future__ import annotations
 
+import sys
 import textwrap
 from pathlib import Path
 
@@ -199,8 +200,6 @@ def solve_counts(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
     # The name is rebound in every module that IMPORTED it: `from x import y` binds `y` into the
     # importer at import time, so patching only the definition site would count zero and read as
     # "nothing calls the seam" -- which happens to be the finding, and would then be unfalsifiable.
-    import sys  # noqa: PLC0415 - the module scan is the point, and it is local to this fixture
-
     for module in list(sys.modules.values()):
         if module is not None and getattr(module, 'solve_linear_system', None) is seam:
             monkeypatch.setattr(module, 'solve_linear_system', counted_seam)
