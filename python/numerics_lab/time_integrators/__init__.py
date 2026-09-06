@@ -23,7 +23,7 @@ so the residual root-find for ``u_{n+1}`` is driven purely through ``residual`` 
 schemes (Newmark, generalized-alpha) carry ``alpha2`` (the structural ``u_ddot``).
 
 This module imports ONLY contracts + numpy/scipy (enforced by
-``test_architecture_layering::test_gauss_sources_import_no_physics_package``); it touches no
+``test_import_purity.py::test_importing_gauss_pulls_no_physics_into_sys_modules``); it touches no
 mesh, no material, no solver.
 """
 
