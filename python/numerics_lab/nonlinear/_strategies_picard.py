@@ -18,6 +18,7 @@ from motronics.gauss.nonlinear import (
     _energy_error_pct,
     _energy_flux_convergence,
     _has_converged,
+    _IncrementTrend,
     _StagnationWatch,
     increment_ratio,
 )
@@ -62,6 +63,11 @@ class DampedPicardStrategy:
     increment bar. After :data:`_ALPHA_CALM_STEPS` undisturbed steps alpha grows back by
     :data:`_ALPHA_GROW`, capped at ``alpha_cap`` -- the step size that last misbehaved, never
     retried. This changes the RATE, not the criterion: the fixed point and the test are unchanged.
+
+    ALPHA ALSO ANSWERS TO THE INCREMENT, through :class:`_IncrementTrend`, and that is the channel
+    the two energy ratchets above cannot supply: they are gated on ``meaningful`` by design, so on
+    an energy plateau nothing could refuse a recovery or demand a damping. See that class for the
+    measured `[sparse]` trace and for why blocking the recovery alone was only half the fix.
     """
 
     name = 'picard-damped'
@@ -76,7 +82,8 @@ class DampedPicardStrategy:
         alpha, prev_err = 1.0, np.inf
         prev_delta_sign = 0
         alpha_cap = 1.0  # never recover back to a step size that already misbehaved
-        calm = 0  # consecutive steps with neither an error growth nor a sign flip
+        calm = 0  # consecutive steps with neither an error growth, a sign flip, nor a growing increment
+        trend = _IncrementTrend()  # what the ITERATE says when the energy has gone deaf
         ran = 0
         watch = _StagnationWatch(rtol_energy_pct)
         for i in range(max_iter):
@@ -96,6 +103,12 @@ class DampedPicardStrategy:
             meaningful = err >= rtol_energy_pct
             alpha_before = alpha
             disturbed = False
+            # THE INCREMENT'S OWN OVERSHOOT SIGNAL, and deliberately NOT gated on `meaningful`:
+            # that gate exists because the energy is noise below rtol, which is exactly when this
+            # channel is the only one left. See `_IncrementTrend` for the measured trace.
+            if trend.claim_damping():
+                alpha = max(_ALPHA_MIN, alpha * 0.5)
+                disturbed = True
             if meaningful and np.isfinite(prev_err) and err > prev_err:
                 alpha = max(_ALPHA_MIN, alpha * 0.5)
                 disturbed = True
@@ -117,6 +130,13 @@ class DampedPicardStrategy:
                 # A step size that never actually applied did not misbehave, so it forbids nothing.
                 if alpha < alpha_before:
                     alpha_cap = alpha_before  # the step size that MISBEHAVED, never retried
+                calm = 0
+            elif not trend.permits_growth():
+                # NOT CALM, even though the energy said nothing. Both ratchets above are deaf below
+                # rtol by design, so on an energy plateau `disturbed` is False every step and the
+                # recovery leg used to read that silence as permission. See
+                # `_IncrementTrend` for the `[sparse]` trace: alpha grew off a plateau and
+                # blew the increment out ~20x from 1.89e-4, twenty iterations from the bar.
                 calm = 0
             else:
                 calm += 1
@@ -151,6 +171,7 @@ class DampedPicardStrategy:
             increment = increment_ratio(x, x_solve)
             converged = _has_converged(err, x, x_solve, rtol_energy_pct) or watch.observe(err, increment)
             last_energy = state.total_energy
+            trend.observe(increment)
             x = x + alpha * (x_solve - x)
             if system.is_linear:
                 converged = True
@@ -189,6 +210,7 @@ class AdaptiveDampedPicardStrategy:
         last_energy: float | None = None
         converged = False
         alpha, prev_err = 1.0, np.inf
+        trend = _IncrementTrend()  # the same registry the damped variant consults
         ran = 0
         watch = _StagnationWatch(rtol_energy_pct)
         for i in range(max_iter):
@@ -197,16 +219,23 @@ class AdaptiveDampedPicardStrategy:
             if converged:
                 break
             err = _energy_error_pct(state.total_energy, last_energy)
-            if np.isfinite(prev_err):
+            if trend.claim_damping():
+                alpha = max(_ALPHA_MIN, alpha * self.shrink)  # the INCREMENT overshot
+            elif np.isfinite(prev_err):
                 if err > prev_err:
                     alpha = max(_ALPHA_MIN, alpha * self.shrink)  # overshoot -> damp harder
-                elif err < prev_err:
+                elif err < prev_err and trend.permits_growth():
+                    # THE SAME GATE THE DAMPED VARIANT USES, and it belongs here for the same
+                    # reason: a falling energy error is not evidence of progress once the energy is
+                    # on its noise-floor plateau, where it falls and rises on rounding. Growing
+                    # alpha there is what blows the increment out; see `iterate_is_contracting`.
                     alpha = min(1.0, alpha * self.grow)  # progress -> recover toward the full step
             prev_err = err
             x_solve = system.solve_linear(state)
             increment = increment_ratio(x, x_solve)
             converged = _has_converged(err, x, x_solve, rtol_energy_pct) or watch.observe(err, increment)
             last_energy = state.total_energy
+            trend.observe(increment)
             x = x + alpha * (x_solve - x)
             if system.is_linear:
                 converged = True

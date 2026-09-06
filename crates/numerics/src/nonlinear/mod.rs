@@ -584,7 +584,8 @@ impl StagnationWatch {
         }
     }
 
-    /// Record one iteration's pair; `true` iff the full window is settled AND stationary.
+    /// Record one iteration's pair; `true` iff the full window is settled AND stationary
+    /// (inside the band AND not trending upward - see the body).
     pub fn observe(&mut self, err: f64, increment: f64) -> bool {
         if self.errs.len() == self.window {
             self.errs.pop_front();
@@ -608,7 +609,103 @@ impl StagnationWatch {
             .iter()
             .copied()
             .fold(f64::NEG_INFINITY, f64::max);
-        hi <= STAGNATION_MAX_MIN_RATIO * lo.max(1e-300)
+        if hi > STAGNATION_MAX_MIN_RATIO * lo.max(1e-300) {
+            return false;
+        }
+        // STATIONARY IS NOT THE SAME AS INSIDE A BAND, and the max/min test alone cannot tell them
+        // apart: an increment CREEPING UP by 0.7% a step stays inside a 2x band for 100 iterations
+        // while diverging the whole time. MEASURED 2026-09-06 on `ipm_uv_cummins mec:quad` -
+        // 1.91e-3 -> 2.05e-3 across ten steps, band ratio 1.07, and the break fired and returned
+        // `converged = true` at 20x the increment bar.
+        let half = self.increments.len() / 2;
+        let early: f64 = self.increments.iter().take(half).sum::<f64>() / half as f64;
+        let late: f64 = self
+            .increments
+            .iter()
+            .skip(self.increments.len() - half)
+            .sum::<f64>()
+            / half as f64;
+        late <= early
+    }
+}
+
+/// Consecutive steps of a RISING increment before the iterate is damped on the increment alone.
+///
+/// Symmetric with [`ALPHA_CALM_STEPS`] on purpose: the same amount of evidence that licenses a
+/// recovery licenses a damping. One step is not enough - an increment jitters - and the measured
+/// blow-out rose monotonically for ten.
+pub const INCREMENT_RISE_STEPS: usize = 3;
+
+/// What the ITERATE says about the step size - the channel the ENERGY goes deaf on.
+///
+/// THE ONE REGISTRY for "what should alpha do?" when the energy has nothing to say, consulted by
+/// every damped Picard leg instead of each spelling its own half of it.
+///
+/// Both alpha SHRINK ratchets are gated on `meaningful` (`err >= rtol_energy_pct`) and that is
+/// right and measured: under the tolerance the energy delta's SIGN is floating-point noise, and a
+/// noise-driven shrink is what pinned alpha at 0.108 on `ipm_uv_cummins`. But the recovery leg then
+/// read the SAME deaf channel and drew the opposite conclusion from the same silence, so on an
+/// energy plateau alpha grew every `ALPHA_CALM_STEPS` with nothing able to object.
+///
+/// MEASURED 2026-09-06 through `python -m motronics run cases/field/pm/ipm_uv_cummins --select
+/// mec,quad --max-num-iter 600`, the `[sparse]` leg on `picard-damped`. At iteration 119 the
+/// increment was falling steadily toward the 1e-4 bar (2.03e-4 -> 1.95e-4 -> 1.89e-4) at alpha
+/// 0.137. Recovery raised alpha to 0.205 then 0.308 and the increment blew out ~20x until the
+/// damage finally reached the ENERGY and re-armed a shrink. At the production cap of 100 the solve
+/// stops inside that cycle and reports `converged = false` on an iterate that was, twenty
+/// iterations earlier, nearly converged.
+///
+/// BOTH DIRECTIONS, and blocking the growth alone was measured to be half a fix: with only
+/// [`Self::permits_growth`] the same run parked at alpha 0.150 with the increment creeping UP
+/// (1.91e-3 -> 2.05e-3 over ten steps) - no longer cycling, still not contracting, and nothing left
+/// that could move alpha. So a SUSTAINED rise damps: [`Self::claim_damping`] is the increment's own
+/// overshoot signal, the exact counterpart of `err > prev_err` for a plateau where `err` cannot
+/// express it.
+///
+/// ASYMMETRIC EVIDENCE ON PURPOSE. One non-contracting step is enough to REFUSE a growth (refusing
+/// costs a solve nothing but iterations at the current step size); [`INCREMENT_RISE_STEPS`]
+/// consecutive rises are required to force a shrink (shrinking is what over-damping is made of).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct IncrementTrend {
+    last: Option<f64>,
+    rising: usize,
+}
+
+impl IncrementTrend {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record this step's increment. Called once per iteration, after it is computed.
+    pub fn observe(&mut self, increment: f64) {
+        self.rising = match self.last {
+            Some(last) if increment > last => self.rising + 1,
+            _ => 0,
+        };
+        self.last = Some(increment);
+    }
+
+    /// May alpha grow? Only while the last step did not move the iterate MORE than the one before.
+    ///
+    /// No history reads as permission: refusing a recovery for want of evidence would throttle
+    /// every solve's first steps, which is the crawl the recovery leg exists to remove.
+    #[must_use]
+    pub fn permits_growth(&self) -> bool {
+        self.rising == 0
+    }
+
+    /// Has the increment risen for [`INCREMENT_RISE_STEPS`] running? CONSUMES the demand.
+    ///
+    /// Consuming is what makes one sustained rise cost ONE shrink rather than one per step for as
+    /// long as the rise lasts - an unconsumed demand would drive alpha to its floor in three more
+    /// iterations, which is precisely the over-damping the `meaningful` guard was added to stop.
+    pub fn claim_damping(&mut self) -> bool {
+        if self.rising < INCREMENT_RISE_STEPS {
+            return false;
+        }
+        self.rising = 0;
+        true
     }
 }
 

@@ -571,3 +571,58 @@ fn the_error_display_names_the_budget_and_the_known_strategies() {
     };
     assert!(format!("{e}").contains("picard-damped"));
 }
+
+/// The increment channel, both directions plus its floor - see `IncrementTrend` for the measurement.
+///
+/// The pair matters, not either half: a gate that never permitted growth would pass the refusal
+/// assertions alone while re-introducing the crawl `ALPHA_CALM_STEPS` exists to remove.
+#[test]
+fn the_increment_trend_refuses_growth_on_a_rise_and_permits_it_on_a_contraction() {
+    let mut t = IncrementTrend::new();
+    // No history is permission: refusing here would throttle every solve's first steps.
+    assert!(t.permits_growth());
+    assert!(!t.claim_damping());
+
+    // Four observations, because what counts is the RISES BETWEEN them: 3 = INCREMENT_RISE_STEPS.
+    for inc in [1.0e-3, 1.1e-3, 1.2e-3, 1.3e-3] {
+        assert!(
+            !t.claim_damping(),
+            "fewer rises than INCREMENT_RISE_STEPS must not damp"
+        );
+        t.observe(inc);
+    }
+    assert!(
+        !t.permits_growth(),
+        "the iterate moved MORE than the step before"
+    );
+    assert!(
+        t.claim_damping(),
+        "three consecutive rises must force a shrink"
+    );
+    assert!(
+        !t.claim_damping(),
+        "the demand is CONSUMED: one sustained rise costs one shrink, not one per step"
+    );
+
+    // THE FLOOR. A contracting march recovers immediately -- a falling increment resets the run.
+    t.observe(9.0e-4);
+    assert!(t.permits_growth());
+    // Equal increments are not a rise: a stationary tail must not be damped for standing still.
+    t.observe(9.0e-4);
+    assert!(t.permits_growth());
+}
+
+/// A creeping rise INSIDE the 2x band is not stationarity, however settled the energy is.
+///
+/// MEASURED 2026-09-06 on `ipm_uv_cummins mec:quad`: 1.91e-3 -> 2.05e-3 over ten steps, band ratio
+/// 1.07, and the break fired at 20x the increment bar. The floor is the case above it, unchanged:
+/// a constant increment still breaks.
+#[test]
+fn a_creeping_rise_inside_the_band_does_not_stagnation_break() {
+    let mut w = StagnationWatch::with_window(0.01, 4);
+    let mut inc = 1.0e-3_f64;
+    for _ in 0..12 {
+        assert!(!w.observe(0.001, inc), "a monotone rise is not stationary");
+        inc *= 1.007;
+    }
+}

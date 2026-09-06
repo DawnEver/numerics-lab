@@ -1,9 +1,9 @@
 //! Picard-family iteration strategies (damped / adaptive / nu-relaxation / plain).
 
 use super::{
-    energy_error_pct, energy_flux_convergence, has_converged, increment_ratio, IterationResult,
-    IterationStrategy, NonlinearError, NonlinearSystem, ResultOf, SolveOptions, StagnationWatch,
-    StateOf, ALPHA_CALM_STEPS, ALPHA_GROW, ALPHA_MIN,
+    energy_error_pct, energy_flux_convergence, has_converged, increment_ratio, IncrementTrend,
+    IterationResult, IterationStrategy, NonlinearError, NonlinearSystem, ResultOf, SolveOptions,
+    StagnationWatch, StateOf, ALPHA_CALM_STEPS, ALPHA_GROW, ALPHA_MIN,
 };
 
 /// Successive substitution with adaptive under-relaxation — the current MEC/FEA production loop.
@@ -55,8 +55,10 @@ impl<S: NonlinearSystem> IterationStrategy<S> for DampedPicardStrategy {
         let mut prev_delta_sign = 0_i32;
         // Never recover back to a step size that already misbehaved.
         let mut alpha_cap = 1.0_f64;
-        // Consecutive steps with neither an error growth nor a sign flip.
+        // Consecutive steps with neither an error growth, a sign flip, nor a growing increment.
         let mut calm = 0_usize;
+        // What the ITERATE says when the energy has gone deaf.
+        let mut trend = IncrementTrend::new();
         let mut ran = 0;
         let mut watch = StagnationWatch::new(rtol);
         for i in 0..opts.max_iter {
@@ -78,6 +80,13 @@ impl<S: NonlinearSystem> IterationStrategy<S> for DampedPicardStrategy {
             let meaningful = err >= rtol;
             let alpha_before = alpha;
             let mut disturbed = false;
+            // THE INCREMENT'S OWN OVERSHOOT SIGNAL, and deliberately NOT gated on `meaningful`:
+            // that gate exists because the energy is noise below rtol, which is exactly when this
+            // channel is the only one left. See `IncrementTrend` for the measured trace.
+            if trend.claim_damping() {
+                alpha = ALPHA_MIN.max(alpha * 0.5);
+                disturbed = true;
+            }
             if meaningful && prev_err.is_finite() && err > prev_err {
                 alpha = ALPHA_MIN.max(alpha * 0.5);
                 disturbed = true;
@@ -104,6 +113,11 @@ impl<S: NonlinearSystem> IterationStrategy<S> for DampedPicardStrategy {
                 if alpha < alpha_before {
                     alpha_cap = alpha_before; // the step size that MISBEHAVED, never retried
                 }
+                calm = 0;
+            } else if !trend.permits_growth() {
+                // NOT CALM, even though the energy said nothing. Both ratchets above are deaf below
+                // rtol by design, so on an energy plateau `disturbed` is false every step and the
+                // recovery leg used to read that silence as permission.
                 calm = 0;
             } else {
                 calm += 1;
@@ -141,6 +155,7 @@ impl<S: NonlinearSystem> IterationStrategy<S> for DampedPicardStrategy {
             let increment = increment_ratio(&x, &x_solve);
             converged = has_converged(err, &x, &x_solve, rtol) || watch.observe(err, increment);
             last_energy = Some(st.total_energy);
+            trend.observe(increment);
             x = x
                 .iter()
                 .zip(&x_solve)
@@ -203,6 +218,8 @@ impl<S: NonlinearSystem> IterationStrategy<S> for AdaptiveDampedPicardStrategy {
         let mut last_energy: Option<f64> = None;
         let mut converged = false;
         let (mut alpha, mut prev_err) = (1.0_f64, f64::INFINITY);
+        // The same registry the damped variant consults.
+        let mut trend = IncrementTrend::new();
         let mut ran = 0;
         let mut watch = StagnationWatch::new(rtol);
         for i in 0..opts.max_iter {
@@ -213,10 +230,15 @@ impl<S: NonlinearSystem> IterationStrategy<S> for AdaptiveDampedPicardStrategy {
                 break;
             }
             let err = energy_error_pct(st.total_energy, last_energy);
-            if prev_err.is_finite() {
+            if trend.claim_damping() {
+                alpha = ALPHA_MIN.max(alpha * self.shrink); // the INCREMENT overshot
+            } else if prev_err.is_finite() {
                 if err > prev_err {
                     alpha = ALPHA_MIN.max(alpha * self.shrink); // overshoot -> damp harder
-                } else if err < prev_err {
+                } else if err < prev_err && trend.permits_growth() {
+                    // THE SAME GATE THE DAMPED VARIANT USES: a falling energy error is not
+                    // evidence of progress once the energy is on its noise-floor plateau, where it
+                    // falls and rises on rounding. See `IncrementTrend`.
                     alpha = 1.0_f64.min(alpha * self.grow); // progress -> recover the full step
                 }
             }
@@ -225,6 +247,7 @@ impl<S: NonlinearSystem> IterationStrategy<S> for AdaptiveDampedPicardStrategy {
             let increment = increment_ratio(&x, &x_solve);
             converged = has_converged(err, &x, &x_solve, rtol) || watch.observe(err, increment);
             last_energy = Some(st.total_energy);
+            trend.observe(increment);
             x = x
                 .iter()
                 .zip(&x_solve)
