@@ -59,6 +59,7 @@ __all__ = [
     'make_preconditioner',
     'pin_rows',
     'requires_symmetric',
+    'solve_equilibrated',
     'solve_linear_system',
     'ssor_preconditioner',
 ]
@@ -304,3 +305,47 @@ def solve_linear_system(
                 )
                 raise LinearSolveError(msg)
     return x
+
+
+def solve_equilibrated(matrix, rhs):
+    """Solve ``matrix @ x = rhs`` after taking the operator's own row scaling out of it.
+
+    SYMMETRIC JACOBI EQUILIBRATION, and it is an ALGEBRAIC IDENTITY: with
+    ``D = diag(1/sqrt(|diag A|))``, solving ``(D A D) y = D b`` and returning ``D y`` is the same
+    ``x`` in exact arithmetic. It is not a different method, not an approximation and not a
+    preconditioner -- the same factorization runs on a system of the same sparsity. Only the
+    floating-point path differs, because SuperLU's pivot thresholding compares entries whose
+    magnitudes a badly scaled operator has already made incomparable.
+
+    THE CLAIM IS NARROW ON PURPOSE. This is NOT "more accurate in general", and that was measured
+    rather than assumed: on a synthetic SPD system with rows scaled across nine decades -- the
+    shape a stiffness matrix was ASSUMED to have -- the equilibrated solve came back slightly
+    WORSE than the unscaled one (2026-09-06, componentwise 4.6e-7 vs 1.0e-7). The synthetic
+    fixture did not reproduce the defect, which is itself the finding: the loss depends on the
+    operator, not on a row-scale histogram.
+
+    WHAT IS MEASURED, on the real operator: `cases/study/field/benchmark/rotor_stress`'s
+    overspeed/rated peak-hoop ratio, a quantity in which every discretization error cancels by
+    construction, so the exact 2.25 is arithmetic and nothing else. Unscaled it held at
+    ``n_radial`` 8/16/32 and drifted at 64 -- 2.2338 recorded 2026-08-14, 2.2514 re-measured
+    2026-09-06, a spread across runs that is what a conditioning floor looks like. Equilibrated,
+    at 8/16/32/64/96:
+
+        2.250000000  2.250000001  2.250000008  2.250000000  2.250000032
+
+    That drift had been recorded as a property of the MESH: `DISTANCE_TO_DONE`'s `rotor_stress`
+    row refused a refinement because it "would break the case linearity pin". It was the solve.
+
+    A ROW WITH NO DIAGONAL ENTRY has no scale to take out and passes through at unit scale rather
+    than dividing by zero -- an off-diagonal-only row is a legal constraint shape, and turning it
+    into ``inf`` here would convert a solvable system into a ``nan`` one further along. The
+    magnitude is taken before the ``sqrt`` for the matching reason: an indefinite (saddle-point /
+    KKT) operator has negative diagonal entries by construction, and ``sqrt`` of one is ``nan``.
+    """
+    a = sp.csc_matrix(matrix)
+    diag = np.abs(a.diagonal())
+    diag[diag == 0.0] = 1.0
+    s = 1.0 / np.sqrt(diag)
+    scaling = sp.diags(s)
+    y = spsolve((scaling @ a @ scaling).tocsc(), s * np.asarray(rhs))
+    return np.asarray(s * y)
