@@ -25,12 +25,12 @@ constraint -- and not (b), a formulation that needs a gauge nobody had stated.
 from __future__ import annotations
 
 import ast
-from pathlib import Path
 
 import numpy as np
 import pytest
 from scipy.sparse import csr_matrix
 
+from motronics.core.utils.config import repo_root
 from motronics.gauss.linear import LinearSolveError, gauge_pin_orphan_rows, orphan_rows, solve_linear_system
 
 
@@ -90,7 +90,7 @@ def test_every_assembled_solve_path_consults_the_one_owner():
     delete to re-privatise the decision. The floor is that all three are still found: a scan that
     reached zero modules would read exactly like a clean tree.
     """
-    src = Path(__file__).resolve().parents[3] / 'src' / 'motronics'
+    src = repo_root() / 'src' / 'motronics'
     expected = {
         'hamilton/discretizations/fem/_solve.py',
         'hamilton/discretizations/fem/_newton.py',
@@ -119,7 +119,7 @@ def test_no_module_keeps_a_private_orphan_pin():
     may keep naming the retired spelling in the provenance docstring that explains why it exists --
     prose about a retirement is not a re-introduction of it.
     """
-    src = Path(__file__).resolve().parents[3] / 'src' / 'motronics'
+    src = repo_root() / 'src' / 'motronics'
     retired = '_gauge_pin_orphan_dofs'
 
     offenders = []
