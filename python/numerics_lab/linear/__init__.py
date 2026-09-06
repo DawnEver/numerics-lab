@@ -64,6 +64,7 @@ __all__ = [
     'make_preconditioner',
     'orphan_rows',
     'pin_rows',
+    'reject_unsolved_direct_system',
     'requires_symmetric',
     'solve_linear_system',
     'ssor_preconditioner',
@@ -345,7 +346,7 @@ def direct_refinement_correction(matrix, rhs, x) -> float | None:
     The factorization is taken fresh here rather than reused from the solve, because the caller
     is ``spsolve``, which discards its factor. That costs a second factorization, and is why this
     is reached ONLY after the residual trigger has already fired -- see
-    :func:`_reject_unsolved_direct_system`.
+    :func:`reject_unsolved_direct_system`.
     """
     shape = np.shape(matrix)
     if len(shape) != 2 or shape[0] != shape[1]:
@@ -368,7 +369,7 @@ def direct_refinement_correction(matrix, rhs, x) -> float | None:
     return d_norm / x_norm
 
 
-def _reject_unsolved_direct_system(matrix, rhs, x, backend: str) -> None:
+def reject_unsolved_direct_system(matrix, rhs, x, backend: str) -> None:
     """Raise :class:`LinearSolveError` when a DIRECT solve did not actually solve its system.
 
     The half of the singular guard that catches FINITE garbage: SuperLU emits a
@@ -412,9 +413,11 @@ def _reject_unsolved_direct_system(matrix, rhs, x, backend: str) -> None:
         f'direct solve on an n={n} system by {backend!r} did not solve it: {finding} '
         f'(measured: {measured}; the residual trigger is {_DIRECT_RESIDUAL_RTOL:.0e} and the '
         f'refinement bar is {_DIRECT_REFINEMENT_RTOL:.0e}). The system is singular / '
-        'rank-deficient. Check that a gauge / Dirichlet reference is set, that no DOF is left '
-        'orphaned by a degenerate or merged element, and that the mesh is not so coarse that a '
-        'region collapses (a coarser mesh is the usual cause). NOTE a large residual ALONE is '
+        'rank-deficient. Check that the model carries a REFERENCE the solve can pin to (a gauge, '
+        'a Dirichlet condition, a ground node) and that no unknown is left with a dependent row -- '
+        'a DOF orphaned by a degenerate or merged element, a region the mesh let collapse (a '
+        'coarser mesh is the usual cause in a FIELD solve), or two ideal sources constraining the '
+        'same node pair (the usual cause in a LUMPED one). NOTE a large residual ALONE is '
         'not this finding -- it scales with the condition number, and an ill-conditioned but '
         'well-posed system (e.g. stiffness in SI units) passes here on its refinement step.'
     )
@@ -447,5 +450,5 @@ def solve_linear_system(
     # already raise on a non-zero convergence ``info`` and asserting their (looser) residual
     # here would clash with their own stop criterion.
     if name in ('direct', 'pardiso'):
-        _reject_unsolved_direct_system(matrix, rhs, x, name)
+        reject_unsolved_direct_system(matrix, rhs, x, name)
     return x

@@ -39,9 +39,9 @@ from motronics.gauss.linear import (
     _DIRECT_REFINEMENT_RTOL,
     _DIRECT_RESIDUAL_RTOL,
     LinearSolveError,
-    _reject_unsolved_direct_system,
     direct_refinement_correction,
     direct_relative_residual,
+    reject_unsolved_direct_system,
     solve_linear_system,
 )
 
@@ -211,4 +211,4 @@ def test_an_unjudgeable_correction_refuses_and_says_the_refinement_was_unavailab
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
         with pytest.raises(LinearSolveError, match='unavailable'):
-            _reject_unsolved_direct_system(singular, rhs, np.zeros(2), 'direct')
+            reject_unsolved_direct_system(singular, rhs, np.zeros(2), 'direct')
