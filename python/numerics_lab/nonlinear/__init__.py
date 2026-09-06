@@ -351,7 +351,14 @@ def _has_converged(
     That failure mode is a property of the ENERGY CRITERION, not of any one strategy. It was
     previously guarded inside :class:`DampedPicardStrategy` alone, and even there only behind
     ``if ratcheted`` -- so it did not fire on an undamped run of the very strategy that owned it,
-    and the other eleven strategies never had it. Hence one function, consulted by all of them.
+    and the other eleven strategies never had it. Hence one function.
+
+    "CONSULTED BY ALL OF THEM" IS A CLAIM, AND IT WAS FALSE FOR TWO YEARS OF READERS UNTIL
+    2026-09-06. `nu-damped` -- the FEA DEFAULT -- judged on its own energy/flux pair and never
+    called this, and `continuation` is an outer driver that delegates. The first is now fixed and
+    the second is exempt by kind; both are DECLARED in
+    `tests/architecture/domain/test_every_iteration_strategy_consults_the_one_rule.py`, which reads
+    the registry rather than a list, so the sentence above is a fact a test enforces and not prose.
 
     The second half is the direct fixed-point test ``x_next == x``, immune to a flat-but-wrong
     energy plateau, on the step the strategy is ABOUT to take. It costs nothing: every strategy has
@@ -526,12 +533,18 @@ def _energy_flux_convergence(
 ) -> tuple[float, float, bool]:
     """Energy-AND-flux convergence test (fraction of a percent each), both below tolerance to pass.
 
-    A private copy of ``hamilton.discretizations.fem._post._check_convergence``'s formula -- NOT an
-    import of it: ``gauss`` sits BELOW ``hamilton`` in the dependency arrow (``hamilton -> ... ->
-    gauss -> core -> contracts``), so this module cannot import from ``hamilton`` without inverting
-    it. :class:`NuRelaxationDampedPicardStrategy` needs this two-metric check (not the single-metric
+    THE ONLY COPY, since 2026-09-06. It began as a copy of
+    ``hamilton.discretizations.fem._post._check_convergence`` -- NOT an import of it, because
+    ``gauss`` sits BELOW ``hamilton`` in the dependency arrow (``hamilton -> ... -> gauss -> core
+    -> contracts``) and cannot import upward. That original had zero callers and was deleted in the
+    commit that fixed the rule below it: two copies of a convergence test, one of them dead, is the
+    drift this docstring used to only warn about, and it became concrete the moment the live one
+    gained an iterate test the dead one would never have received.
+
+    :class:`NuRelaxationDampedPicardStrategy` needs this two-metric check (not the single-metric
     :func:`_energy_error_pct` the other strategies use) to reproduce the removed FEA frozen loop's
-    exact convergence test verbatim.
+    exact test. It is a NECESSARY condition there, not a sufficient one: neither metric can see a
+    redistribution that leaves ``max|x|`` alone, so the strategy ANDs it with :func:`_has_converged`.
     """
     if last_energy is None or last_flux is None:
         return np.inf, np.inf, False
