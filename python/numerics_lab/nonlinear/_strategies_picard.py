@@ -284,6 +284,21 @@ class NuRelaxationDampedPicardStrategy:
     before vs after multiplying by the geometric factor rounds differently), but the SAME operator in
     exact arithmetic -- goldens are verified within their existing numerical tolerance, not by hash.
 
+    **THE CONVERGENCE RULE IS THE FROZEN LOOP'S PLUS THE ITERATE TEST, added 2026-09-06.** The
+    deleted loop judged on the energy/flux PAIR and this class reproduced it verbatim, which left
+    the FEA DEFAULT as one of only two registered strategies not consulting :func:`_has_converged`.
+    The sibling plateau test recorded that as a named hole and guessed it was harmless -- ``max|x|``
+    is "iterate-derived and so not vulnerable in the same way". MEASURED 2026-09-06 and REFUTED:
+    ``max|x|`` is a single order statistic, so it is flat across every step that redistributes the
+    field without moving its largest component. On the planted case
+    (``tests/unit/gauss/test_the_nu_damped_flux_metric_is_not_a_fixed_point.py``) both metrics read
+    0.00% and this strategy returned ``converged=True`` after 2 iterations at 25% error.
+
+    So the pair is now a NECESSARY condition ANDed with :func:`_has_converged`, with
+    :class:`_StagnationWatch` as the escape for a genuinely stationary increment -- the same shape
+    the other eleven strategies use. Adding a requirement can only ever move convergence LATER, so
+    no previously-correct solve changes its answer; what changes is that a plateau is refused.
+
     Duck-types on ``raw_state``/``fold_raw`` (present only on ``GalerkinSystem``) rather than importing
     the FEA module, keeping this module solver-agnostic -- the same seam style
     :class:`DampedPicardStrategy` uses via the generic ``assemble``/``solve_linear``, one level lower
@@ -330,6 +345,7 @@ class NuRelaxationDampedPicardStrategy:
         is_convergence = False  # one-step-delayed break: the pass AFTER convergence only refreshes state
         reached_tol = False
         ran = 0
+        watch = _StagnationWatch(rtol_energy_pct)
         for i in range(max_iter):
             s_row, s_col, s_val, t_mat, total_energy = raw_state(x)
             if prev_s_val is None:
@@ -341,12 +357,9 @@ class NuRelaxationDampedPicardStrategy:
             if is_convergence:
                 break  # refresh-only pass: state now reflects the converged iterate; stop without solving
             total_flux = float(np.max(np.abs(x)))
-            err, _flux_err, is_converged = _energy_flux_convergence(
+            err, _flux_err, metrics_settled = _energy_flux_convergence(
                 total_energy, total_flux, last_energy, last_flux, rtol_energy_pct, rtol_energy_pct
             )
-            if is_converged:
-                is_convergence = True
-                reached_tol = True
             # Frozen alpha adaptation: halve (x0.6, floored) on an energy-delta SIGN FLIP -- verbatim
             # from the deleted loop, never raised back up.
             if last_energy is not None:
@@ -359,10 +372,12 @@ class NuRelaxationDampedPicardStrategy:
             prev_s_val, prev_t_mat = mixed_s_val, mixed_t_mat
             x_prev = x
             x = system.solve_linear(state)
-            # This strategy judges on the energy/flux PAIR, not on `_has_converged`, so it has no
-            # increment of its own; it is measured here purely so the observer sees the same two
-            # numbers everywhere and a capped run is readable without knowing which strategy ran.
             increment = increment_ratio(x_prev, x)
+            # THE ITERATE HAS TO HAVE STOPPED TOO, which is why this decision sits AFTER the solve
+            # rather than before it: `increment` does not exist until `x` has been updated.
+            if (metrics_settled and _has_converged(err, x_prev, x, rtol_energy_pct)) or watch.observe(err, increment):
+                is_convergence = True
+                reached_tol = True
             ran = i + 1
             if system.is_linear:
                 is_convergence = True

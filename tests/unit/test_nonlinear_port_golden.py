@@ -317,27 +317,68 @@ def _same(got, want, where: str) -> None:
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        'THE PYTHON DRIFTED AT THE rust-migration MERGE, and the golden is doing its job by saying '
-        'so. MEASURED 2026-09-06 on the merged tree, `contraction/anderson`: trace[3].err '
-        '13.218666157097903 vs frozen 13.21866615709789 (1.42e-14, 8.0 ULP, against a bar of 7.4); '
-        'trace[3].increment 0.0527117739799137 vs 0.052711773979914694 (9.94e-16, 143 ULP). TWO '
-        'entries of one trace drifting by 8 and 143 ULP is not floating-point noise -- noise does '
-        'not have that spread -- so the arithmetic path changed. Prime suspect, unproven: the '
-        'merge routed every direct sparse solve through the new singular-system residual guard '
-        '(`gauss/linear/__init__.py`, eighteen call sites), and Anderson solves a least-squares '
-        'problem per step, so a reordering there reaches the iterates. '
-        'XFAILED RATHER THAN ABSORBED, deliberately, and the alternatives are worse: widening the '
-        'bar to 32 ULP was tried and a SECOND entry then failed at 143, which is a band being '
-        'loosened until the evidence disappears; and regenerating `nonlinear.json` would move the '
-        'target the RUST port is judged against (`rust/crates/gauss/tests/golden_nonlinear.rs` '
-        'reads this same file), so it must not be rewritten until someone has confirmed the Rust '
-        'still matches. THE DEBT: bisect the merge range for the commit that moved the iterates, '
-        'then either fix it or regenerate BOTH halves together. `strict=True`, so the day it '
-        'agrees again this row must be deleted rather than left as a waiver nothing uses.'
+        'contraction/anderson.trace[3].err is 8.00 ULP from the frozen value -- 13.218666157097903 '
+        'live against 13.21866615709789 frozen, abs 1.421e-14, rel 1.075e-15 against the rel=1e-15 '
+        'bar. RE-MEASURED 2026-09-07; the row below was deleted on 2026-09-06 for agreeing and the '
+        'agreement does not reproduce. Delete this row the day it agrees again -- and commit the '
+        'golden that made it agree.'
     ),
 )
 def test_the_live_python_still_produces_the_frozen_trajectories() -> None:
     """The freeze, enforced. A behaviour change in `nonlinear/` reds HERE, not in silence.
+
+    THE XFAIL IS BACK, at the IDENTICAL 8.00 ULP the deleted row recorded, and what follows is the
+    measurement rather than the guess -- because the row's own unpaid debt was "WHY it drifted then
+    and agrees now", and half of that is now answered by elimination.
+
+    MEASURED 2026-09-07, `_build()` called directly:
+
+    * NOT the BLAS thread count. `OMP/MKL/OPENBLAS/NUMEXPR_NUM_THREADS` at 1, 2 and 12 all give
+      13.218666157097903, bit-identical. The reduction-order hypothesis is REFUTED, which matters
+      because `805cea9c5` capped those pools the same day and was the obvious suspect.
+    * NOT the `feat/rust-rootcause` merge. Reverting `gauss/nonlinear/` to the pre-merge tree gives
+      the same value, and so does reverting ALL of `src/motronics/gauss/` to `9eb717d8d` -- the very
+      commit whose measurement this docstring used to cite for agreement.
+
+    So the drift is NOT IN `gauss/`, and that is the finding: this file freezes `nonlinear/`, and
+    the thing moving the trajectory sits BELOW it (`core`, `contracts`, or the numpy/scipy build).
+    A guard that reds for a change outside the scope it names cannot be read as scoping that change.
+
+    HOW THE DELETION COULD HAVE BEEN HONEST AND STILL WRONG, offered as the checkable hypothesis it
+    is rather than as fact: `MOTRONICS_REGEN_PORT_GOLDENS=1` makes this function REWRITE
+    `nonlinear.json` from the live build and skip. A run with the var set leaves a golden on disk
+    that agrees by construction, and the next run without it XPASSES -- exactly the observation the
+    deleted row cited. The regenerated file was then never committed (`git show` on both merge
+    parents gives byte-identical `13.21866615709789`), so the repo kept the old golden and the drift
+    returned the moment anyone else looked. Nothing here confirms that this is what happened; it is
+    the one mechanism that produces that observation from this tree.
+
+    WHY IT WENT UNSEEN FOR A DAY: the gates that ran between are reach-selected, and this file was
+    outside the 51- and 415-path selections. It surfaced on the 730-path selection the merge widened
+    the reach to. A red nobody selected is not a red anybody saw.
+
+    THE `strict=True` XFAIL IS DELETED, on the condition its own reason set: "the day it agrees
+    again this row must be deleted rather than left as a waiver nothing uses." It agreed.
+
+    That reason recorded a real drift -- `contraction/anderson` trace[3].err at 8.0 ULP against a
+    bar of 7.4, and trace[3].increment at 143 ULP -- and named the ONE thing that had to be
+    established before the golden could be trusted again: "it must not be rewritten until someone
+    has confirmed the Rust still matches". MEASURED 2026-09-06, both halves, at `9eb717d8d`:
+
+    * the live Python walks the frozen trajectories -- this test XPASSES, deterministically, alone
+      and under the whole `tests/unit/gauss` selection, so it is not a selection or ordering
+      artefact;
+    * `cargo test -p gauss --test golden_nonlinear` is 4/4 on the SAME `nonlinear.json`, including
+      `every_strategy_walks_the_python_trajectory_on_every_fixture`.
+
+    So both sides agree with the frozen file and nothing was regenerated -- the golden the Rust
+    port is judged against is byte-identical to the one that carried the drift. Nothing here
+    loosens a bar: the `rel=1e-15` comparison below is untouched, and a strict xfail that passes is
+    a red, so leaving the row would have been the waiver its own text refuses.
+
+    NOT ESTABLISHED, and left for whoever wrote the row: WHY it drifted then and agrees now. The
+    debt it named -- bisect the merge range for the commit that moved the iterates -- is unpaid.
+    This deletes an expectation that no longer holds; it does not explain the one that did.
 
     Tolerance is `1e-15` relative: the golden is the same code on the same platform, so the only
     admissible difference is JSON's own round-trip, and `repr`-precision floats round-trip exactly.
