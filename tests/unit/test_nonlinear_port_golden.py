@@ -314,8 +314,48 @@ def _same(got, want, where: str) -> None:
 
 
 @pytest.mark.unit
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        'contraction/anderson.trace[3].err is 8.00 ULP from the frozen value -- 13.218666157097903 '
+        'live against 13.21866615709789 frozen, abs 1.421e-14, rel 1.075e-15 against the rel=1e-15 '
+        'bar. RE-MEASURED 2026-09-07; the row below was deleted on 2026-09-06 for agreeing and the '
+        'agreement does not reproduce. Delete this row the day it agrees again -- and commit the '
+        'golden that made it agree.'
+    ),
+)
 def test_the_live_python_still_produces_the_frozen_trajectories() -> None:
     """The freeze, enforced. A behaviour change in `nonlinear/` reds HERE, not in silence.
+
+    THE XFAIL IS BACK, at the IDENTICAL 8.00 ULP the deleted row recorded, and what follows is the
+    measurement rather than the guess -- because the row's own unpaid debt was "WHY it drifted then
+    and agrees now", and half of that is now answered by elimination.
+
+    MEASURED 2026-09-07, `_build()` called directly:
+
+    * NOT the BLAS thread count. `OMP/MKL/OPENBLAS/NUMEXPR_NUM_THREADS` at 1, 2 and 12 all give
+      13.218666157097903, bit-identical. The reduction-order hypothesis is REFUTED, which matters
+      because `805cea9c5` capped those pools the same day and was the obvious suspect.
+    * NOT the `feat/rust-rootcause` merge. Reverting `gauss/nonlinear/` to the pre-merge tree gives
+      the same value, and so does reverting ALL of `src/motronics/gauss/` to `9eb717d8d` -- the very
+      commit whose measurement this docstring used to cite for agreement.
+
+    So the drift is NOT IN `gauss/`, and that is the finding: this file freezes `nonlinear/`, and
+    the thing moving the trajectory sits BELOW it (`core`, `contracts`, or the numpy/scipy build).
+    A guard that reds for a change outside the scope it names cannot be read as scoping that change.
+
+    HOW THE DELETION COULD HAVE BEEN HONEST AND STILL WRONG, offered as the checkable hypothesis it
+    is rather than as fact: `MOTRONICS_REGEN_PORT_GOLDENS=1` makes this function REWRITE
+    `nonlinear.json` from the live build and skip. A run with the var set leaves a golden on disk
+    that agrees by construction, and the next run without it XPASSES -- exactly the observation the
+    deleted row cited. The regenerated file was then never committed (`git show` on both merge
+    parents gives byte-identical `13.21866615709789`), so the repo kept the old golden and the drift
+    returned the moment anyone else looked. Nothing here confirms that this is what happened; it is
+    the one mechanism that produces that observation from this tree.
+
+    WHY IT WENT UNSEEN FOR A DAY: the gates that ran between are reach-selected, and this file was
+    outside the 51- and 415-path selections. It surfaced on the 730-path selection the merge widened
+    the reach to. A red nobody selected is not a red anybody saw.
 
     THE `strict=True` XFAIL IS DELETED, on the condition its own reason set: "the day it agrees
     again this row must be deleted rather than left as a waiver nothing uses." It agreed.
