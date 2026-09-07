@@ -22,6 +22,12 @@ WHAT IS PINNED HERE.
       at ~iteration K + first-pass, NOT at the cap;
   (b) the documented false plateau -- energy 0.00% for the whole run, increment WANDERING by more
       than the 2x band -- must NOT stagnation-break;
+  (b2) an increment CREEPING UP inside the 2x band must not stagnation-break either. The band test
+      alone cannot see a trend: a 0.7%-per-step rise stays within max/min <= 2 for a hundred
+      iterations while diverging the whole time. MEASURED 2026-09-06 via ``python -m motronics run
+      cases/field/pm/ipm_uv_cummins --select mec,quad`` -- 1.91e-3 -> 2.05e-3 over ten steps, band
+      ratio 1.07, and the break fired, returning ``converged = True`` at 20x the increment bar.
+      STATIONARY was the word the docstring used and a BAND was all it tested;
   (c) a system already at its fixed point still converges in a handful of iterations, long before
       the window can fill: the fast break still fires first.
 
@@ -92,6 +98,18 @@ class _CreepingSystem:
         return None
 
 
+class _CreepingUpSystem(_CreepingSystem):
+    """Energy equally flat; the increment RISES geometrically, slowly enough to stay in the band.
+
+    ``1.007 ** 24 = 1.18``, so a full 25-step window never leaves the 2x band -- the arrangement
+    that made the measured ipm_uv_cummins tail read as stationary. The ramp is long enough that it
+    never cycles inside the run, so every window the watch sees is genuinely rising.
+    """
+
+    def __init__(self) -> None:
+        super().__init__([1.5e-3 * 1.007**k for k in range(400)])
+
+
 class _AtFixedPointSystem(_CreepingSystem):
     """Already AT the fixed point: ``g(x) == x``, increment exactly 0 from the first step."""
 
@@ -143,3 +161,20 @@ def test_the_fast_break_still_fires_first(name: str):
         f'{name} took {result.iterations} iterations on a system started AT its fixed point; the '
         f'fast break (err < rtol AND increment < rtol/100) should have fired almost immediately'
     )
+
+
+@pytest.mark.parametrize('name', _DRIVABLE)
+def test_a_creeping_rise_inside_the_band_never_stagnation_breaks(name: str):
+    """(b2) A trend the band cannot see. The break says STATIONARY; a monotone rise is not.
+
+    The FLOOR for this addition is test (a) above, unchanged and still green: an increment pinned
+    at a constant 3.5e-4 still breaks at ~K+2. A trend test that also refused (a) would have
+    deleted the capability rather than sharpened it.
+    """
+    cap = _K + 20  # several full windows, every one of them rising
+    result = get_strategy(name).solve(_CreepingUpSystem(), max_iter=cap)
+    assert not result.converged, (
+        f'{name} reported convergence on an increment that rose every single step -- it stayed '
+        f'inside the 2x band the whole time, which is why the band alone is not stationarity'
+    )
+    assert result.iterations == cap

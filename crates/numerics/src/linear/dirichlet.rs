@@ -1,0 +1,126 @@
+//! Dirichlet pinning — pure algebra, no physics, no mesh.
+//!
+//! The Rust mirror of `src/motronics/gauss/linear/dirichlet.py` and
+//! `src/motronics/gauss/linear/pin_rows.py`. Neither function ever referenced an element, a
+//! material or a chart, which is why they are `gauss` citizens on the Python side and stay
+//! `gauss` citizens here. The two exist separately because they pin DIFFERENT representations:
+//! [`apply_dirichlet_triplets`] works on an assembly's COO stream, [`pin_rows`] on a matrix that
+//! is already built.
+//!
+//! # The one thing deliberately NOT ported: the complex dtype
+//!
+//! The Python's `apply_dirichlet_triplets` is dtype-agnostic on purpose — `studies/harmonic`
+//! pins a COMPLEX phasor through it, and a real-only implementation would silently truncate the
+//! phase. `contracts::sparse` is `f64` throughout (ruling D3's data structures are real), so a
+//! complex pin has no Rust representation to be faithful to yet. The real path is ported; the
+//! complex path is NOT, and it is named here rather than left to be discovered by a harmonic
+//! solve that loses its imaginary part. When `contracts` grows a complex operator, this function
+//! is the first caller that needs it.
+
+use contracts::sparse::{Coo, Csr, SparseError};
+
+/// A Dirichlet group: one prescribed value and the indices it is imposed on.
+///
+/// The Python keys a `dict` by VALUE (`{value: index_ids}`) because that is the shape the
+/// FEA/harmonic boundary maps already use. A `f64` cannot be a hash key in Rust, and it should
+/// not be one in Python either — two groups whose values differ by an ulp are different keys —
+/// so the port carries the pairs as a SEQUENCE, which is also what `dict` iteration order gives.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DirichletGroup {
+    /// The prescribed value.
+    pub value: f64,
+    /// The indices it is imposed on. Duplicates are collapsed, mirroring the Python's
+    /// `np.unique`.
+    pub indices: Vec<u32>,
+}
+
+/// Pin `rhs[i] = value + bias` for every index in every group, and turn each pinned row of the
+/// COO triplets into the identity row.
+///
+/// Existing entries in a pinned row are ZEROED rather than removed, so the returned arrays stay
+/// valid COO input — exactly the Python's choice, and the reason the appended unit diagonal does
+/// not collide with anything: `Coo::to_csr` SUMS duplicates, and `0 + 1 = 1`.
+///
+/// The COLUMN of a pinned index is deliberately NOT eliminated. This is row-pinning, not static
+/// condensation, so an unpinned row keeps its coupling to a pinned unknown.
+///
+/// `rhs` is modified in place at the pinned indices; the triplets are consumed and returned
+/// extended.
+#[must_use]
+pub fn apply_dirichlet_triplets(
+    mut rows: Vec<u32>,
+    mut cols: Vec<u32>,
+    mut values: Vec<f64>,
+    rhs: &mut [f64],
+    groups: &[DirichletGroup],
+    bias: f64,
+) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
+    for group in groups {
+        let mut ids = group.indices.clone();
+        ids.sort_unstable();
+        ids.dedup();
+        if ids.is_empty() {
+            continue;
+        }
+        for &i in &ids {
+            rhs[i as usize] = group.value + bias;
+        }
+        for (k, &r) in rows.iter().enumerate() {
+            if ids.binary_search(&r).is_ok() {
+                values[k] = 0.0;
+            }
+        }
+        for &i in &ids {
+            rows.push(i);
+            cols.push(i);
+            values.push(1.0);
+        }
+    }
+    (rows, cols, values)
+}
+
+/// Replace each pinned row by the identity row (zero row, unit diagonal).
+///
+/// The Python operates on a `scipy.sparse.lil_matrix` in place, because LIL is the one format
+/// where replacing a row is O(row). There is no LIL in `contracts::sparse` — and adding one to
+/// serve a single operation would be a format that exists for a caller rather than for a
+/// question — so this REBUILDS through [`Coo`], which is the write format and the one place
+/// duplicates are summed.
+///
+/// It was consolidated out of FOUR hand-copied Python copies that had already drifted (one cast
+/// the row index, three did not, and nothing compared them). One implementation is the point.
+///
+/// # Errors
+/// [`SparseError::NotSquare`], or [`SparseError::IndexOutOfBounds`] when a pinned index is
+/// outside the matrix.
+pub fn pin_rows(matrix: &Csr, pinned: &[u32]) -> Result<Csr, SparseError> {
+    let (n_rows, n_cols) = matrix.shape();
+    if n_rows != n_cols {
+        return Err(SparseError::NotSquare { n_rows, n_cols });
+    }
+    let mut is_pinned = vec![false; n_rows];
+    for &dof in pinned {
+        let d = dof as usize;
+        if d >= n_rows {
+            return Err(SparseError::IndexOutOfBounds {
+                row: d,
+                col: d,
+                n_rows,
+                n_cols,
+            });
+        }
+        is_pinned[d] = true;
+    }
+    let mut out = Coo::with_capacity(n_rows, n_cols, matrix.nnz() + pinned.len());
+    let (indptr, indices, values) = (matrix.indptr(), matrix.indices(), matrix.values());
+    for r in 0..n_rows {
+        if is_pinned[r] {
+            out.push(r as u32, r as u32, 1.0)?;
+            continue;
+        }
+        for i in indptr[r] as usize..indptr[r + 1] as usize {
+            out.push(r as u32, indices[i], values[i])?;
+        }
+    }
+    out.to_csr()
+}
