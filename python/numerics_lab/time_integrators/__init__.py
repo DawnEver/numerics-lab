@@ -23,7 +23,7 @@ so the residual root-find for ``u_{n+1}`` is driven purely through ``residual`` 
 schemes (Newmark, generalized-alpha) carry ``alpha2`` (the structural ``u_ddot``).
 
 This module imports ONLY contracts + numpy/scipy (enforced by
-``test_architecture_layering::test_gauss_sources_import_no_physics_package``); it touches no
+``test_import_purity.py::test_importing_gauss_pulls_no_physics_into_sys_modules``); it touches no
 mesh, no material, no solver.
 """
 
@@ -37,10 +37,10 @@ from typing import Protocol
 import numpy as np
 import scipy.sparse as sp
 from numpy.typing import NDArray
-from scipy.sparse.linalg import spsolve
 
 from motronics.contracts.spec.analysis_formulation import DerivativeWeights, SemiDiscreteProblem
 from motronics.contracts.spec.study_spec import TransientStudy
+from motronics.gauss.linear import solve_linear_system
 from motronics.gauss.time_integrators.factor_reuse import FactorCache
 
 logger = logging.getLogger(__name__)
@@ -206,7 +206,7 @@ def _default_solve(matrix: object, rhs: NDArray[np.floating]) -> NDArray[np.floa
     """Solve ``matrix @ x = rhs`` for a dense ndarray or a scipy-sparse jacobian (physics-blind)."""
     b = np.asarray(rhs, dtype=float)
     if sp.issparse(matrix):
-        return np.asarray(spsolve(sp.csc_matrix(matrix), b))
+        return np.asarray(solve_linear_system(sp.csc_matrix(matrix), b))
     m = np.asarray(matrix, dtype=float)
     if m.ndim == 0:  # scalar jacobian (1-DOF problem written as a plain number)
         return b / float(m)
