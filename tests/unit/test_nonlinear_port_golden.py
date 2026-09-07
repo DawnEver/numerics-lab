@@ -313,29 +313,49 @@ def _same(got, want, where: str) -> None:
     assert got == pytest.approx(want, rel=1e-15, abs=0.0), f'{where}: {got} vs frozen {want}'
 
 
+# THE XFAIL IS GONE, 2026-09-07, AND IT WENT THE WAY ITS OWN LAST SENTENCE ASKED: it said "the day
+# it agrees again this row must be deleted rather than left as a waiver nothing uses", and it
+# agrees again. Recorded here rather than in a commit message alone, because the NEGATIVE results
+# below are the part a future reader needs and no diff carries them.
+#
+# WHAT IT CLAIMED. Measured 2026-09-06 on the `integrate/main` tree: `contraction/anderson`
+# trace[3].err 13.218666157097903 vs frozen 13.21866615709789 (8.0 ULP) and trace[3].increment
+# 0.0527117739799137 vs 0.052711773979914694 (143 ULP), on the reasoning that two entries of one
+# trace drifting by 8 and 143 ULP is not noise, so the arithmetic path had changed.
+#
+# WHAT IS MEASURED NOW, on the merged tree, and it is stronger than the two entries the row cited:
+# the WORST disagreement anywhere in the golden -- every fixture, every strategy, every trace
+# field, every x -- is **0.0 ULP**. Bit-identical, including both cited values. The freeze is
+# whole again, and `nonlinear.json` was NOT regenerated: it is byte-identical to the file that
+# arrived with `integrate/main` (verified by hash across base / both parents / the merge), so
+# `rust/crates/gauss/tests/golden_nonlinear.rs` is judged against exactly the same target it was.
+# That is the thing the row was most careful to protect.
+#
+# WHAT WAS REFUTED, each by a direct file-swap experiment on this tree rather than by argument.
+# Both of the row's named suspects are wrong, and so is the obvious third:
+#
+#   * `gauss/linear/__init__.py` -- the row's PRIME SUSPECT (the singular-system residual guard on
+#     eighteen call sites). Swapped in wholesale from `integrate/main`: the golden STILL agrees.
+#   * `gauss/nonlinear/` -- `__init__.py` and `_strategies_picard.py` together, which is where the
+#     one control-flow difference between the parents lives (`if np.isfinite(prev_err)` on this
+#     lane against `elif` upstream, a change that genuinely can reach the iterates). Swapped in:
+#     STILL agrees. Note the merged tree carries UPSTREAM's `elif`, so this is not the merge having
+#     quietly undone their change -- that was checked first and is not what happened.
+#   * multithreaded BLAS nondeterminism, the classic explanation for a few-ULP spread in a
+#     least-squares reduction. Driven at OMP/OPENBLAS/MKL_NUM_THREADS of 1, 4 and 8: all three
+#     produce the frozen values exactly.
+#   * the four remaining `gauss/` files that differ between the parents (`linear/constraints.py`,
+#     `linear/gauge.py`, `time_integrators/__init__.py`, `time_integrators/factor_reuse.py`),
+#     swapped in as a group: STILL agrees.
+#
+# SO THE CAUSE IS OUTSIDE `gauss/`, which is the one thing the bisect the row asked for would have
+# had to establish and is as far as negative evidence can take it. The fixtures are built from
+# `contracts` objects, and this lane and `integrate/main` differ there too; whatever moved the
+# iterates on their tree, the merge resolved that file to a version whose arithmetic matches the
+# freeze. It is not re-opened here because there is nothing left to fix: the target is unchanged,
+# the Rust reads the same bytes, and the freeze is enforced STRICTLY again from this commit -- a
+# future drift reds on this test, with no waiver in front of it.
 @pytest.mark.unit
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        'THE PYTHON DRIFTED AT THE rust-migration MERGE, and the golden is doing its job by saying '
-        'so. MEASURED 2026-09-06 on the merged tree, `contraction/anderson`: trace[3].err '
-        '13.218666157097903 vs frozen 13.21866615709789 (1.42e-14, 8.0 ULP, against a bar of 7.4); '
-        'trace[3].increment 0.0527117739799137 vs 0.052711773979914694 (9.94e-16, 143 ULP). TWO '
-        'entries of one trace drifting by 8 and 143 ULP is not floating-point noise -- noise does '
-        'not have that spread -- so the arithmetic path changed. Prime suspect, unproven: the '
-        'merge routed every direct sparse solve through the new singular-system residual guard '
-        '(`gauss/linear/__init__.py`, eighteen call sites), and Anderson solves a least-squares '
-        'problem per step, so a reordering there reaches the iterates. '
-        'XFAILED RATHER THAN ABSORBED, deliberately, and the alternatives are worse: widening the '
-        'bar to 32 ULP was tried and a SECOND entry then failed at 143, which is a band being '
-        'loosened until the evidence disappears; and regenerating `nonlinear.json` would move the '
-        'target the RUST port is judged against (`rust/crates/gauss/tests/golden_nonlinear.rs` '
-        'reads this same file), so it must not be rewritten until someone has confirmed the Rust '
-        'still matches. THE DEBT: bisect the merge range for the commit that moved the iterates, '
-        'then either fix it or regenerate BOTH halves together. `strict=True`, so the day it '
-        'agrees again this row must be deleted rather than left as a waiver nothing uses.'
-    ),
-)
 def test_the_live_python_still_produces_the_frozen_trajectories() -> None:
     """The freeze, enforced. A behaviour change in `nonlinear/` reds HERE, not in silence.
 
