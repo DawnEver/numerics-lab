@@ -65,6 +65,7 @@ __all__ = [
     'orphan_rows',
     'pin_rows',
     'reject_unsolved_direct_system',
+    'repair_direct_solution',
     'requires_symmetric',
     'solve_equilibrated',
     'solve_linear_system',
@@ -123,6 +124,50 @@ _DIRECT_RESIDUAL_RTOL = 1e-6
 #     separation -- and the E=1e16 row (cond 7.1e17, refinement 7.0e-14) is a WELL-POSED system
 #     above 1/eps, so cond is not the discriminator in either direction.
 _DIRECT_REFINEMENT_RTOL = 1e-6
+
+# Stage 2b -- THE THIRD CATEGORY, and the guard above could not see it because it takes exactly
+# ONE step. A system can be ill-conditioned enough that one step moves the answer past the bar and
+# still be perfectly SOLVABLE: the step sequence collapses. Measured 2026-09-07 on the n=864
+# tied-contact KKT of `physics/structural/contact.py`, the system that found this:
+#
+#     step 0: ||d||/||x|| = 2.5893e-05     <- past the 1e-6 bar, so the guard refused outright
+#     step 1: ||d||/||x|| = 6.3701e-12
+#     step 2: ||d||/||x|| = 5.4032e-15
+#
+# and the answer MOVED by 9.493e-05 of itself, so the direct vector really was wrong -- the guard
+# was right to refuse it and wrong about why. Its message said "finite but meaningless ... the
+# system is singular / rank-deficient", which sends a reader looking for a missing gauge on a
+# system that has none missing. Two cheap steps produce the true solution.
+#
+# WHY THE RESIDUAL CANNOT ARBITRATE THIS: ||Ax-b||_inf sits at ~3e-09 before AND after the repair,
+# because ||A||_inf is ~9.6e+11 and round-off times that is the floor. The refinement move is the
+# only statistic that separates the three cases -- the argument the block above already makes for
+# stage 2; this only applies it more than once.
+#
+# THIS LOOSENS NOTHING. The acceptance bar is still `_DIRECT_REFINEMENT_RTOL`, unchanged, and it
+# is now demanded of the vector the caller actually receives. A system that passed before passes
+# unchanged and pays nothing (the residual trigger gates all of it). A system that was REFUSED
+# before either becomes correct -- proven by reaching the same bar -- or is refused still, with
+# the step count in the message as evidence that repair was tried.
+_DIRECT_REFINEMENT_MAX_STEPS = 4
+
+# THE CEILING ON THE REPAIR, and an escape hatch needs one rather than just a reason
+# (`.claude/rules/taste.md`). Refinement will drive ANY starting vector to the solution of a
+# solvable system, including one the backend never derived from it -- so without a ceiling the
+# repair above silently corrects a BROKEN BACKEND instead of reporting it, which is the same
+# family as a warning on an unchanged success return, minus the warning.
+#
+# THE RATIO IS WHAT PINS IT, never the value at one point. Measured 2026-09-07:
+#
+#     the real conditioning artefact  (n=864 tied-contact KKT)       first move = 2.5893e-05
+#     a backend returning garbage     (`np.ones_like(rhs)` on SPD)   first move = 9.7219e-01
+#
+# a separation of 3.76e+04 -- 4.6 decades -- and `test_high_residual_direct_solve_is_rejected`
+# PLANTS the second one, which is what caught the uncapped first draft. 1e-3 sits ~1.6 decades
+# above the artefact and ~3 below the plant, near the geometric mean (5.0e-3). Above this the
+# starting vector is not an ANSWER that conditioning spoiled; it is unrelated to the system, and
+# the refusal is the correct output.
+_DIRECT_REPAIRABLE_MAX = 1e-3
 
 
 class LinearSolveError(RuntimeError):
@@ -370,7 +415,94 @@ def direct_refinement_correction(matrix, rhs, x) -> float | None:
     return d_norm / x_norm
 
 
-def reject_unsolved_direct_system(matrix, rhs, x, backend: str) -> None:
+def repair_direct_solution(matrix, rhs, x) -> tuple[np.ndarray, tuple[float, ...]]:
+    """``x`` refined until the refinement move reaches the bar, plus the move sequence.
+
+    THE REPAIR THE GUARD'S OWN METRIC IMPLIES. :func:`reject_unsolved_direct_system` measures how
+    far one step of iterative refinement would move the answer and refuses when that exceeds
+    :data:`_DIRECT_REFINEMENT_RTOL`. For a genuinely singular system the moves do not shrink; for
+    an ill-conditioned but solvable one they collapse in one or two steps (see
+    :data:`_DIRECT_REFINEMENT_MAX_STEPS` for the measurement that found this). Taking the steps
+    turns the second case into the answer instead of a refusal.
+
+    IT ONLY EVER RESCUES A REFUSAL, and that is the property that makes it safe in a solver the
+    whole tree shares. THREE early returns leave ``x`` BIT-IDENTICAL:
+
+    * below :data:`_DIRECT_RESIDUAL_RTOL` nothing is even factorized -- only the residual the
+      guard was going to take anyway;
+    * above it, whenever the FIRST move is already inside :data:`_DIRECT_REFINEMENT_RTOL`, which
+      is the ill-conditioned-but-sound case the guard accepts;
+    * and whenever that move exceeds :data:`_DIRECT_REPAIRABLE_MAX`, i.e. the vector is not an
+      answer this system's conditioning spoiled but one unrelated to it -- a broken backend, which
+      must be reported rather than corrected.
+
+    So the set of solves whose answer this can change is a SUBSET of the set that used to raise,
+    and it is bounded at both ends by measurements rather than by a preference.
+
+    ONE FACTORIZATION FOR ALL THE STEPS, unlike :func:`direct_refinement_correction`, which takes
+    a fresh one because it is handed a vector rather than a factor. That is what makes the repair
+    cheaper than the diagnosis it replaces.
+
+    Returns ``(x, moves)``. ``moves`` is empty when the trigger never fired, and otherwise holds
+    one relative move per step attempted -- the caller passes its LAST element to the guard so the
+    verdict is taken on the returned vector without a further factorization. A non-square matrix,
+    an exactly singular factorization, or a non-finite step returns ``x`` as it came: unjudged is
+    not a pass, and the guard is what refuses.
+    """
+    residual = direct_relative_residual(matrix, rhs, x)
+    if residual is None or residual <= _DIRECT_RESIDUAL_RTOL:
+        return np.asarray(x), ()
+    shape = np.shape(matrix)
+    if len(shape) != 2 or shape[0] != shape[1]:
+        return np.asarray(x), ()
+    b = np.asarray(rhs.todense() if sp.issparse(rhs) else rhs).ravel()
+    original = np.asarray(x.todense() if sp.issparse(x) else x).ravel()
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', MatrixRankWarning)
+            factor = splu(sp.csc_matrix(matrix))
+    except (RuntimeError, MatrixRankWarning, ValueError):
+        return np.asarray(x), ()
+
+    def _step_and_move(vec):
+        step = factor.solve(b - np.asarray(matrix @ vec).ravel())
+        if not np.all(np.isfinite(step)):
+            return None, None
+        norm = float(np.linalg.norm(vec))
+        return step, (float(np.linalg.norm(step)) / norm if norm else np.inf)
+
+    step, move = _step_and_move(original)
+    if step is None:
+        return np.asarray(x), ()
+    # ILL-CONDITIONED BUT SOUND STAYS BIT-IDENTICAL, and this early return is the whole reason the
+    # change is safe to make in a shared solver. The guard ACCEPTS this category already (a large
+    # residual with a tiny refinement move is cond*eps, not a failed solve), so refining it would
+    # move an answer that was never in question -- which is exactly what the first draft of this
+    # function did, and `tests/unit/gauss/test_nonlinear_port_golden.py`'s frozen trajectories
+    # moved with it. The move is still REPORTED, so the verdict below costs no factorization.
+    # ONE DECISION WITH A WINDOW, not two: repair only a move that is BOTH past the acceptance bar
+    # and small enough to be this system's conditioning. Below `_DIRECT_REFINEMENT_RTOL` the guard
+    # already accepts the answer and refining it would move a number never in question. Above
+    # `_DIRECT_REPAIRABLE_MAX` the vector is not an answer conditioning spoiled but one unrelated
+    # to the system -- a broken backend, which must be reported rather than corrected. Outside the
+    # window `x` goes back bit-identical and the guard's verdict is exactly what it always was.
+    if move <= _DIRECT_REFINEMENT_RTOL or not move <= _DIRECT_REPAIRABLE_MAX:
+        return np.asarray(x), (move,)
+
+    moves = [move]
+    current = original + step
+    for _extra in range(_DIRECT_REFINEMENT_MAX_STEPS - 1):
+        if moves[-1] <= _DIRECT_REFINEMENT_RTOL:
+            break
+        step, move = _step_and_move(current)
+        if step is None:
+            break
+        moves.append(move)
+        current = current + step
+    return current, tuple(moves)
+
+
+def reject_unsolved_direct_system(matrix, rhs, x, backend: str, *, refinement: float | None = None) -> None:
     """Raise :class:`LinearSolveError` when a DIRECT solve did not actually solve its system.
 
     The half of the singular guard that catches FINITE garbage: SuperLU emits a
@@ -397,7 +529,11 @@ def reject_unsolved_direct_system(matrix, rhs, x, backend: str) -> None:
     residual = direct_relative_residual(matrix, rhs, x)
     if residual is None or residual <= _DIRECT_RESIDUAL_RTOL:
         return
-    correction = direct_refinement_correction(matrix, rhs, x)
+    # `refinement` IS A MEASUREMENT ALREADY TAKEN, passed in by `repair_direct_solution` so that
+    # judging a repaired vector does not pay for a third factorization. It is not a way to supply
+    # a friendlier number: the value handed in is the LAST move of the repair, i.e. the one
+    # measured on the vector being judged here, and omitting it falls back to measuring it.
+    correction = refinement if refinement is not None else direct_refinement_correction(matrix, rhs, x)
     if correction is not None and correction <= _DIRECT_REFINEMENT_RTOL:
         return  # ill-CONDITIONED, not unsolved: the residual is cond*eps, the answer is sound.
     n = int(np.shape(matrix)[0])
@@ -451,7 +587,12 @@ def solve_linear_system(
     # already raise on a non-zero convergence ``info`` and asserting their (looser) residual
     # here would clash with their own stop criterion.
     if name in ('direct', 'pardiso'):
-        reject_unsolved_direct_system(matrix, rhs, x, name)
+        # REPAIR, THEN JUDGE, both against the same unchanged bar. `repair_direct_solution` returns
+        # `x` untouched unless the residual trigger fires, so this is free for every solve that
+        # passes today; when it does fire, the steps it takes are the ones the verdict below was
+        # going to measure anyway.
+        x, moves = repair_direct_solution(matrix, rhs, x)
+        reject_unsolved_direct_system(matrix, rhs, x, name, refinement=moves[-1] if moves else None)
     return x
 
 
@@ -471,6 +612,22 @@ def solve_equilibrated(matrix, rhs):
     WORSE than the unscaled one (2026-09-06, componentwise 4.6e-7 vs 1.0e-7). The synthetic
     fixture did not reproduce the defect, which is itself the finding: the loss depends on the
     operator, not on a row-scale histogram.
+
+    AND ON A REAL OPERATOR IT LOSES BADLY, which is the sharper half and was found by
+    over-applying this function. 2026-09-07, on the assembled tied-contact KKT of
+    `physics/structural/contact.py`: ||Ax-b||_inf went 5.24e-10 -> 1.47e-09 (relative 2.62e-05 ->
+    7.35e-05) and the solution vector moved 9.09e-07, which is not round-off. Two displacement
+    comparisons in that physics' unit file reddened and were right to. The operator is an
+    INDEFINITE saddle point with a zero block -- the very shape the `|diag|`-before-`sqrt` and
+    the no-diagonal-row passthrough below make LEGAL, and legal is not the same as better. That
+    site now takes :func:`solve_linear_system` instead.
+
+    Its sibling `physics/structural/harmonic.py` measured the OPPOSITE on the same day
+    (||Ax-b||_inf 3.48e-09 -> 3.12e-09, answer unchanged to 4e-11 relative) and keeps the
+    scaling. So the reading to take from all three measurements is: THE GUARD IS THE
+    REQUIREMENT, THE SCALING IS A PER-SITE CLAIM. `solve_linear_system` is what a caller owes;
+    reaching for this one is a statement about a particular operator and has to be measured on
+    THAT operator, never inherited from a neighbour.
 
     WHAT IS MEASURED, on the real operator: `cases/study/field/benchmark/rotor_stress`'s
     overspeed/rated peak-hoop ratio, a quantity in which every discretization error cancels by
