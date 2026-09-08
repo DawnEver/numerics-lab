@@ -313,51 +313,79 @@ def _same(got, want, where: str) -> None:
     assert got == pytest.approx(want, rel=1e-15, abs=0.0), f'{where}: {got} vs frozen {want}'
 
 
-# THE XFAIL IS GONE, 2026-09-07, AND IT WENT THE WAY ITS OWN LAST SENTENCE ASKED: it said "the day
-# it agrees again this row must be deleted rather than left as a waiver nothing uses", and it
-# agrees again. Recorded here rather than in a commit message alone, because the NEGATIVE results
-# below are the part a future reader needs and no diff carries them.
-#
-# WHAT IT CLAIMED. Measured 2026-09-06 on the `integrate/main` tree: `contraction/anderson`
-# trace[3].err 13.218666157097903 vs frozen 13.21866615709789 (8.0 ULP) and trace[3].increment
-# 0.0527117739799137 vs 0.052711773979914694 (143 ULP), on the reasoning that two entries of one
-# trace drifting by 8 and 143 ULP is not noise, so the arithmetic path had changed.
-#
-# WHAT IS MEASURED NOW, on the merged tree, and it is stronger than the two entries the row cited:
-# the WORST disagreement anywhere in the golden -- every fixture, every strategy, every trace
-# field, every x -- is **0.0 ULP**. Bit-identical, including both cited values. The freeze is
-# whole again, and `nonlinear.json` was NOT regenerated: it is byte-identical to the file that
-# arrived with `integrate/main` (verified by hash across base / both parents / the merge), so
-# `rust/crates/gauss/tests/golden_nonlinear.rs` is judged against exactly the same target it was.
-# That is the thing the row was most careful to protect.
-#
-# WHAT WAS REFUTED, each by a direct file-swap experiment on this tree rather than by argument.
-# Both of the row's named suspects are wrong, and so is the obvious third:
-#
-#   * `gauss/linear/__init__.py` -- the row's PRIME SUSPECT (the singular-system residual guard on
-#     eighteen call sites). Swapped in wholesale from `integrate/main`: the golden STILL agrees.
-#   * `gauss/nonlinear/` -- `__init__.py` and `_strategies_picard.py` together, which is where the
-#     one control-flow difference between the parents lives (`if np.isfinite(prev_err)` on this
-#     lane against `elif` upstream, a change that genuinely can reach the iterates). Swapped in:
-#     STILL agrees. Note the merged tree carries UPSTREAM's `elif`, so this is not the merge having
-#     quietly undone their change -- that was checked first and is not what happened.
-#   * multithreaded BLAS nondeterminism, the classic explanation for a few-ULP spread in a
-#     least-squares reduction. Driven at OMP/OPENBLAS/MKL_NUM_THREADS of 1, 4 and 8: all three
-#     produce the frozen values exactly.
-#   * the four remaining `gauss/` files that differ between the parents (`linear/constraints.py`,
-#     `linear/gauge.py`, `time_integrators/__init__.py`, `time_integrators/factor_reuse.py`),
-#     swapped in as a group: STILL agrees.
-#
-# SO THE CAUSE IS OUTSIDE `gauss/`, which is the one thing the bisect the row asked for would have
-# had to establish and is as far as negative evidence can take it. The fixtures are built from
-# `contracts` objects, and this lane and `integrate/main` differ there too; whatever moved the
-# iterates on their tree, the merge resolved that file to a version whose arithmetic matches the
-# freeze. It is not re-opened here because there is nothing left to fix: the target is unchanged,
-# the Rust reads the same bytes, and the freeze is enforced STRICTLY again from this commit -- a
-# future drift reds on this test, with no waiver in front of it.
 @pytest.mark.unit
 def test_the_live_python_still_produces_the_frozen_trajectories() -> None:
     """The freeze, enforced. A behaviour change in `nonlinear/` reds HERE, not in silence.
+
+    THE XFAIL IS GONE AGAIN, AND THIS TIME THE FLAP ITSELF WAS MEASURED, which is the only thing
+    that makes a third deletion different from the first two. What follows is the
+    measurement rather than the guess -- because the row's own unpaid debt was "WHY it drifted then
+    and agrees now", and half of that is now answered by elimination.
+
+    MEASURED 2026-09-07, `_build()` called directly:
+
+    * NOT the BLAS thread count. `OMP/MKL/OPENBLAS/NUMEXPR_NUM_THREADS` at 1, 2 and 12 all give
+      13.218666157097903, bit-identical. The reduction-order hypothesis is REFUTED, which matters
+      because `805cea9c5` capped those pools the same day and was the obvious suspect.
+    * NOT the `feat/rust-rootcause` merge. Reverting `gauss/nonlinear/` to the pre-merge tree gives
+      the same value, and so does reverting ALL of `src/motronics/gauss/` to `9eb717d8d` -- the very
+      commit whose measurement this docstring used to cite for agreement.
+
+    So the drift is NOT IN `gauss/`, and that is the finding: this file freezes `nonlinear/`, and
+    the thing moving the trajectory sits BELOW it (`core`, `contracts`, or the numpy/scipy build).
+    A guard that reds for a change outside the scope it names cannot be read as scoping that change.
+
+    HOW THE DELETION COULD HAVE BEEN HONEST AND STILL WRONG, offered as the checkable hypothesis it
+    is rather than as fact: `MOTRONICS_REGEN_PORT_GOLDENS=1` makes this function REWRITE
+    `nonlinear.json` from the live build and skip. A run with the var set leaves a golden on disk
+    that agrees by construction, and the next run without it XPASSES -- exactly the observation the
+    deleted row cited. The regenerated file was then never committed (`git show` on both merge
+    parents gives byte-identical `13.21866615709789`), so the repo kept the old golden and the drift
+    returned the moment anyone else looked. Nothing here confirms that this is what happened; it is
+    the one mechanism that produces that observation from this tree.
+
+    WHY IT WENT UNSEEN FOR A DAY: the gates that ran between are reach-selected, and this file was
+    outside the 51- and 415-path selections. It surfaced on the 730-path selection the merge widened
+    the reach to. A red nobody selected is not a red anybody saw.
+
+    THE `strict=True` XFAIL IS DELETED, on the condition its own reason set: "the day it agrees
+    again this row must be deleted rather than left as a waiver nothing uses." It agreed.
+
+    That reason recorded a real drift -- `contraction/anderson` trace[3].err at 8.0 ULP against a
+    bar of 7.4, and trace[3].increment at 143 ULP -- and named the ONE thing that had to be
+    established before the golden could be trusted again: "it must not be rewritten until someone
+    has confirmed the Rust still matches". MEASURED 2026-09-06, both halves, at `9eb717d8d`:
+
+    * the live Python walks the frozen trajectories -- this test XPASSES, deterministically, alone
+      and under the whole `tests/unit/gauss` selection, so it is not a selection or ordering
+      artefact;
+    * `cargo test -p gauss --test golden_nonlinear` is 4/4 on the SAME `nonlinear.json`, including
+      `every_strategy_walks_the_python_trajectory_on_every_fixture`.
+
+    So both sides agree with the frozen file and nothing was regenerated -- the golden the Rust
+    port is judged against is byte-identical to the one that carried the drift. Nothing here
+    loosens a bar: the `rel=1e-15` comparison below is untouched, and a strict xfail that passes is
+    a red, so leaving the row would have been the waiver its own text refuses.
+
+    THE ROW CAME BACK ON 2026-09-07 (`d657526a1`, "the anderson drift never went away, at the
+    identical 8.00 ULP") AND IS DELETED AGAIN HERE, on the 2026-09-08 merge of `origin/integrate
+    /main` into `feat/structural`. Three deletions of one row is a flap, so this pass measured the
+    flap instead of only the row, and it narrows the unpaid debt above rather than restating it:
+
+    * NOT worker-dependent, which was the standing hypothesis and is now refused. 8.00 ULP is the
+      size of a floating-point associativity difference, so a reduction order varying with the
+      xdist worker count would have explained every observation. It does not: the merged tree
+      XPASSES both under `-n auto` (gw2) and under `--serial` (`-n0`), 1.73 s, 3 passed 1 failed
+      where the failure IS the XPASS.
+    * TREE-dependent, and both branches were right about their own tip. `integrate/main` carried
+      the drift when `d657526a1` measured it; this merge does not. The row's own author predicted
+      the mechanism -- "the fixtures are built from `contracts` objects, and this lane and
+      `integrate/main` differ there too" -- so the cause is localized to that difference and no
+      longer needs a bisect of the whole merge range.
+
+    STILL NOT ESTABLISHED: which `contracts` change moves the iterates. That is a narrower
+    question than the one left in 2026-09-06 and it is still open; what is settled is that the
+    answer is not in the harness.
 
     Tolerance is `1e-15` relative: the golden is the same code on the same platform, so the only
     admissible difference is JSON's own round-trip, and `repr`-precision floats round-trip exactly.

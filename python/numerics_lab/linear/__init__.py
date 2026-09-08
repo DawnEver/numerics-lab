@@ -64,6 +64,7 @@ __all__ = [
     'make_preconditioner',
     'orphan_rows',
     'pin_rows',
+    'reject_nonfinite_solution',
     'reject_unsolved_direct_system',
     'repair_direct_solution',
     'requires_symmetric',
@@ -189,7 +190,20 @@ class LinearSolver(Protocol):
     def __call__(self, matrix, rhs: np.ndarray, *, x0: np.ndarray | None = None, M=None) -> np.ndarray: ...
 
 
-def _check_finite(x: np.ndarray, backend: str) -> np.ndarray:
+def reject_nonfinite_solution(x: np.ndarray, backend: str) -> np.ndarray:
+    """Raise :class:`LinearSolveError` when a solve returned inf/NaN; return ``x`` unchanged otherwise.
+
+    PUBLIC since 2026-09-06, and the rename is the point. It was `_check_finite`, private to this
+    module and reached from exactly one line -- so the cheapest half of the singular guard was
+    unavailable to `gauss.time_integrators.factor_reuse`, whose cache HIT path returned
+    back-substitution output entirely unjudged. Its expensive sibling
+    :func:`reject_unsolved_direct_system` needs the MATRIX and a hit deliberately does not build
+    one; this needs only the answer.
+
+    THE PRICE, as a RATIO rather than a value: ``O(n)`` against a back-substitution the caller has
+    already paid at ``O(n^2)`` dense / ``O(nnz)`` sparse. That ratio is why this guard is
+    affordable exactly where the residual one is not.
+    """
     if not np.all(np.isfinite(x)):
         msg = (
             f'linear solver {backend!r} produced a non-finite solution (singular system or breakdown); '
@@ -277,7 +291,7 @@ def _pardiso(matrix, rhs, *, x0=None, M=None):  # noqa: ARG001 -- the direct-sha
 
     The direct counterpart of scipy's single-threaded SuperLU: PARDISO threads the
     factorization, the same gap laplace has vs MATLAB today (whose sparse LU threads).
-    The singular guard rides with the caller's ``_check_finite`` + the relative-residual
+    The singular guard rides with the caller's :func:`reject_nonfinite_solution` + the relative-residual
     belt (extended to this name in :func:`solve_linear_system`), exactly like ``direct``.
     """
     return _pardiso_spsolve(matrix, rhs)
@@ -507,7 +521,7 @@ def reject_unsolved_direct_system(matrix, rhs, x, backend: str, *, refinement: f
 
     The half of the singular guard that catches FINITE garbage: SuperLU emits a
     :class:`MatrixRankWarning` on a zero pivot and then returns either NaNs (the belt and
-    :func:`_check_finite` catch those) or a finite vector that does not satisfy ``A x = b`` at all.
+    :func:`reject_nonfinite_solution` catch those) or a finite vector that does not satisfy ``A x = b``.
     Measured on the production CLI at ``lipo_inductor --mesh-size 6mm``: order 157, condition
     estimate 1.5e17, relative residual **1.6e+01**.
 
@@ -579,7 +593,7 @@ def solve_linear_system(
     name = linear_solver or 'direct'
     backend = get_linear_solver(linear_solver)
     M = make_preconditioner(preconditioner, matrix) if linear_solver not in (None, 'direct') else None
-    x = _check_finite(np.asarray(backend(matrix, rhs, x0=x0, M=M)), name)
+    x = reject_nonfinite_solution(np.asarray(backend(matrix, rhs, x0=x0, M=M)), name)
     # Direct-solve residual guard (suspenders to _direct's MatrixRankWarning belt): a singular
     # factorization can return a FINITE vector that does not satisfy A x = b. Reject a large
     # relative residual so such a solve raises rather than reporting garbage as ``status=ok``.

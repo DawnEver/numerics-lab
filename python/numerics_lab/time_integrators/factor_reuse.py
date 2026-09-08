@@ -26,7 +26,16 @@ The counters ARE the verification surface: ``factorizations`` and ``solves`` are
 calls (measured bit-equal on 200 random 5x5 systems), and ``splu`` is the SuperLU call ``spsolve``
 makes -- so a hit returns the same bits the uncached solve would have.
 
-WHAT A HIT IS NOT JUDGED BY, AND WHAT THAT COSTS. A MISS holds the matrix it just built, so it
+WHAT A HIT *IS* JUDGED BY, added 2026-09-06: FINITENESS, via
+:func:`~motronics.gauss.linear.reject_nonfinite_solution`. A hit used to return back-substitution
+output entirely unchecked, so an inf/NaN answer from a reused factor left this class silently --
+the exact shape ``invariant.md`` forbids ("never silently wrong"). The reason it was missing is
+that the guard's cheap half had no public spelling: it was ``gauss.linear._check_finite``, private
+and reached from one line. THE PRICE IS A RATIO, not a value: ``O(n)`` against a back-substitution
+already paid at ``O(n^2)`` dense / ``O(nnz)`` sparse, which is why this one is affordable on a hit
+where the residual guard below is not.
+
+WHAT A HIT IS STILL NOT JUDGED BY, AND WHAT THAT COSTS. A MISS holds the matrix it just built, so it
 judges the answer against it: :func:`~motronics.gauss.linear.reject_unsolved_direct_system`, the
 same two-stage guard ``gauss.linear``'s ``direct`` uses, on the same bars. A HIT does not, and
 that is the whole point of a hit -- so it is NOT judged, deliberately and at a measured price.
@@ -61,7 +70,7 @@ from numpy.typing import NDArray
 from scipy.linalg import lu_factor, lu_solve
 from scipy.sparse.linalg import splu
 
-from motronics.gauss.linear import reject_unsolved_direct_system
+from motronics.gauss.linear import reject_nonfinite_solution, reject_unsolved_direct_system
 
 __all__ = ['FactorCache']
 
@@ -118,12 +127,23 @@ class FactorCache:
         self.solves += 1
         b = np.asarray(rhs, dtype=float)
         if key is not None and key == self._key:
-            return np.asarray(self._apply(self._factor, b), dtype=float)
+            # THE HALF OF THE GUARD A HIT CAN AFFORD. The residual guard below needs the matrix and
+            # a hit exists precisely so it is never built; finiteness needs only the answer, at
+            # O(n) against a back-substitution already paid at O(n^2)/O(nnz). A stale-but-FINITE
+            # factor is still the key's problem (the NAMED HOLE above) -- this closes the inf/NaN
+            # disguise, which was returning silently, and claims nothing about the other one.
+            return reject_nonfinite_solution(np.asarray(self._apply(self._factor, b), dtype=float), _BACKEND)
         matrix = build_matrix()
         self._factor = self._factor_of(matrix)
         if key is not None:
             self._key = key
         self.factorizations += 1
+        # THE MISS IS DELIBERATELY *NOT* FINITENESS-CHECKED FIRST. It has the matrix, so
+        # `reject_unsolved_direct_system` below can name the ORDER and both statistics -- and
+        # `tests/unit/gauss/test_a_singular_march_is_refused_where_it_is_factored.py` pins exactly
+        # that. Measured 2026-09-06: adding the cheap check here fired first on a singular MNA and
+        # replaced a refusal naming n and the residual with one naming neither. A guard that
+        # preempts a better-informed guard is a regression even when it refuses the same system.
         x = np.asarray(self._apply(self._factor, b), dtype=float)
         # THE MISS IS WHERE THE MATRIX IS IN HAND, so it is the only place the guard is affordable
         # -- see "WHAT A HIT IS NOT JUDGED BY" in the module docstring. A SCALAR jacobian is not a
