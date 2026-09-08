@@ -26,6 +26,30 @@ The counters ARE the verification surface: ``factorizations`` and ``solves`` are
 calls (measured bit-equal on 200 random 5x5 systems), and ``splu`` is the SuperLU call ``spsolve``
 makes -- so a hit returns the same bits the uncached solve would have.
 
+WHAT A HIT *IS* JUDGED BY, added 2026-09-06: FINITENESS, via
+:func:`~motronics.gauss.linear.reject_nonfinite_solution`. A hit used to return back-substitution
+output entirely unchecked, so an inf/NaN answer from a reused factor left this class silently --
+the exact shape ``invariant.md`` forbids ("never silently wrong"). The reason it was missing is
+that the guard's cheap half had no public spelling: it was ``gauss.linear._check_finite``, private
+and reached from one line. THE PRICE IS A RATIO, not a value: ``O(n)`` against a back-substitution
+already paid at ``O(n^2)`` dense / ``O(nnz)`` sparse, which is why this one is affordable on a hit
+where the residual guard below is not.
+
+WHAT A HIT IS STILL NOT JUDGED BY, AND WHAT THAT COSTS. A MISS holds the matrix it just built, so it
+judges the answer against it: :func:`~motronics.gauss.linear.reject_unsolved_direct_system`, the
+same two-stage guard ``gauss.linear``'s ``direct`` uses, on the same bars. A HIT does not, and
+that is the whole point of a hit -- so it is NOT judged, deliberately and at a measured price.
+MEASURED 2026-09-06 through the production CLI over seven ``cases/network/circuit`` nodes:
+595,898 solves, of which 211,388 (35%) were hits, and 123,208 of ``class_e``'s 129,749 (95%).
+Judging a hit means calling ``build_matrix()`` for it, i.e. reinstating on a third of every
+circuit march exactly the work this class exists to remove; that is not a guard, it is a deletion
+of the feature. What makes the gap narrow rather than convenient is that the cache starts EMPTY:
+the first solve of any march is a miss, so a system that is singular from the start is refused
+before any hit can back-substitute against it. Pinned in
+``tests/unit/gauss/test_a_singular_march_is_refused_where_it_is_factored.py``. What is NOT covered
+is a matrix that becomes singular WITHOUT moving its key -- which is the NAMED HOLE below in a
+different costume, and has the same owner: the key.
+
 NAMED HOLE: the cache trusts the key exactly as it trusts ``residual`` / ``jacobian``. A key that
 under-reads the jacobian's inputs (say, one that ignores a device state the tangent depends on)
 reuses a STALE factor and silently solves the wrong system. That failure class is pinned on the
@@ -46,7 +70,13 @@ from numpy.typing import NDArray
 from scipy.linalg import lu_factor, lu_solve
 from scipy.sparse.linalg import splu
 
+from motronics.gauss.linear import reject_nonfinite_solution, reject_unsolved_direct_system
+
 __all__ = ['FactorCache']
+
+#: The name the guard's refusal message reports, so a reader lands on THIS seam rather than on
+#: ``gauss.linear``'s ``direct``, which never ran.
+_BACKEND = 'factor_reuse'
 
 #: Sentinel for 'no factorization cached yet' -- distinct from every legitimate key, None included.
 _EMPTY = object()
@@ -60,7 +90,10 @@ class FactorCache:
     * ``solves`` -- every ``solve(...)`` call, hit or miss;
     * ``factorizations`` -- the misses (a matrix was actually built and factored);
     * ``reuses`` -- the hits (back-substitution only). ``solves == factorizations + reuses``
-      always, by construction.
+      always, by construction;
+    * ``judged`` -- the misses whose answer was put to the residual guard. It is BELOW
+      ``factorizations`` by exactly the scalar-jacobian misses, which the direct guard's statistic
+      cannot speak about; quoting ``factorizations`` as the guarded count would overstate it.
 
     The cache holds exactly ONE factorization: the march's working set is the current step form,
     so a deeper cache would buy nothing -- a key that returns after leaving (an event rollback
@@ -70,6 +103,7 @@ class FactorCache:
     def __init__(self) -> None:
         self.solves = 0
         self.factorizations = 0
+        self.judged = 0
         self._key: Hashable | object = _EMPTY
         self._factor: object = None
 
@@ -93,13 +127,34 @@ class FactorCache:
         self.solves += 1
         b = np.asarray(rhs, dtype=float)
         if key is not None and key == self._key:
-            return np.asarray(self._apply(self._factor, b), dtype=float)
+            # THE HALF OF THE GUARD A HIT CAN AFFORD. The residual guard below needs the matrix and
+            # a hit exists precisely so it is never built; finiteness needs only the answer, at
+            # O(n) against a back-substitution already paid at O(n^2)/O(nnz). A stale-but-FINITE
+            # factor is still the key's problem (the NAMED HOLE above) -- this closes the inf/NaN
+            # disguise, which was returning silently, and claims nothing about the other one.
+            return reject_nonfinite_solution(np.asarray(self._apply(self._factor, b), dtype=float), _BACKEND)
         matrix = build_matrix()
         self._factor = self._factor_of(matrix)
         if key is not None:
             self._key = key
         self.factorizations += 1
-        return np.asarray(self._apply(self._factor, b), dtype=float)
+        # THE MISS IS DELIBERATELY *NOT* FINITENESS-CHECKED FIRST. It has the matrix, so
+        # `reject_unsolved_direct_system` below can name the ORDER and both statistics -- and
+        # `tests/unit/gauss/test_a_singular_march_is_refused_where_it_is_factored.py` pins exactly
+        # that. Measured 2026-09-06: adding the cheap check here fired first on a singular MNA and
+        # replaced a refusal naming n and the residual with one naming neither. A guard that
+        # preempts a better-informed guard is a regression even when it refuses the same system.
+        x = np.asarray(self._apply(self._factor, b), dtype=float)
+        # THE MISS IS WHERE THE MATRIX IS IN HAND, so it is the only place the guard is affordable
+        # -- see "WHAT A HIT IS NOT JUDGED BY" in the module docstring. A SCALAR jacobian is not a
+        # system the direct guard can speak about (``matrix @ x`` is not a matvec), and a divide
+        # by an exactly-zero scalar already yields inf/nan the caller sees; it is skipped rather
+        # than forced through a statistic that would be 0/0.
+        shape = np.shape(matrix)
+        if len(shape) == 2 and shape[0] == shape[1]:
+            self.judged += 1
+            reject_unsolved_direct_system(matrix, b, x, _BACKEND)
+        return x
 
     @staticmethod
     def _factor_of(matrix: object) -> object:

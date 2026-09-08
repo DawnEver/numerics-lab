@@ -16,6 +16,7 @@ This module drives the iterate only; it never assembles physics or touches a mes
 
 from __future__ import annotations
 
+import itertools
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -45,6 +46,7 @@ __all__ = [
     'NuRelaxationDampedPicardStrategy',
     'PicardStrategy',
     'get_strategy',
+    'increment_ratio',
     'strategy_requires',
     'strategy_runs_on',
     'with_time_budget',
@@ -349,7 +351,14 @@ def _has_converged(
     That failure mode is a property of the ENERGY CRITERION, not of any one strategy. It was
     previously guarded inside :class:`DampedPicardStrategy` alone, and even there only behind
     ``if ratcheted`` -- so it did not fire on an undamped run of the very strategy that owned it,
-    and the other eleven strategies never had it. Hence one function, consulted by all of them.
+    and the other eleven strategies never had it. Hence one function.
+
+    "CONSULTED BY ALL OF THEM" IS A CLAIM, AND IT WAS FALSE FOR TWO YEARS OF READERS UNTIL
+    2026-09-06. `nu-damped` -- the FEA DEFAULT -- judged on its own energy/flux pair and never
+    called this, and `continuation` is an outer driver that delegates. The first is now fixed and
+    the second is exempt by kind; both are DECLARED in
+    `tests/architecture/domain/test_every_iteration_strategy_consults_the_one_rule.py`, which reads
+    the registry rather than a list, so the sentence above is a fact a test enforces and not prose.
 
     The second half is the direct fixed-point test ``x_next == x``, immune to a flat-but-wrong
     energy plateau, on the step the strategy is ABOUT to take. It costs nothing: every strategy has
@@ -394,6 +403,10 @@ class _StagnationWatch:
 
     A sliding window, so "K consecutive" costs no explicit reset: one step over rtol (or one
     wandering increment) sits INSIDE the window and blocks the break until it has aged out.
+
+    STATIONARITY IS A BAND *AND* A TREND, and it used to be only the band -- see `observe` for the
+    measured creep that slipped through: an increment rising 0.7% a step stays inside a 2x band for
+    a hundred iterations while diverging, and the break called it converged.
     """
 
     def __init__(self, rtol_energy_pct: float, window: int = _STAGNATION_WINDOW) -> None:
@@ -412,7 +425,88 @@ class _StagnationWatch:
             return False
         lo = min(self._increments)
         hi = max(self._increments)
-        return hi <= _STAGNATION_MAX_MIN_RATIO * max(lo, 1e-300)
+        if hi > _STAGNATION_MAX_MIN_RATIO * max(lo, 1e-300):
+            return False
+        # STATIONARY IS NOT THE SAME AS INSIDE A BAND, and the max/min test alone cannot tell them
+        # apart: an increment CREEPING UP by 0.7% a step stays inside a 2x band for 100 iterations
+        # while diverging the whole time. MEASURED 2026-09-06 on `ipm_uv_cummins mec:quad` --
+        # 1.91e-3 -> 2.05e-3 across ten steps, band ratio 1.07, and the break fired and returned
+        # `converged = True` at 20x the increment bar. This is the "declaration that lies" shape in
+        # the docstring above: it says STATIONARY and tested only a band.
+        half = len(self._increments) // 2
+        early = sum(itertools.islice(self._increments, half)) / half
+        late = sum(itertools.islice(self._increments, len(self._increments) - half, None)) / half
+        return late <= early
+
+
+#: Consecutive steps of a RISING increment before the iterate is damped on the increment alone.
+#: Symmetric with :data:`_ALPHA_CALM_STEPS` on purpose: the same amount of evidence that licenses a
+#: recovery licenses a damping, so neither direction is cheaper to trigger than the other. One step
+#: is not enough -- an increment jitters -- and the measured blow-out rose monotonically for ten.
+_INCREMENT_RISE_STEPS = 3
+
+
+class _IncrementTrend:
+    """What the ITERATE says about the step size -- the channel the ENERGY goes deaf on.
+
+    THE ONE REGISTRY for "what should alpha do?" when the energy has nothing to say, consulted by
+    every damped Picard leg instead of each spelling its own half of it.
+
+    Both alpha SHRINK ratchets are gated on ``meaningful`` (``err >= rtol_energy_pct``) and that is
+    right and measured: under the tolerance the energy delta's SIGN is floating-point noise, and a
+    noise-driven shrink is what pinned alpha at 0.108 on ipm_uv_cummins. But the recovery leg then
+    read the SAME deaf channel and drew the opposite conclusion from the same silence, so on an
+    energy plateau alpha grew every ``_ALPHA_CALM_STEPS`` with nothing able to object.
+
+    MEASURED 2026-09-06 through ``python -m motronics run cases/field/pm/ipm_uv_cummins --select
+    mec,quad --max-num-iter 600``, the `[sparse]` leg on `picard-damped`. At iteration 119 the
+    increment was falling steadily toward the 1e-4 bar (2.03e-4 -> 1.95e-4 -> 1.89e-4) at alpha
+    0.137. Recovery raised alpha to 0.205 then 0.308 and the increment blew out ~20x (3.70e-4 ->
+    7.59e-4 -> 1.40e-3 -> 3.91e-3) until the damage finally reached the ENERGY and re-armed a
+    shrink. At the production cap of 100 the solve stops inside that cycle and reports
+    ``converged = False`` on an iterate that was, twenty iterations earlier, nearly converged.
+
+    BOTH DIRECTIONS, and blocking the growth alone was measured to be half a fix: with only
+    :meth:`permits_growth` the same run parked at alpha 0.150 with the increment creeping UP
+    (1.91e-3 -> 2.05e-3 over ten steps) -- no longer cycling, still not contracting, and nothing
+    left that could move alpha, because the energy is deaf and the recovery gate only ever refuses.
+    So a SUSTAINED rise damps: :meth:`claim_damping` is the increment's own overshoot signal, the
+    exact counterpart of ``err > prev_err`` for a plateau where ``err`` cannot express it.
+
+    ASYMMETRIC EVIDENCE ON PURPOSE. One non-contracting step is enough to REFUSE a growth (refusing
+    costs a solve nothing but iterations at the current step size); ``_INCREMENT_RISE_STEPS``
+    consecutive rises are required to force a shrink (shrinking is what over-damping is made of).
+    """
+
+    def __init__(self) -> None:
+        self._last: float | None = None
+        self._rising = 0
+
+    def observe(self, increment: float, /) -> None:
+        """Record this step's increment. Called once per iteration, after it is computed."""
+        increment = float(increment)
+        self._rising = self._rising + 1 if self._last is not None and increment > self._last else 0
+        self._last = increment
+
+    def permits_growth(self) -> bool:
+        """May alpha grow? Only while the last step did not move the iterate MORE than the one before.
+
+        No history reads as permission: refusing a recovery for want of evidence would throttle
+        every solve's first steps, which is the crawl the recovery leg exists to remove.
+        """
+        return self._rising == 0
+
+    def claim_damping(self) -> bool:
+        """Has the increment risen for ``_INCREMENT_RISE_STEPS`` running? CONSUMES the demand.
+
+        Consuming is what makes one sustained rise cost ONE shrink rather than one per step for as
+        long as the rise lasts -- an unconsumed demand would drive alpha to its floor in three more
+        iterations, which is precisely the over-damping the `meaningful` guard was added to stop.
+        """
+        if self._rising < _INCREMENT_RISE_STEPS:
+            return False
+        self._rising = 0
+        return True
 
 
 def increment_ratio(x: np.ndarray, x_next: np.ndarray, /) -> float:
@@ -439,12 +533,18 @@ def _energy_flux_convergence(
 ) -> tuple[float, float, bool]:
     """Energy-AND-flux convergence test (fraction of a percent each), both below tolerance to pass.
 
-    A private copy of ``hamilton.discretizations.fem._post._check_convergence``'s formula -- NOT an
-    import of it: ``gauss`` sits BELOW ``hamilton`` in the dependency arrow (``hamilton -> ... ->
-    gauss -> core -> contracts``), so this module cannot import from ``hamilton`` without inverting
-    it. :class:`NuRelaxationDampedPicardStrategy` needs this two-metric check (not the single-metric
+    THE ONLY COPY, since 2026-09-06. It began as a copy of
+    ``hamilton.discretizations.fem._post._check_convergence`` -- NOT an import of it, because
+    ``gauss`` sits BELOW ``hamilton`` in the dependency arrow (``hamilton -> ... -> gauss -> core
+    -> contracts``) and cannot import upward. That original had zero callers and was deleted in the
+    commit that fixed the rule below it: two copies of a convergence test, one of them dead, is the
+    drift this docstring used to only warn about, and it became concrete the moment the live one
+    gained an iterate test the dead one would never have received.
+
+    :class:`NuRelaxationDampedPicardStrategy` needs this two-metric check (not the single-metric
     :func:`_energy_error_pct` the other strategies use) to reproduce the removed FEA frozen loop's
-    exact convergence test verbatim.
+    exact test. It is a NECESSARY condition there, not a sufficient one: neither metric can see a
+    redistribution that leaves ``max|x|`` alone, so the strategy ANDs it with :func:`_has_converged`.
     """
     if last_energy is None or last_flux is None:
         return np.inf, np.inf, False

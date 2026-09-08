@@ -1,0 +1,19 @@
+[package]
+name = "gauss"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# Mirrors `src/motronics/gauss/` -- the physics-free numerical runtime. The Python arrow puts
+# gauss below hamilton and above core, so this crate may depend on `core_num` and `contracts`
+# and on nothing else in the workspace. Enforced by crates/contracts/tests/crate_dag.rs.
+[dependencies]
+contracts.workspace = true
+core_num.workspace = true
+# Direct sparse LU (ruling D4 -- scipy may be replaced). Pure Rust, no SuiteSparse build step.
+# It is faer that raises the workspace rust-version floor to 1.84; see ../../Cargo.toml.
+faer = { version = "0.24.4", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+serde_json = { version = "1", features = ["float_roundtrip"] }

@@ -35,10 +35,12 @@ from scipy.sparse.linalg import (
     minres,
     qmr,
     spilu,
+    splu,
     spsolve,
 )
 
 from motronics.gauss.linear.dirichlet import apply_dirichlet_triplets
+from motronics.gauss.linear.gauge import gauge_pin_orphan_rows, orphan_rows
 from motronics.gauss.linear.pin_rows import pin_rows
 from motronics.gauss.linear.ssor import ssor_preconditioner
 
@@ -55,9 +57,15 @@ __all__ = [
     'LinearSolveError',
     'LinearSolver',
     'apply_dirichlet_triplets',
+    'direct_refinement_correction',
+    'direct_relative_residual',
+    'gauge_pin_orphan_rows',
     'get_linear_solver',
     'make_preconditioner',
+    'orphan_rows',
     'pin_rows',
+    'reject_nonfinite_solution',
+    'reject_unsolved_direct_system',
     'requires_symmetric',
     'solve_linear_system',
     'ssor_preconditioner',
@@ -70,12 +78,51 @@ _KRYLOV_RTOL = 1e-10
 _KRYLOV_ATOL = 0.0
 _KRYLOV_MAXITER_FACTOR = 4  # maxiter = factor * n, a generous ceiling before declaring non-convergence
 
-# Direct-solve singular guard: even when SuperLU returns a FINITE vector for an (exactly or
-# numerically) singular system -- while emitting a MatrixRankWarning -- the relative residual
-# ||A x - b|| / ||b|| is large. We reject above this tolerance so a rank-deficient reluctance
-# network fails honestly instead of shipping garbage as ``status=ok``. The bound is loose (1e-6)
-# so a well-conditioned direct factorization (residual ~ machine eps) always passes.
+# Direct-solve singular guard, in TWO stages. The residual is the TRIGGER, never the verdict.
+#
+# ``||A x - b|| / ||b||`` is NOT a failure statistic: it tracks the CONDITION NUMBER of a
+# perfectly good solve. Measured on the CST patch test (n=60), sweeping only Young's modulus --
+# which changes the scaling of A and nothing else -- against the exact linear field:
+#
+#     E        cond(A)     ||Ax-b||/||b||   max err vs exact
+#     1.0      1.36e+01       3.87e-16          4.3e-19
+#     1e6      1.10e+07       4.17e-10          4.4e-17
+#     1e9      1.10e+10       2.64e-07          5.5e-17
+#     210e9    2.31e+12       1.13e-04          2.0e-17   <- steel, real SI properties
+#     1e15     1.62e+16       2.41e-01          -
+#
+# The ANSWER is exact at every scale; only the residual moves, and it moves as ``cond * eps``.
+# A fixed bar on it is therefore a disguised CONDITION test, and at 1e-6 it refused every
+# native structural stationary solve at real SI material properties while calling them
+# "singular". So the residual only decides whether the question is worth asking (stage 1);
+# what ANSWERS it is one step of iterative refinement (stage 2, below).
 _DIRECT_RESIDUAL_RTOL = 1e-6
+
+# Stage 2 -- the verdict, and it tests what the CALLER depends on: the solution itself.
+# One step of iterative refinement computes ``d = A^-1 (b - A x)``, an estimate of the error
+# ALREADY IN x, and ``||d||/||x||`` is the relative amount a second solve would move the answer.
+#
+# This separates the two cases the residual conflates, by thirteen orders of magnitude. Measured
+# with the same sweep plus the committed order-157 ``lipo_inductor`` finite-garbage plant:
+#
+#     cond(A)  1.4e+01 .. 7.1e+17 (well-posed, E sweep):  ||d||/||x|| in [4.3e-16, 8.7e-14]
+#     cond(A)  1.5e+17 (the singular plant):              ||d||/||x|| = 4.7  (CSR) / 5.0 (CSC)
+#
+# Flat across the well-posed sweep -- unlike the residual, refinement does not track cond -- and
+# 1e13 x larger on the system that must be refused. 1e-6 sits ~7 decades above the largest
+# measured well-posed correction and ~7 below the plant, i.e. mid-gap in log space; it is also
+# the coarsest accuracy any caller here tolerates (the outer energy tolerance is ~1e-4).
+#
+# TWO CANDIDATE CRITERIA WERE MEASURED AND REFUTED, so nobody re-derives them:
+#   * the normwise relative BACKWARD error ``||Ax-b|| / (||A|| ||x|| + ||b||)`` -- the textbook
+#     answer to a scaling problem -- reads 0.4 * eps on the singular plant, the SAME value as on
+#     the well-posed sweep. SuperLU is backward stable even when it returns garbage: the garbage
+#     exactly solves a nearby system. A backward-error bar would ADMIT the plant.
+#   * scaling the bar by a condition estimate (``residual <= k cond eps``) puts the plant at
+#     k = 0.49 against k = 0.07..0.22 for the well-posed sweep -- a factor of two, not a
+#     separation -- and the E=1e16 row (cond 7.1e17, refinement 7.0e-14) is a WELL-POSED system
+#     above 1/eps, so cond is not the discriminator in either direction.
+_DIRECT_REFINEMENT_RTOL = 1e-6
 
 
 class LinearSolveError(RuntimeError):
@@ -97,7 +144,20 @@ class LinearSolver(Protocol):
     def __call__(self, matrix, rhs: np.ndarray, *, x0: np.ndarray | None = None, M=None) -> np.ndarray: ...
 
 
-def _check_finite(x: np.ndarray, backend: str) -> np.ndarray:
+def reject_nonfinite_solution(x: np.ndarray, backend: str) -> np.ndarray:
+    """Raise :class:`LinearSolveError` when a solve returned inf/NaN; return ``x`` unchanged otherwise.
+
+    PUBLIC since 2026-09-06, and the rename is the point. It was `_check_finite`, private to this
+    module and reached from exactly one line -- so the cheapest half of the singular guard was
+    unavailable to `gauss.time_integrators.factor_reuse`, whose cache HIT path returned
+    back-substitution output entirely unjudged. Its expensive sibling
+    :func:`reject_unsolved_direct_system` needs the MATRIX and a hit deliberately does not build
+    one; this needs only the answer.
+
+    THE PRICE, as a RATIO rather than a value: ``O(n)`` against a back-substitution the caller has
+    already paid at ``O(n^2)`` dense / ``O(nnz)`` sparse. That ratio is why this guard is
+    affordable exactly where the residual one is not.
+    """
     if not np.all(np.isfinite(x)):
         msg = (
             f'linear solver {backend!r} produced a non-finite solution (singular system or breakdown); '
@@ -185,7 +245,7 @@ def _pardiso(matrix, rhs, *, x0=None, M=None):  # noqa: ARG001 -- the direct-sha
 
     The direct counterpart of scipy's single-threaded SuperLU: PARDISO threads the
     factorization, the same gap laplace has vs MATLAB today (whose sparse LU threads).
-    The singular guard rides with the caller's ``_check_finite`` + the relative-residual
+    The singular guard rides with the caller's :func:`reject_nonfinite_solution` + the relative-residual
     belt (extended to this name in :func:`solve_linear_system`), exactly like ``direct``.
     """
     return _pardiso_spsolve(matrix, rhs)
@@ -266,6 +326,118 @@ def make_preconditioner(name: str | None, matrix) -> LinearOperator | None:
     return builder(matrix)
 
 
+def direct_relative_residual(matrix, rhs, x) -> float | None:
+    """``||A x - b|| / ||b||`` for a direct solve, or ``None`` when the statistic cannot speak.
+
+    ``None`` means ``b == 0``: EVERY null-space vector satisfies ``A x = 0`` exactly, so a
+    relative residual is 0/0 there and reporting 0.0 would be a green the arithmetic never
+    earned. The caller must treat ``None`` as UNJUDGED, not as a pass.
+
+    NOT cast to ``float``: the time-harmonic operator is COMPLEX, and casting its residual to a
+    real dtype is what kept the harmonic call sites from being able to consult this guard at all.
+    """
+    b = np.asarray(rhs.todense() if sp.issparse(rhs) else rhs)
+    b_norm = float(np.linalg.norm(b.ravel()))
+    if b_norm == 0.0:
+        return None
+    xv = np.asarray(x.todense() if sp.issparse(x) else x).reshape(b.shape)
+    return float(np.linalg.norm(np.asarray(matrix @ xv).ravel() - b.ravel())) / b_norm
+
+
+def direct_refinement_correction(matrix, rhs, x) -> float | None:
+    """``||d|| / ||x||`` for one step of iterative refinement, or ``None`` when it cannot speak.
+
+    ``d = A^-1 (b - A x)`` estimates the error already present in ``x``, so this is the relative
+    amount a second solve would MOVE THE ANSWER -- the quantity the caller actually depends on,
+    and (unlike the relative residual) one that does not track the condition number. See
+    :data:`_DIRECT_REFINEMENT_RTOL` for the measurements.
+
+    ``None`` is UNJUDGED, never a pass, and it has exactly two causes: the factorization is
+    EXACTLY singular, so no correction can be computed at all; or ``matrix`` is not square, so
+    there is no factorization to take. ``inf`` is returned when ``x`` is the zero vector and the
+    correction is not -- a correction infinitely larger than the answer, which is what that is.
+
+    The factorization is taken fresh here rather than reused from the solve, because the caller
+    is ``spsolve``, which discards its factor. That costs a second factorization, and is why this
+    is reached ONLY after the residual trigger has already fired -- see
+    :func:`reject_unsolved_direct_system`.
+    """
+    shape = np.shape(matrix)
+    if len(shape) != 2 or shape[0] != shape[1]:
+        return None
+    b = np.asarray(rhs.todense() if sp.issparse(rhs) else rhs)
+    xv = np.asarray(x.todense() if sp.issparse(x) else x).reshape(b.shape)
+    residual_vec = b.ravel() - np.asarray(matrix @ xv).ravel()
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', MatrixRankWarning)
+            correction = splu(sp.csc_matrix(matrix)).solve(residual_vec)
+    except (RuntimeError, MatrixRankWarning, ValueError):
+        return None
+    if not np.all(np.isfinite(correction)):
+        return None
+    d_norm = float(np.linalg.norm(correction))
+    x_norm = float(np.linalg.norm(xv.ravel()))
+    if x_norm == 0.0:
+        return 0.0 if d_norm == 0.0 else float('inf')
+    return d_norm / x_norm
+
+
+def reject_unsolved_direct_system(matrix, rhs, x, backend: str) -> None:
+    """Raise :class:`LinearSolveError` when a DIRECT solve did not actually solve its system.
+
+    The half of the singular guard that catches FINITE garbage: SuperLU emits a
+    :class:`MatrixRankWarning` on a zero pivot and then returns either NaNs (the belt and
+    :func:`reject_nonfinite_solution` catch those) or a finite vector that does not satisfy ``A x = b``.
+    Measured on the production CLI at ``lipo_inductor --mesh-size 6mm``: order 157, condition
+    estimate 1.5e17, relative residual **1.6e+01**.
+
+    TWO STAGES, because the residual alone cannot tell a failed solve from a merely ill-CONDITIONED
+    one -- a residual of 1e-4 at cond 2.3e12 and a residual of 1e-4 at cond 1e2 are opposite
+    findings, and a fixed bar reads them the same. So:
+
+    * the residual is the cheap TRIGGER (~0.2-0.6% of the solve it guards, measured on 2D
+      Laplacians of order 1.6e3 / 1e4 / 4e4). Below :data:`_DIRECT_RESIDUAL_RTOL` nothing further
+      is computed and the cost is exactly what it was;
+    * above it, one step of iterative refinement is the VERDICT. It costs a second factorization
+      (~100% of the solve, same measurement), paid only on systems that were refused OUTRIGHT
+      before this existed -- so no solve that passes today pays anything for it.
+
+    The message names which of the two was established, both statistics, the ORDER, and what the
+    caller can do; a refusal that says "singular" about a solution accurate to 2e-17 sends its
+    reader to the wrong place.
+    """
+    residual = direct_relative_residual(matrix, rhs, x)
+    if residual is None or residual <= _DIRECT_RESIDUAL_RTOL:
+        return
+    correction = direct_refinement_correction(matrix, rhs, x)
+    if correction is not None and correction <= _DIRECT_REFINEMENT_RTOL:
+        return  # ill-CONDITIONED, not unsolved: the residual is cond*eps, the answer is sound.
+    n = int(np.shape(matrix)[0])
+    if correction is None:
+        finding = 'the factorization is EXACTLY singular, so no refinement step exists to judge the answer by'
+        measured = f'residual = {residual:.3e}, refinement = unavailable'
+    else:
+        finding = (
+            'one step of iterative refinement moves the solution by '
+            f'{correction:.3e} of its own norm, so the returned vector is finite but meaningless'
+        )
+        measured = f'residual = {residual:.3e}, refinement = {correction:.3e}'
+    msg = (
+        f'direct solve on an n={n} system by {backend!r} did not solve it: {finding} '
+        f'(measured: {measured}; the residual trigger is {_DIRECT_RESIDUAL_RTOL:.0e} and the '
+        f'refinement bar is {_DIRECT_REFINEMENT_RTOL:.0e}). The system is singular / '
+        'rank-deficient. Check that the model carries a REFERENCE the solve can pin to (a gauge, '
+        'a Dirichlet condition, a ground node) and that no unknown is left with a dependent row -- '
+        'a DOF orphaned by a degenerate or merged element, a region the mesh let collapse (a '
+        'coarser mesh is the usual cause in a FIELD solve), or two ideal sources constraining the '
+        'same node pair (the usual cause in a LUMPED one). NOTE a large residual ALONE is '
+        'not this finding -- it scales with the condition number, and an ill-conditioned but '
+        'well-posed system (e.g. stiffness in SI units) passes here on its refinement step.'
+    )
+    raise LinearSolveError(msg)
+
+
 def solve_linear_system(
     matrix,
     rhs: np.ndarray,
@@ -284,7 +456,7 @@ def solve_linear_system(
     name = linear_solver or 'direct'
     backend = get_linear_solver(linear_solver)
     M = make_preconditioner(preconditioner, matrix) if linear_solver not in (None, 'direct') else None
-    x = _check_finite(np.asarray(backend(matrix, rhs, x0=x0, M=M)), name)
+    x = reject_nonfinite_solution(np.asarray(backend(matrix, rhs, x0=x0, M=M)), name)
     # Direct-solve residual guard (suspenders to _direct's MatrixRankWarning belt): a singular
     # factorization can return a FINITE vector that does not satisfy A x = b. Reject a large
     # relative residual so such a solve raises rather than reporting garbage as ``status=ok``.
@@ -292,15 +464,5 @@ def solve_linear_system(
     # already raise on a non-zero convergence ``info`` and asserting their (looser) residual
     # here would clash with their own stop criterion.
     if name in ('direct', 'pardiso'):
-        b = np.asarray(rhs, dtype=float).ravel()
-        b_norm = float(np.linalg.norm(b))
-        if b_norm > 0.0:
-            residual = float(np.linalg.norm(np.asarray(matrix @ x, dtype=float).ravel() - b)) / b_norm
-            if residual > _DIRECT_RESIDUAL_RTOL:
-                msg = (
-                    f'direct solve residual ||A x - b|| / ||b|| = {residual:.3e} exceeds '
-                    f'{_DIRECT_RESIDUAL_RTOL:.0e}; the system is singular / rank-deficient '
-                    '(the factorization returned a finite but meaningless solution)'
-                )
-                raise LinearSolveError(msg)
+        reject_unsolved_direct_system(matrix, rhs, x, name)
     return x
