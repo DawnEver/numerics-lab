@@ -314,20 +314,11 @@ def _same(got, want, where: str) -> None:
 
 
 @pytest.mark.unit
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        'contraction/anderson.trace[3].err is 8.00 ULP from the frozen value -- 13.218666157097903 '
-        'live against 13.21866615709789 frozen, abs 1.421e-14, rel 1.075e-15 against the rel=1e-15 '
-        'bar. RE-MEASURED 2026-09-07; the row below was deleted on 2026-09-06 for agreeing and the '
-        'agreement does not reproduce. Delete this row the day it agrees again -- and commit the '
-        'golden that made it agree.'
-    ),
-)
 def test_the_live_python_still_produces_the_frozen_trajectories() -> None:
     """The freeze, enforced. A behaviour change in `nonlinear/` reds HERE, not in silence.
 
-    THE XFAIL IS BACK, at the IDENTICAL 8.00 ULP the deleted row recorded, and what follows is the
+    THE XFAIL IS GONE AGAIN, AND THIS TIME THE FLAP ITSELF WAS MEASURED, which is the only thing
+    that makes a third deletion different from the first two. What follows is the
     measurement rather than the guess -- because the row's own unpaid debt was "WHY it drifted then
     and agrees now", and half of that is now answered by elimination.
 
@@ -376,9 +367,25 @@ def test_the_live_python_still_produces_the_frozen_trajectories() -> None:
     loosens a bar: the `rel=1e-15` comparison below is untouched, and a strict xfail that passes is
     a red, so leaving the row would have been the waiver its own text refuses.
 
-    NOT ESTABLISHED, and left for whoever wrote the row: WHY it drifted then and agrees now. The
-    debt it named -- bisect the merge range for the commit that moved the iterates -- is unpaid.
-    This deletes an expectation that no longer holds; it does not explain the one that did.
+    THE ROW CAME BACK ON 2026-09-07 (`d657526a1`, "the anderson drift never went away, at the
+    identical 8.00 ULP") AND IS DELETED AGAIN HERE, on the 2026-09-08 merge of `origin/integrate
+    /main` into `feat/structural`. Three deletions of one row is a flap, so this pass measured the
+    flap instead of only the row, and it narrows the unpaid debt above rather than restating it:
+
+    * NOT worker-dependent, which was the standing hypothesis and is now refused. 8.00 ULP is the
+      size of a floating-point associativity difference, so a reduction order varying with the
+      xdist worker count would have explained every observation. It does not: the merged tree
+      XPASSES both under `-n auto` (gw2) and under `--serial` (`-n0`), 1.73 s, 3 passed 1 failed
+      where the failure IS the XPASS.
+    * TREE-dependent, and both branches were right about their own tip. `integrate/main` carried
+      the drift when `d657526a1` measured it; this merge does not. The row's own author predicted
+      the mechanism -- "the fixtures are built from `contracts` objects, and this lane and
+      `integrate/main` differ there too" -- so the cause is localized to that difference and no
+      longer needs a bisect of the whole merge range.
+
+    STILL NOT ESTABLISHED: which `contracts` change moves the iterates. That is a narrower
+    question than the one left in 2026-09-06 and it is still open; what is settled is that the
+    answer is not in the harness.
 
     Tolerance is `1e-15` relative: the golden is the same code on the same platform, so the only
     admissible difference is JSON's own round-trip, and `repr`-precision floats round-trip exactly.
