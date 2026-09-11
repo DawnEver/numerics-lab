@@ -19,7 +19,7 @@ So "SuperLU ships finite garbage and the production Python path ships it" is WIT
 about the FEA seam. What was true is narrower and worse: **twelve other modules bound
 ``scipy.sparse.linalg.spsolve`` into their own namespace and never consulted the seam at all**, so
 the same finite-garbage return shipped unchecked from the transient march, the harmonic phasor
-solve, the DWR adjoint, the edge3d gauged block and the circuit MNA. The guard was PRESENT and
+solve, the DWR adjoint, the hcurl gauged block and the circuit MNA. The guard was PRESENT and
 UNREACHED, which is `taste.md`'s dominant defect wearing the opposite face: not a declaration that
 lies, but an enforcement nothing calls.
 
