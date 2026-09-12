@@ -104,6 +104,11 @@ class FactorCache:
         self.solves = 0
         self.factorizations = 0
         self.judged = 0
+        #: The CACHED matrix itself, kept (not rebuilt) so the marcher can compute
+        #: :func:`~motronics.gauss.time_integrators.residual_floor` against the system a HIT just
+        #: solved. Holding one reference costs what holding one factorization already costs; the
+        #: thing a hit exists to avoid is BUILDING the matrix, and this never builds one.
+        self.matrix: object = None
         self._key: Hashable | object = _EMPTY
         self._factor: object = None
 
@@ -134,6 +139,7 @@ class FactorCache:
             # disguise, which was returning silently, and claims nothing about the other one.
             return reject_nonfinite_solution(np.asarray(self._apply(self._factor, b), dtype=float), _BACKEND)
         matrix = build_matrix()
+        self.matrix = matrix
         self._factor = self._factor_of(matrix)
         if key is not None:
             self._key = key

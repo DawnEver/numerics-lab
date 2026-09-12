@@ -58,7 +58,56 @@ __all__ = [
     'TransientSolution',
     'get_integrator',
     'integrate_transient',
+    'residual_floor',
 ]
+
+
+#: Safety factor on the estimated roundoff floor, DELIBERATELY the same 64 as the DC operating
+#: point's ``laplace.circuit.core.mna_solves._FLOOR_SAFETY``, and for the same stated reason: the
+#: estimate bounds the rounding error of ONE row sum, while the accumulated error over a row of
+#: ``n`` assembled terms grows like ``sqrt(n)`` at best and ``n`` at worst. 64 buys that headroom
+#: and still sits ORDERS below any residual a stalled-but-wrong Newton shows -- measured
+#: 2026-09-12 at 1e8x on the planted stall, against a 64x allowance.
+_FLOOR_SAFETY = 64.0
+
+#: The machine epsilon the floor is written in (double precision -- the marcher is ``float64``).
+_EPS = float(np.finfo(float).eps)
+
+
+def residual_floor(tangent, u: NDArray[np.floating]) -> float:
+    """The smallest residual norm this system can express at double precision, in RESIDUAL units.
+
+    THE SAME CRITERION the DC operating point already uses -- ``mna_solves._roundoff_floor`` /
+    ``CircuitDAE.op_residual_floor`` -- written here in the norm THIS layer measures its residual
+    in. The residual is a row sum of signed contributions ``sum_j J_ij u_j``; summing terms of
+    magnitude ``M`` in floating point cannot resolve below ``eps * M``, so ``(|J| . |u|)_i`` is
+    the magnitude per row and ``eps`` times it is the smallest residual that row can MEAN. The op
+    solve compares ``max|R|`` and so takes the row MAX; this marcher compares ``||R||_2`` and so
+    takes the same vector's 2-norm. One criterion, each layer in its own norm.
+
+    THE UNIT. It carries the residual's own units, because ``|J| . |u|`` does -- amperes on a KCL
+    row, volts on a branch row. That is what the ABSOLUTE ``tol = 1e-12`` could not do, and
+    ``rem/porting.md`` names that constant class as the one that cannot survive a change of scale.
+    MEASURED 2026-09-12 on a linear series R-L marched by BDF2: the exact one-iteration solve
+    lands at 6.17e-13 on a 24 V supply and 4.95e-11 on a 2400 V one -- the SAME solve, and only
+    the second one was reported as having exhausted its Newton ceiling. The op solve's own table
+    records the same shape from the other side: one circuit's floor spans 56x across its four
+    gate states, so no single constant can sit above the lowest and below the highest.
+
+    COMPUTED ONLY ON EXHAUSTION, never per iteration -- the DC op's rule, for its reason: it costs
+    an ``|J| . |u|`` matvec, and it can only ever change the verdict where the plain bars have
+    already been missed. So it alters no iteration count and no trajectory: strictly the LABEL.
+    """
+    u_abs = np.abs(np.asarray(u, dtype=float)).reshape(-1)
+    if sp.issparse(tangent):
+        # NEVER `.toarray()` here. `op_residual_floor` may densify because an operating point is a
+        # circuit; this marcher also carries FEA/MEC tangents, where a dense copy is the whole mesh
+        # squared. `abs()` keeps the sparse storage and the matvec stays O(nnz).
+        magnitude = abs(tangent) @ u_abs
+    else:
+        dense = np.abs(np.asarray(tangent, dtype=float))
+        magnitude = dense * u_abs if dense.ndim == 0 else dense @ u_abs
+    return _FLOOR_SAFETY * _EPS * float(np.linalg.norm(magnitude)) if magnitude.size else 0.0
 
 
 @dataclass
@@ -248,10 +297,12 @@ def _gmin_continue(
     :func:`~motronics.laplace.circuit.core.mna_solves._gmin_stepped` follows). Each stage is
     seeded by the previous stage's iterate; the bar is the caller's own (``tol`` or
     ``tol_rel * residual_0`` -- the plain Newton's first-iteration residual, the same bar the
-    step already failed).
+    step already failed) PLUS, once the continuation is spent, :func:`residual_floor` -- the damped
+    path must be allowed to land on the same arithmetic floor the plain Newton is.
     """
     t = form.t_eval
     u = np.asarray(guess, dtype=float).copy()
+    tangent = None  # the last tangent built here, for the exhaustion floor below
     for gmin in gmin_stages:
         for _it in range(max(2, max_newton)):
             u_arg, u_dot, u_ddot = form.u_arg(u), form.u_dot(u), form.u_ddot(u)
@@ -260,6 +311,7 @@ def _gmin_continue(
             if residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0):
                 return u, True, residual
             jac = problem.jacobian(u_arg, u_dot, u_ddot, t, form.weights)
+            tangent = jac
             if sp.issparse(jac):
                 damped = jac + gmin * sp.eye(jac.shape[0], format='csc')
             else:
@@ -270,6 +322,8 @@ def _gmin_continue(
     r = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
     residual = float(np.linalg.norm(r))
     if residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0):
+        return u, True, residual
+    if tangent is not None and residual <= residual_floor(tangent, u):
         return u, True, residual
     return u, False, residual
 
@@ -344,6 +398,11 @@ def _solve_step(
     slow = 0
     tangent_active = False
     capped = False
+    # The last tangent BUILT (never rebuilt for this purpose): the exhaustion check below needs
+    # the matrix, not its norm, because the floor is a per-row ``|J| . |u|``. On a factor-cache
+    # HIT no matrix is built, so the cache's own -- valid by its contract that equal keys imply an
+    # equal jacobian -- stands in, and a hit still never pays a build.
+    tangent = None
     for _it in range(1, max_newton + 1):
         iterations = _it
         u_arg, u_dot, u_ddot = form.u_arg(u), form.u_dot(u), form.u_ddot(u)
@@ -379,9 +438,11 @@ def _solve_step(
         capped = False
         if tangent_active:
             jac = tangent_source(u_arg, u_dot, u_ddot, t, form.weights)
+            tangent = jac
             du = np.asarray(solve(jac, -r), dtype=float)
         elif key_fn is None:
             jac = problem.jacobian(u_arg, u_dot, u_ddot, t, form.weights)
+            tangent = jac
             du = np.asarray(solve(jac, -r), dtype=float)
         else:
             key = key_fn(u_arg, u_dot, u_ddot, t, form.weights)
@@ -389,6 +450,7 @@ def _solve_step(
                 factor_cache.solve(key, lambda: problem.jacobian(u_arg, u_dot, u_ddot, t, form.weights), -r),
                 dtype=float,
             )
+            tangent = factor_cache.matrix
         step = du.reshape(u.shape)
         if max_newton > 1 and backtrack_cap > 0:
             for _ in range(backtrack_cap):
@@ -413,6 +475,13 @@ def _solve_step(
         r = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
         residual = float(np.linalg.norm(r))
         if residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0):
+            converged = True
+        elif tangent is not None and residual <= residual_floor(tangent, u):
+            # THE ARITHMETIC FLOOR, and the reason an exactly-solved LINEAR step no longer lies.
+            # ``tol`` is ABSOLUTE on a residual whose scale is the supply, so the same one-Newton
+            # exact solve read 6.17e-13 at 24 V (under the bar) and 4.95e-11 at 2400 V (over it).
+            # The floor is ``eps * |J| . |u|`` and therefore scales WITH the supply, exactly as
+            # the residual does. See :func:`residual_floor`.
             converged = True
     if not converged and gmin_stages is not None:
         # The SPICE-standard gmin continuation (opt-in): a fresh damped Newton path from the
@@ -509,18 +578,20 @@ def integrate_transient(
                 form = _bdf2_variable_form(state, h, h_prev, t_new)
             else:
                 form = integrator.prepare(state, h, t_new)
-            # The convergence threshold's FLOAT FLOOR: at the tiny steps the variable form's
-            # history offsets cancel at the 1/h scale, so the residual's noise floor is
-            # ~eps*u/h -- a 1e-12 threshold is unreachable at h = 1e-6 (measured 2026-08-07:
-            # every small step was labelled non-converged by the noise). Genuine failures sit
-            # well above the floor; the label keeps its meaning.
+            # RETIRED 2026-09-12: this call used to raise the bar to ``max(tol, 1e-10)`` for the
+            # adaptive march ALONE, on the correct diagnosis that "at the tiny steps the variable
+            # form's history offsets cancel at the 1/h scale, so the residual's noise floor is
+            # ~eps*u/h". The diagnosis was right and the remedy was a NUMBER -- right at h=1e-6,
+            # wrong at h=1e-9, and blind to the supply besides. :func:`residual_floor` IS that
+            # noise floor computed, and ``|J|`` carries the 1/h weights, so the same statement now
+            # holds at every h and every voltage AND on the fixed-grid path, which never had it.
             u_new, converged, _it, residual = _solve_step(
                 problem,
                 form,
                 state.last_u,
                 solve=solve,
                 max_newton=max_newton,
-                tol=max(tol, 1e-10),
+                tol=tol,
                 tol_rel=tol_rel,
                 factor_cache=factor_cache,
                 backtrack_band=backtrack_band,
@@ -584,7 +655,8 @@ def integrate_transient(
             # reads the tag -- a silent accept is the forbidden shape. One warning per
             # exhaustion event, carrying the measured residual.
             logger.warning(
-                'step at t=%s did not converge in %s Newton iteration(s): residual %s > tol %s',
+                'step at t=%s did not converge in %s Newton iteration(s): residual %s exceeds '
+                'both the absolute tol %s and the arithmetic floor of this system',
                 t_new,
                 max_newton,
                 f'{residual:.3e}',
