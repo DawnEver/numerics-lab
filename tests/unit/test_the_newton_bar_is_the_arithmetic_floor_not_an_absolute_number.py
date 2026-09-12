@@ -81,7 +81,7 @@ def test_the_exact_residual_grows_WITH_the_supply_so_an_absolute_bar_cannot_hold
     )
     rel_lo = lo.worst_step_residual / 24.0
     rel_hi = hi.worst_step_residual / 2400.0
-    assert rel_lo == pytest.approx(rel_hi, rel=5.0), (
+    assert rel_lo == pytest.approx(rel_hi, rel=5.0, abs=0.0), (
         f'the residual is not supply-proportional: {rel_lo:.3e} /V vs {rel_hi:.3e} /V'
     )
     assert rel_hi < 1e-12, f'relative residual {rel_hi:.3e} /V is not an exact solve'
