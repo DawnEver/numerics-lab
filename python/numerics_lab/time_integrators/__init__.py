@@ -227,11 +227,33 @@ class TransientSolution:
     #: only -- these never reached ``times``. A large count means the locator worked hard at the
     #: toggles, not that the answer is contaminated.
     nonconverged_probe_times: list[float] = field(default_factory=list)
+    #: Steps whose ``converged`` verdict was carried by :func:`residual_floor` rather than by
+    #: ``tol``/``tol_rel``: they EXHAUSTED the Newton ceiling and landed at the smallest
+    #: residual double precision can express for that system. The floor is the correctly
+    #: SCALED bar, so such a step IS converged and this list is not a failure record. It
+    #: exists because without it the two verdicts are the same value -- a march that genuinely
+    #: stopped converging, but whose residual sits at the arithmetic floor, reads
+    #: ``converged=True`` with nothing to distinguish it, and a test asserting convergence
+    #: cannot tell the physics from the arithmetic. Like ``worst_step_residual`` and unlike
+    #: ``nonconverged_times``, this includes the eventful march's DISCARDED bisection probes:
+    #: it is a diagnostic about the SOLVES, not a property of the trajectory.
+    floor_converged_times: list[float] = field(default_factory=list)
 
     @property
     def converged(self) -> bool:
         """The accuracy tag: every step IN THIS SOLUTION met the per-step Newton tolerance."""
         return not self.nonconverged_times
+
+    @property
+    def converged_within_the_ceiling(self) -> bool:
+        """The STRONGER tag: every step converged on its BAR, none of them on the floor.
+
+        :attr:`converged` cannot distinguish the two, and that is the whole reason both exist:
+        a caller that means "the physics converged" rather than "the arithmetic could say no
+        more" asks for this one. A step ON the floor exhausted its ceiling, so this is also
+        the tag to read when deciding whether ``max_newton`` is set high enough.
+        """
+        return self.converged and not self.floor_converged_times
 
 
 def _bdf2_variable_form(state: IntegratorState, dt: float, h: float, t_new: float) -> StepForm:
@@ -291,7 +313,7 @@ def _gmin_continue(
     tol_rel: float | None,
     residual_0: float,
     gmin_stages: tuple[float, ...],
-) -> tuple[NDArray[np.floating], bool, float]:
+) -> tuple[NDArray[np.floating], bool, float, bool]:
     """The gmin continuation for an exhausted step: solve ``(J + gmin I) delta = -R`` for
     each stage, the residual always the TRUE one (the same contract the DC-op's
     :func:`~motronics.laplace.circuit.core.mna_solves._gmin_stepped` follows). Each stage is
@@ -299,6 +321,10 @@ def _gmin_continue(
     ``tol_rel * residual_0`` -- the plain Newton's first-iteration residual, the same bar the
     step already failed) PLUS, once the continuation is spent, :func:`residual_floor` -- the damped
     path must be allowed to land on the same arithmetic floor the plain Newton is.
+
+    Returns ``(u, converged, residual, on_floor)``; ``on_floor`` says the verdict was the
+    FLOOR's rather than the bar's, so :class:`TransientSolution` can record WHICH one carried
+    the step.
     """
     t = form.t_eval
     u = np.asarray(guess, dtype=float).copy()
@@ -309,7 +335,7 @@ def _gmin_continue(
             r = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
             residual = float(np.linalg.norm(r))
             if residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0):
-                return u, True, residual
+                return u, True, residual, False
             jac = problem.jacobian(u_arg, u_dot, u_ddot, t, form.weights)
             tangent = jac
             if sp.issparse(jac):
@@ -322,10 +348,10 @@ def _gmin_continue(
     r = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
     residual = float(np.linalg.norm(r))
     if residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0):
-        return u, True, residual
+        return u, True, residual, False
     if tangent is not None and residual <= residual_floor(tangent, u):
-        return u, True, residual
-    return u, False, residual
+        return u, True, residual, True
+    return u, False, residual, False
 
 
 def _solve_step(
@@ -372,9 +398,17 @@ def _solve_step(
     -- the problem's local-derivative tangent, or the explicitly passed callable. A problem
     without the seam keeps the single-source Newton unchanged.
 
-    Returns ``(u, converged, iterations, residual)`` -- the CONVERGENCE CONTRACT: the caller
-    (the marcher) labels an exhausted step rather than taking it silently (the FVS plan's
-    replacement for the old silent accept; the DC-op precedent is :class:`OpNonConvergence`).
+    Returns ``(u, converged, iterations, residual, on_floor)`` -- the CONVERGENCE CONTRACT:
+    the caller (the marcher) labels an exhausted step rather than taking it silently (the FVS
+    plan's replacement for the old silent accept; the DC-op precedent is
+    :class:`OpNonConvergence`).
+
+    ``on_floor`` is the verdict the other three values cannot express: a step that exhausted
+    ``max_newton`` and was passed by :func:`residual_floor` rather than by ``tol``/``tol_rel``
+    used to be indistinguishable from one that met its bar on the first iteration. Both read
+    ``converged=True``, so a march that quietly STOPPED converging could be certified by the
+    arithmetic with nothing for a caller to read -- the shape ``taste.md`` forbids. The flag
+    rides out to :attr:`TransientSolution.floor_converged_times`.
     """
     key_fn = getattr(problem, 'factor_reuse_key', None) if factor_cache is not None else None
     # The stall-polish's phase-2 source (MANUAL-627 (i)): the problem's local-derivative
@@ -391,6 +425,7 @@ def _solve_step(
     u = np.asarray(guess, dtype=float).copy()
     t = form.t_eval
     converged = False
+    on_floor = False
     iterations = 0
     residual = float('inf')
     residual_0 = float('inf')
@@ -477,6 +512,7 @@ def _solve_step(
         if residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0):
             converged = True
         elif tangent is not None and residual <= residual_floor(tangent, u):
+            on_floor = True
             # THE ARITHMETIC FLOOR, and the reason an exactly-solved LINEAR step no longer lies.
             # ``tol`` is ABSOLUTE on a residual whose scale is the supply, so the same one-Newton
             # exact solve read 6.17e-13 at 24 V (under the bar) and 4.95e-11 at 2400 V (over it).
@@ -491,7 +527,7 @@ def _solve_step(
         # PWL body-diode knee); the damped path bounds the step and lands where the plain one
         # cannot. If the continuation ALSO fails, the plain Newton's exhausted iterate stands
         # (the label carries the outcome either way).
-        u_g, conv_g, residual_g = _gmin_continue(
+        u_g, conv_g, residual_g, floor_g = _gmin_continue(
             problem,
             form,
             guess,
@@ -505,9 +541,10 @@ def _solve_step(
         if conv_g:
             u = u_g
             converged = True
+            on_floor = floor_g
             residual = residual_g
         iterations += max(2, max_newton) * len(gmin_stages)
-    return u, converged, iterations, residual
+    return u, converged, iterations, residual, on_floor
 
 
 def integrate_transient(
@@ -585,7 +622,7 @@ def integrate_transient(
             # wrong at h=1e-9, and blind to the supply besides. :func:`residual_floor` IS that
             # noise floor computed, and ``|J|`` carries the 1/h weights, so the same statement now
             # holds at every h and every voltage AND on the fixed-grid path, which never had it.
-            u_new, converged, _it, residual = _solve_step(
+            u_new, converged, _it, residual, on_floor = _solve_step(
                 problem,
                 form,
                 state.last_u,
@@ -618,6 +655,11 @@ def integrate_transient(
                 solution.worst_step_residual = max(solution.worst_step_residual, residual)
                 if not converged:
                     solution.nonconverged_times.append(t_new)
+                elif on_floor:
+                    # ONE spelling of this rule, shared with the fixed-grid march below: a step is
+                    # recorded against exactly one of the two lists, because `on_floor` is only
+                    # ever set where the floor MADE the verdict converged.
+                    solution.floor_converged_times.append(t_new)
                 state = integrator.advance(state, u_new, h, t_new)
                 solution.times.append(t_new)
                 solution.states.append(u_new)
@@ -634,7 +676,7 @@ def integrate_transient(
     for k in range(n_steps):
         t_new = study.t0 + (k + 1) * dt
         form = integrator.prepare(state, dt, t_new)
-        u_new, converged, _iterations, residual = _solve_step(
+        u_new, converged, _iterations, residual, on_floor = _solve_step(
             problem,
             form,
             state.last_u,
@@ -648,7 +690,9 @@ def integrate_transient(
             gmin_stages=gmin_stages,
         )
         solution.worst_step_residual = max(solution.worst_step_residual, residual)
-        if not converged:
+        if on_floor:
+            solution.floor_converged_times.append(t_new)
+        elif not converged:
             solution.nonconverged_times.append(t_new)
             # The CONVERGENCE CONTRACT, label-don't-block (AGENTS.md first principle): the
             # march continues, the result carries the measured deviation, and the caller
