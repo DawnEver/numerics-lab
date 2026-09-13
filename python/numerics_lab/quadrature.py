@@ -55,6 +55,7 @@ from motronics.contracts.errors import internal_error
 from motronics.contracts.ir.spline_space_ir import Patch
 
 __all__ = [
+    'EXTRA_QUADRATURE_POINTS',
     'BasisValues',
     'FormDegree',
     'PatchBasis',
@@ -465,6 +466,13 @@ def _greville_1d(knot: NDArray[np.float64], degree: int) -> NDArray[np.float64]:
     """Greville abscissae: the moving average of ``degree`` interior knots per basis function."""
     n_basis = len(knot) - degree - 1
     return np.array([knot[i + 1 : i + degree + 1].mean() for i in range(n_basis)])
+
+
+#: Extra quadrature points beyond the polynomial rule. The area element of a rational patch is NOT
+#: a polynomial, so no fixed rule is exact for it; four extra points per direction drives the
+#: quarter-annulus area to ~1e-10 relative (measured) and costs nothing at these sizes. It is a
+#: CHOICE, recorded as one, not an exactness claim.
+EXTRA_QUADRATURE_POINTS = 4
 
 
 def gauss_legendre_1d(n: int, lo: float, hi: float) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
