@@ -414,6 +414,15 @@ def _solve_step(
         residual = float(np.linalg.norm(r))
         if residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0):
             converged = True
+        elif callable(floor_fn := getattr(problem, 'residual_roundoff_floor', None)):
+            # Some affine systems cannot represent a zero residual after their one exact
+            # solve: large signed terms cancel only to the scale of floating-point row
+            # summation.  The problem can expose that scale in the residual's norm; consult
+            # it only after the requested bar was missed, so it cannot stop an iteration
+            # early or alter the trajectory.
+            floor = float(floor_fn(u, form))
+            if np.isfinite(floor) and residual <= floor:
+                converged = True
     if not converged and gmin_stages is not None:
         # The SPICE-standard gmin continuation (opt-in): a fresh damped Newton path from the
         # clean guess, stepping a diagonal gmin down geometrically. The plain Newton's stall at
