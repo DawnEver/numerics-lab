@@ -72,7 +72,7 @@ from scipy.sparse.linalg import splu
 
 from motronics.gauss.linear import reject_nonfinite_solution, reject_unsolved_direct_system
 
-__all__ = ['FactorCache']
+__all__ = ['FactorCache', 'apply_factor', 'factor_matrix']
 
 #: The name the guard's refusal message reports, so a reader lands on THIS seam rather than on
 #: ``gauss.linear``'s ``direct``, which never ran.
@@ -80,6 +80,37 @@ _BACKEND = 'factor_reuse'
 
 #: Sentinel for 'no factorization cached yet' -- distinct from every legitimate key, None included.
 _EMPTY = object()
+
+
+def factor_matrix(matrix: object) -> object:
+    """Factor ``matrix`` in its own storage; mirrors ``_default_solve``'s dispatch.
+
+    THE ONE HOME for "factor this operator however it is stored", shared by :class:`FactorCache`
+    and by the bordered field<->circuit tangent
+    (:meth:`~motronics.hamilton.coupling.monolithic.BlockCoupledProblem.solve_tangent`), which
+    factors its sparse field block ONCE and back-substitutes it for several right-hand sides. A
+    second spelling of this dispatch is a second answer to "is a scalar jacobian a matrix", which
+    is exactly the branch below.
+    """
+    if sp.issparse(matrix):
+        return splu(sp.csc_matrix(matrix))
+    m = np.asarray(matrix, dtype=float)
+    if m.ndim == 0:  # scalar jacobian (1-DOF problem written as a plain number)
+        return float(m)
+    return lu_factor(m)
+
+
+def apply_factor(factor: object, b: NDArray[np.floating]) -> NDArray[np.floating]:
+    """Back-substitute a factor produced by :func:`factor_matrix` against ``b``.
+
+    ``b`` may be a vector or a MATRIX of right-hand sides (the bordered solve hands it the ``n2``
+    columns of the off-diagonal block); all three storages accept both.
+    """
+    if isinstance(factor, float):
+        return b / factor
+    if isinstance(factor, tuple):  # dense (lu, piv)
+        return lu_solve(factor, b)
+    return factor.solve(b)  # sparse SuperLU factor
 
 
 class FactorCache:
@@ -137,10 +168,10 @@ class FactorCache:
             # O(n) against a back-substitution already paid at O(n^2)/O(nnz). A stale-but-FINITE
             # factor is still the key's problem (the NAMED HOLE above) -- this closes the inf/NaN
             # disguise, which was returning silently, and claims nothing about the other one.
-            return reject_nonfinite_solution(np.asarray(self._apply(self._factor, b), dtype=float), _BACKEND)
+            return reject_nonfinite_solution(np.asarray(apply_factor(self._factor, b), dtype=float), _BACKEND)
         matrix = build_matrix()
         self.matrix = matrix
-        self._factor = self._factor_of(matrix)
+        self._factor = factor_matrix(matrix)
         if key is not None:
             self._key = key
         self.factorizations += 1
@@ -150,7 +181,7 @@ class FactorCache:
         # that. Measured 2026-09-06: adding the cheap check here fired first on a singular MNA and
         # replaced a refusal naming n and the residual with one naming neither. A guard that
         # preempts a better-informed guard is a regression even when it refuses the same system.
-        x = np.asarray(self._apply(self._factor, b), dtype=float)
+        x = np.asarray(apply_factor(self._factor, b), dtype=float)
         # THE MISS IS WHERE THE MATRIX IS IN HAND, so it is the only place the guard is affordable
         # -- see "WHAT A HIT IS NOT JUDGED BY" in the module docstring. A SCALAR jacobian is not a
         # system the direct guard can speak about (``matrix @ x`` is not a matvec), and a divide
@@ -161,22 +192,3 @@ class FactorCache:
             self.judged += 1
             reject_unsolved_direct_system(matrix, b, x, _BACKEND)
         return x
-
-    @staticmethod
-    def _factor_of(matrix: object) -> object:
-        """Factor ``matrix`` in its own storage; mirrors ``_default_solve``'s dispatch."""
-        if sp.issparse(matrix):
-            return splu(sp.csc_matrix(matrix))
-        m = np.asarray(matrix, dtype=float)
-        if m.ndim == 0:  # scalar jacobian (1-DOF problem written as a plain number)
-            return float(m)
-        return lu_factor(m)
-
-    @staticmethod
-    def _apply(factor: object, b: NDArray[np.floating]) -> NDArray[np.floating]:
-        """Back-substitute a factor produced by :meth:`_factor_of`."""
-        if isinstance(factor, float):
-            return b / factor
-        if isinstance(factor, tuple):  # dense (lu, piv)
-            return lu_solve(factor, b)
-        return factor.solve(b)  # sparse SuperLU factor
