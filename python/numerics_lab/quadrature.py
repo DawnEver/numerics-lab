@@ -194,7 +194,8 @@ class PatchBasis:
                     msg = f'field degree {degree} in direction {direction} is below 1'
                     raise SplineBasisError(msg)
             self._field_knots = tuple(
-                _open_knot_vector(knot, degree) for knot, degree in zip(patch.knots, self.field_degrees, strict=True)
+                _open_knot_vector(knot, source_degree, degree)
+                for knot, source_degree, degree in zip(patch.knots, patch.degrees, self.field_degrees, strict=True)
             )
 
     @property
@@ -247,6 +248,12 @@ class PatchBasis:
         points = np.asarray(points, dtype=float)
         if points.ndim != 2 or points.shape[1] != self.parametric_dim:
             msg = f'points has shape {points.shape}; expected (n, {self.parametric_dim})'
+            raise SplineBasisError(msg)
+        if points.shape[0] == 0:
+            # The shape check above accepts (0, dim), and everything downstream then either
+            # reshapes a zero-size array or reduces over an empty axis -- the first produces a bare
+            # numpy ValueError and the second makes the geometry guards pass VACUOUSLY.
+            msg = 'no evaluation points were given, so there is nothing to evaluate the basis at'
             raise SplineBasisError(msg)
         # The DOMAIN check, matching Patch.evaluate's. Without it an out-of-domain parameter makes
         # _cox_de_boor return an all-zero row, _rationalise_values divides 0/0, and the NaN flows
@@ -315,7 +322,8 @@ class PatchBasis:
         # tolerance nobody can state. Scaling by the largest determinant on the rule makes the test
         # the same statement in any unit. `not np.all(... > ...)` rather than `np.any(... < ...)`
         # so a NaN -- which compares False both ways -- FAILS the guard instead of passing it.
-        scale = float(np.max(np.abs(det))) if det.size else 0.0
+        # det is never empty here: evaluate() refuses an empty point array before reaching this.
+        scale = float(np.max(np.abs(det)))
         if not np.all(np.abs(det) > _SINGULAR_JACOBIAN_RATIO * scale):
             msg = (
                 'the geometry map is singular (or non-finite) at a requested point: the Jacobian '
@@ -558,15 +566,33 @@ def _rational_hessians(field: _TensorBasis, weights: NDArray[np.float64]) -> NDA
     return (dd_weighted - correction) / denominator[:, None, None, None]
 
 
-def _open_knot_vector(source: NDArray[np.float64], degree: int) -> NDArray[np.float64]:
+def _open_knot_vector(source: NDArray[np.float64], source_degree: int, degree: int) -> NDArray[np.float64]:
     """An open knot vector of ``degree`` over the same interior breakpoints as ``source``.
 
     Used only when a caller asks for a field degree that differs from the geometry's: the parameter
     domain and its spans are the geometry's, the multiplicity at the ends is the new degree's.
+
+    INTERIOR MULTIPLICITY IS PRESERVED, scaled to the new degree, and that is the whole subtlety.
+    ``np.unique`` collapsed repeats, so geometry knots ``[0,0,0,0.5,0.5,1,1,1]`` (degree 2 -- a
+    deliberate C^0 crease, which is exactly how a corner or a material line is modelled) became
+    field knots ``[0,0,0,0.5,1,1,1]``, i.e. C^1. Asking for a different field degree therefore
+    SMOOTHED the field space across the crease, and a smooth field across a material line is a
+    plausible wrong answer rather than a failure.
+
+    A knot of multiplicity ``m`` in a degree-``p`` vector carries continuity ``C^(p-m)``; holding
+    that continuity at the new degree needs multiplicity ``m + (degree - source_degree)``, clamped
+    so it never exceeds the new degree (which would split the patch).
     """
-    interior = np.unique(source)[1:-1]
     lo, hi = float(source[0]), float(source[-1])
-    return np.concatenate([np.full(degree + 1, lo), interior, np.full(degree + 1, hi)])
+    inner = source[(source > lo) & (source < hi)]
+    pieces = [np.full(degree + 1, lo)]
+    if inner.size:
+        values, counts = np.unique(inner, return_counts=True)
+        shift = degree - source_degree
+        for value, count in zip(values, counts, strict=True):
+            pieces.append(np.full(min(max(int(count) + shift, 1), degree), float(value)))
+    pieces.append(np.full(degree + 1, hi))
+    return np.concatenate(pieces)
 
 
 def _greville_1d(knot: NDArray[np.float64], degree: int) -> NDArray[np.float64]:
