@@ -265,7 +265,8 @@ def test_the_laplacian_of_a_COORDINATE_is_zero_on_a_curved_rational_patch() -> N
     ``x`` is harmonic, so ``laplacian(u)`` must be zero, and on a rational annular patch that is a
     demanding check because the map is nowhere affine.
 
-    MEASURED 2026-09-14. The pullback that shipped until then gave **18.2**. It dropped the
+    MEASURED 2026-09-14: the corrected pullback reaches **2.3e-13**, against **18.2** from the one
+    that shipped until then. It dropped the
     geometry map's own second-derivative term from the chain rule and rationalised the second
     derivative by a bare weight multiply instead of the quotient rule. Its docstring named the
     first approximation and argued it was safe because "the one consumer that needs second
