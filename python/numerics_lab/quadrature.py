@@ -51,7 +51,7 @@ from typing import NamedTuple
 import numpy as np
 from numpy.typing import NDArray
 
-from motronics.contracts.errors import internal_error
+from motronics.contracts.errors import MotronicsError
 from motronics.contracts.ir.spline_space_ir import Patch
 
 __all__ = [
@@ -75,8 +75,16 @@ MAX_DERIVATIVE_ORDER = 2
 _SINGULAR_JACOBIAN_RATIO = 1e-12
 
 
-@internal_error
-class SplineBasisError(ValueError):
+class SplineBasisError(
+    MotronicsError,
+    ValueError,
+    error_code='MTS-SPLINE-007',
+    user_action=(
+        'The geometry map is singular or the request is malformed. A singular map means the patch folds or '
+        'collapses, so fix the producer input that built it rather than the quadrature; the message names the '
+        'point and the determinant it measured. '
+    ),
+):
     """A basis or quadrature request this provider refuses rather than approximating."""
 
 
