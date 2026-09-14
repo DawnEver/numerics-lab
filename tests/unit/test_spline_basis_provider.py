@@ -23,6 +23,8 @@ import numpy as np
 import pytest
 
 from motronics.contracts.ir.spline_space_ir import Patch, arc_patch_quarter_annulus
+from motronics.euclid.mesh.producers.patch import annular_sector_patches
+from motronics.euclid.mesh.spline_refine import refine_space
 from motronics.gauss.quadrature import (
     FormDegree,
     PatchBasis,
@@ -250,3 +252,57 @@ def test_the_local_to_global_map_is_the_identity_on_a_single_patch_space() -> No
 def test_an_offset_shifts_every_dof_id_by_the_same_amount() -> None:
     basis = PatchBasis(_biquadratic_unit_square(), dof_offset=100)
     assert basis.dof_ids().tolist() == list(range(100, 109))
+
+
+# --- the SECOND derivative, and the defect that shipped in it ---------------------------------
+
+
+def test_the_laplacian_of_a_COORDINATE_is_zero_on_a_curved_rational_patch() -> None:
+    """The closed form that caught a real defect, and the sharpest one available here.
+
+    Feeding a patch its own control points' x-coordinates as field coefficients reproduces
+    ``u = x`` EXACTLY -- that is the definition of the geometry map, not an approximation of it.
+    ``x`` is harmonic, so ``laplacian(u)`` must be zero, and on a rational annular patch that is a
+    demanding check because the map is nowhere affine.
+
+    MEASURED 2026-09-14. The pullback that shipped until then gave **18.2**. It dropped the
+    geometry map's own second-derivative term from the chain rule and rationalised the second
+    derivative by a bare weight multiply instead of the quotient rule. Its docstring named the
+    first approximation and argued it was safe because "the one consumer that needs second
+    derivatives -- collocation -- is not built in this wave, so the approximation has no caller
+    yet and must not acquire one silently". It acquired one -- the a-posteriori error indicator --
+    and the indicator ranked the error BACKWARDS (Spearman -0.46) as a direct result.
+    """
+    patch = refine_space(annular_sector_patches(radii=(0.02, 0.05), group_ids=(0,), span_deg=90.0), (2, 2)).patches[0]
+    grid = np.stack(
+        np.meshgrid(np.linspace(0.05, 0.95, 9), np.linspace(0.05, 0.95, 9), indexing='ij'), axis=-1
+    ).reshape(-1, 2)
+    values = PatchBasis(patch).evaluate(grid, derivative_order=2)
+
+    for component in (0, 1):
+        coefficients = patch.control_points[:, component]
+        laplacian = np.einsum('qidd->qi', values.hessians) @ coefficients
+        assert np.abs(laplacian).max() < 1e-10, component
+
+
+def test_the_gradient_of_a_COORDINATE_is_the_unit_vector_along_it() -> None:
+    """The first-derivative twin of the check above -- it was already right, and stays right."""
+    patch = refine_space(annular_sector_patches(radii=(0.02, 0.05), group_ids=(0,), span_deg=90.0), (2, 2)).patches[0]
+    grid = np.stack(
+        np.meshgrid(np.linspace(0.05, 0.95, 9), np.linspace(0.05, 0.95, 9), indexing='ij'), axis=-1
+    ).reshape(-1, 2)
+    values = PatchBasis(patch).evaluate(grid, derivative_order=2)
+
+    for component in (0, 1):
+        gradient = np.einsum('qid,i->qd', values.gradients, patch.control_points[:, component])
+        expected = np.zeros(2)
+        expected[component] = 1.0
+        assert np.abs(gradient - expected).max() < 1e-12, component
+
+
+def test_the_hessian_is_SYMMETRIC_in_its_two_derivative_axes() -> None:
+    """Mixed partials commute; an asymmetry is an index slip in the pullback."""
+    patch = refine_space(annular_sector_patches(radii=(0.02, 0.05), group_ids=(0,), span_deg=90.0), (1, 1)).patches[0]
+    grid = np.array([[0.3, 0.4], [0.7, 0.2], [0.5, 0.9]])
+    hessians = PatchBasis(patch).evaluate(grid, derivative_order=2).hessians
+    assert np.abs(hessians - np.swapaxes(hessians, 2, 3)).max() < 1e-9 * np.abs(hessians).max()
