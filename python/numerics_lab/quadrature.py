@@ -69,6 +69,11 @@ __all__ = [
 #: collocation needs, and the recursion below produces exactly that.
 MAX_DERIVATIVE_ORDER = 2
 
+#: How far below the LARGEST Jacobian determinant on a rule a determinant may fall before the
+#: geometry map is called singular. Relative, so it means the same thing in metres and
+#: millimetres -- an absolute floor on a determinant is a tolerance with a hidden unit.
+_SINGULAR_JACOBIAN_RATIO = 1e-12
+
 
 @internal_error
 class SplineBasisError(ValueError):
@@ -243,6 +248,20 @@ class PatchBasis:
         if points.ndim != 2 or points.shape[1] != self.parametric_dim:
             msg = f'points has shape {points.shape}; expected (n, {self.parametric_dim})'
             raise SplineBasisError(msg)
+        # The DOMAIN check, matching Patch.evaluate's. Without it an out-of-domain parameter makes
+        # _cox_de_boor return an all-zero row, _rationalise_values divides 0/0, and the NaN flows
+        # into the stiffness matrix -- past the singular-map guard, which np.abs(nan) < tol does not
+        # trip. Every consumer then assembles NaN with no error raised anywhere.
+        for axis, knot in enumerate(self.patch.knots):
+            lo, hi = float(knot[0]), float(knot[-1])
+            outside = (points[:, axis] < lo) | (points[:, axis] > hi)
+            if np.any(outside):
+                bad = float(points[outside, axis][0])
+                msg = (
+                    f'parameter {bad} on axis {axis} is outside the patch domain [{lo}, {hi}]; '
+                    'evaluating there would return a zero basis row and assemble NaN.'
+                )
+                raise SplineBasisError(msg)
 
         geom = _tensor_basis(self.patch.knots, self.geometry_degrees, points, order=max(derivative_order, 1))
         # Degrees decide it: the field knot vectors are DERIVED from the geometry's breakpoints,
@@ -291,8 +310,29 @@ class PatchBasis:
         jac = np.einsum('qid,ic->qcd', d_rational, self.patch.control_points)
         square = jac[:, : self.parametric_dim, :]
         det = np.linalg.det(square)
-        if np.any(np.abs(det) < 1e-14):
-            msg = 'the geometry map is singular at a requested point (zero Jacobian determinant)'
+        # RELATIVE, because a determinant carries units: dX/dq on a 50 mm patch in metres is ~1e-3
+        # and in millimetres ~1e3, so a bare 1e-14 floor means a different thing in each and is a
+        # tolerance nobody can state. Scaling by the largest determinant on the rule makes the test
+        # the same statement in any unit. `not np.all(... > ...)` rather than `np.any(... < ...)`
+        # so a NaN -- which compares False both ways -- FAILS the guard instead of passing it.
+        scale = float(np.max(np.abs(det))) if det.size else 0.0
+        if not np.all(np.abs(det) > _SINGULAR_JACOBIAN_RATIO * scale):
+            msg = (
+                'the geometry map is singular (or non-finite) at a requested point: the Jacobian '
+                f'determinant falls to {float(np.nanmin(np.abs(det))) if det.size else 0.0} against '
+                f'a largest of {scale} on this rule.'
+            )
+            raise SplineBasisError(msg)
+        # SIGN CONSISTENCY. |det| alone is blind to a FOLDED patch: a legal reflex control net gives
+        # determinants of mixed sign, the parametrization inverts over part of the patch, and the
+        # signed area then under-reports the covered one (measured 0.200 against a true 0.331) with
+        # no exception anywhere. A patch that turns itself inside out is not a patch.
+        if float(det.min()) * float(det.max()) <= 0.0:
+            msg = (
+                'the geometry map FOLDS: the Jacobian determinant changes sign across the patch '
+                f'(from {float(det.min())} to {float(det.max())}), so the parametrization is '
+                'inverted over part of it and any integral over it is wrong.'
+            )
             raise SplineBasisError(msg)
         self._inverse_jacobian = np.linalg.inv(square)
         self._geometry_curvature = (
