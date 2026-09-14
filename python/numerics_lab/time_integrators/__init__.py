@@ -234,6 +234,25 @@ class TransientSolution:
         return not self.nonconverged_times
 
 
+def _roundoff_floor(problem, tangent, u: NDArray[np.floating], form) -> float | None:
+    """The residual scale below which a converged solve cannot go, or ``None`` if unknowable.
+
+    The problem's own `residual_roundoff_floor` is preferred: it is a statement about that
+    system's cancellation, which no generic derivation can see. :func:`residual_floor` is the
+    fallback and needs only the tangent. A non-finite reading from either is discarded rather
+    than compared -- a floor that is not a number cannot bound anything.
+    """
+    floor_fn = getattr(problem, 'residual_roundoff_floor', None)
+    if callable(floor_fn):
+        floor = float(floor_fn(u, form))
+        if np.isfinite(floor):
+            return floor
+    if tangent is None:
+        return None
+    floor = float(residual_floor(tangent, u))
+    return floor if np.isfinite(floor) else None
+
+
 def _bdf2_variable_form(state: IntegratorState, dt: float, h: float, t_new: float) -> StepForm:
     """The variable-spacing BDF2 step form; ``h`` is the previous step's size.
 
@@ -476,12 +495,22 @@ def _solve_step(
         residual = float(np.linalg.norm(r))
         if residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0):
             converged = True
-        elif tangent is not None and residual <= residual_floor(tangent, u):
+        elif (floor := _roundoff_floor(problem, tangent, u, form)) is not None and residual <= floor:
             # THE ARITHMETIC FLOOR, and the reason an exactly-solved LINEAR step no longer lies.
             # ``tol`` is ABSOLUTE on a residual whose scale is the supply, so the same one-Newton
             # exact solve read 6.17e-13 at 24 V (under the bar) and 4.95e-11 at 2400 V (over it).
-            # The floor is ``eps * |J| . |u|`` and therefore scales WITH the supply, exactly as
-            # the residual does. See :func:`residual_floor`.
+            # A floor has to scale WITH the supply, exactly as the residual does.
+            #
+            # TWO SOURCES, BOTH KEPT, because each has a consumer and either alone drops a
+            # capability. The PROBLEM'S OWN reading wins where it exists: some affine systems
+            # cannot represent a zero residual after their one exact solve, because large signed
+            # terms cancel only to the scale of floating-point row summation, and only the problem
+            # knows that scale (`laplace.circuit.core.mna` measures and exposes it). Where no
+            # problem declares one, :func:`residual_floor` derives ``eps * |J| . |u|`` from the
+            # tangent, which needs nothing of the caller and covers every other problem.
+            #
+            # Consulted ONLY after the requested bar was missed, so neither source can stop an
+            # iteration early or alter the trajectory.
             converged = True
     if not converged and gmin_stages is not None:
         # The SPICE-standard gmin continuation (opt-in): a fresh damped Newton path from the
