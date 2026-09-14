@@ -191,3 +191,42 @@ def test_a_residual_stalled_a_thousand_eps_above_the_floor_is_refused() -> None:
         f'a 1 ppm-relative residual {stalled:.3e} is only {stalled / floor:.3e}x the floor '
         f'{floor:.3e}; the criterion has lost the ability to tell exact from nearly-right'
     )
+
+
+def test_a_step_the_floor_carried_says_so_and_one_its_own_bar_carried_does_not() -> None:
+    """THE SILENT DIRECTION, and the one this file did not previously close.
+
+    Every assertion above that reads ``converged`` / ``nonconverged_times == []`` goes green on
+    either verdict: the step met ``tol``, or it exhausted ``max_newton`` and the FLOOR passed it.
+    A march that genuinely stopped converging, but whose residual happens to sit at the
+    arithmetic floor, would be certified by the arithmetic while the test still read as proof of
+    the physics -- a declaration that lies, with the floor as the thing that made it lie.
+
+    ``floor_converged_times`` is what makes the two DISTINGUISHABLE, and this SAME circuit at two
+    supplies is the sharpest possible pin on it, because the physics is identical and only the
+    scale moves: at 24 V the exact solve lands under the absolute ``tol`` and NO step touches the
+    floor; at 2400 V the identical solve lands above it and EVERY marched step is carried by the
+    floor. Measured 2026-09-13 over the same 200-step march: 0 floor steps at 24 V, 188 at 2400 V.
+
+    Both directions are asserted, because a ratchet has two sides: a recorder that never fires is
+    as wrong as one that always does, and the 24 V leg is what proves this is not simply True.
+    """
+    lo, hi = _march(24.0), _march(2400.0)
+
+    assert lo.converged and lo.floor_converged_times == [], (
+        f'24 V: {len(lo.floor_converged_times)} steps were carried by the floor, so this leg no '
+        f'longer proves the recorder can stay silent'
+    )
+    assert lo.converged_within_the_ceiling  # the STRONGER tag: converged on the physics
+
+    assert hi.converged, 'the 2400 V march is the deliverable above -- it must still be converged'
+    assert hi.floor_converged_times, (
+        f'2400 V: worst residual {hi.worst_step_residual:.3e} cleared the retired absolute bar '
+        f'{_RETIRED_ABSOLUTE_BAR:.1e}, so the floor is what passed these steps -- and nothing on '
+        f'the solution said so. That is the fact a caller cannot otherwise reach.'
+    )
+    assert not hi.converged_within_the_ceiling, (
+        'every 2400 V step exhausted its ceiling and was passed by the floor, so the STRONGER tag '
+        'must be False -- if it is True the two verdicts have collapsed back into one'
+    )
+    assert set(hi.floor_converged_times) <= set(hi.times), 'a floor step at an instant never marched'
