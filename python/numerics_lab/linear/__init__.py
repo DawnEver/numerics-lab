@@ -40,7 +40,12 @@ from scipy.sparse.linalg import (
 )
 
 from motronics.gauss.linear.dirichlet import apply_dirichlet_triplets
-from motronics.gauss.linear.gauge import gauge_pin_orphan_rows, orphan_rows
+from motronics.gauss.linear.gauge import (
+    gauge_pin_constant_mode,
+    gauge_pin_orphan_rows,
+    has_no_reference,
+    orphan_rows,
+)
 from motronics.gauss.linear.pin_rows import pin_rows
 from motronics.gauss.linear.ssor import ssor_preconditioner
 
@@ -59,8 +64,10 @@ __all__ = [
     'apply_dirichlet_triplets',
     'direct_refinement_correction',
     'direct_relative_residual',
+    'gauge_pin_constant_mode',
     'gauge_pin_orphan_rows',
     'get_linear_solver',
+    'has_no_reference',
     'make_preconditioner',
     'orphan_rows',
     'pin_rows',
