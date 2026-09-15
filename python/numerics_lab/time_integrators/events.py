@@ -272,7 +272,7 @@ def integrate_transient_with_events(
             form = _bdf2_variable_form(from_state, dt_step, from_prev_dt, t_new)
         else:
             form = integrator.prepare(from_state, dt_step, t_new)
-        u_new, converged, _iterations, residual = _solve_step(
+        u_new, converged, _iterations, residual, on_floor = _solve_step(
             problem,
             form,
             from_state.last_u,
@@ -292,6 +292,12 @@ def integrate_transient_with_events(
         # (`_commit`) promote it when the point actually joins the trajectory. Recording it as
         # landed here made `converged` ~9x pessimistic on a switching march and useless.
         solution.worst_step_residual = max(solution.worst_step_residual, residual)
+        if on_floor:
+            # `floor_converged_times` is the SOLVE diagnostic, deliberately NOT promoted through
+            # `_commit` the way an exhaustion label is: a probe that only the arithmetic could
+            # settle is exactly the thing a reader tuning `max_newton` wants to see, and unlike an
+            # error it cannot contaminate a trajectory it never joined. Its own docstring says so.
+            solution.floor_converged_times.append(t_new)
         if not converged:
             solution.nonconverged_probe_times.append(t_new)
         return integrator.advance(from_state, u_new, dt_step, t_new), u_new, converged
