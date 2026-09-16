@@ -20,6 +20,7 @@ handed to the Krylov backends as ``M``. This module touches no physics and no me
 
 from __future__ import annotations
 
+import math
 import warnings
 from collections.abc import Callable
 from typing import Protocol
@@ -73,6 +74,7 @@ __all__ = [
     'make_preconditioner',
     'orphan_rows',
     'pin_rows',
+    'refinement_residual',
     'reject_nonfinite_solution',
     'reject_unsolved_direct_system',
     'repair_direct_solution',
@@ -399,6 +401,89 @@ def direct_relative_residual(matrix, rhs, x) -> float | None:
     return float(np.linalg.norm(np.asarray(matrix @ xv).ravel() - b.ravel())) / b_norm
 
 
+#: Dekker's splitting constant, ``2**27 + 1``. Multiplying a float64 by it and taking
+#: ``c - (c - a)`` yields the leading 26 bits of ``a`` EXACTLY, so ``a = hi + lo`` with both halves
+#: representable and their product exact -- the standard error-free transformation, and the whole
+#: of what :func:`refinement_residual` needs beyond ``math.fsum``.
+_DEKKER_SPLIT = 134217729.0
+
+
+def refinement_residual(matrix, rhs, x) -> np.ndarray | None:
+    """``b - A x`` computed to DOUBLE the working precision, or ``None`` when it cannot be.
+
+    WHY THIS EXISTS, measured 2026-09-16 on `spm_ferrari_luce_rear --scope full --chart
+    cartesian_3d --select fea,tet` at 3.0 mm: an n=207104 H(curl) solve was refused as "singular /
+    rank-deficient" on a refinement move of **1.635e-06** -- 1.6x the bar, against the committed
+    singular plant's 4.7 and the well-posed sweep's 1e-13 (see :data:`_DIRECT_REFINEMENT_RTOL`).
+    A system that is genuinely rank-deficient does not land at 1.6x the bar. What it had was a
+    refinement sequence that STAGNATED instead of collapsing, and the stagnation was in the
+    INSTRUMENT rather than in the answer.
+
+    ``d = A^-1 (b - A x)`` is only as good as ``b - A x``, and a working-precision residual of an
+    ``x`` that already solves the system to round-off is CANCELLATION: the computed ``b - A x``
+    carries an error of order ``eps * ||A|| ||x||``, so ``||d|| / ||x||`` cannot fall below
+    ``cond(A) * eps`` however many steps are taken. That floor is a property of the ESTIMATOR, not
+    of ``x``. Measured on a synthetic SPD system at ``cond = 1.0e10``:
+
+        working-precision residual:  1.924e-07, 2.248e-07, 2.505e-07, 2.315e-07, 2.234e-07
+        this function's residual:    1.216e-07, 5.383e-15, 4.398e-17, 4.398e-17, 4.398e-17
+
+    -- the same first step (both estimate the same real error in ``x``), and then one collapses
+    and the other does not. THE BAR IS UNTOUCHED, and that is the point: the guard still demands
+    1e-06 of the vector it returns. What changed is that the number it reads is now the move the
+    answer would actually make rather than the noise floor of its own subtraction.
+
+    THE CONSTRUCTION, and it is exact rather than merely careful. Each product ``a_ij x_j`` is
+    split by :data:`_DEKKER_SPLIT` into a rounded value plus its EXACT error term, and the row is
+    then summed together with ``-b_i`` by :func:`math.fsum`, which is correctly rounded over any
+    number of terms. So the returned residual is the correctly rounded value of an exactly
+    computed quantity: double-double in, one float64 out.
+
+    ``None`` is UNJUDGED and means the caller must fall back to the plain residual: a complex or
+    non-float64 operator (the error-free transformation is stated for binary64 reals), or a
+    non-square/unshaped matrix. Returning a silently plain residual under this name would be the
+    declaration-that-lies shape, so the fallback is the CALLER's, visibly.
+
+    THE PRICE, as a ratio: measured 1.35 s for the fsum pass at n=207104 / nnz=3.1e6 against
+    0.014 s for the working-precision matvec -- ~100x the matvec and ~1% of the sparse
+    factorization the same step already pays. It is reached only after the residual trigger has
+    fired, i.e. only on solves that were being REFUSED.
+    """
+    shape = np.shape(matrix)
+    if len(shape) != 2 or shape[0] != shape[1]:
+        return None
+    b = np.asarray(rhs.todense() if sp.issparse(rhs) else rhs).ravel()
+    xv = np.asarray(x.todense() if sp.issparse(x) else x).ravel()
+    if b.dtype != np.float64 or xv.dtype != np.float64:
+        return None
+    csr = sp.csr_matrix(matrix)
+    if csr.dtype != np.float64:
+        return None
+
+    data, indices, indptr = csr.data, csr.indices, csr.indptr
+    factor = xv[indices]
+    product = data * factor
+    # The error-free transformation, vectorized over every nonzero at once: `product` is the
+    # rounded product and `error` is EXACTLY what the rounding discarded, so their sum is the
+    # product with no error at all.
+    split = _DEKKER_SPLIT * data
+    data_hi = split - (split - data)
+    data_lo = data - data_hi
+    split = _DEKKER_SPLIT * factor
+    factor_hi = split - (split - factor)
+    factor_lo = factor - factor_hi
+    error = ((data_hi * factor_hi - product) + data_hi * factor_lo + data_lo * factor_hi) + data_lo * factor_lo
+
+    out = np.empty(csr.shape[0], dtype=np.float64)
+    for row in range(csr.shape[0]):
+        lo, hi = indptr[row], indptr[row + 1]
+        # ONE fsum over products, their errors AND the right-hand side, rather than three sums
+        # added together: adding two correctly rounded partial sums re-introduces exactly the
+        # cancellation this function exists to remove.
+        out[row] = -math.fsum([*product[lo:hi], *error[lo:hi], -b[row]])
+    return out
+
+
 def direct_refinement_correction(matrix, rhs, x) -> float | None:
     """``||d|| / ||x||`` for one step of iterative refinement, or ``None`` when it cannot speak.
 
@@ -422,7 +507,13 @@ def direct_refinement_correction(matrix, rhs, x) -> float | None:
         return None
     b = np.asarray(rhs.todense() if sp.issparse(rhs) else rhs)
     xv = np.asarray(x.todense() if sp.issparse(x) else x).reshape(b.shape)
-    residual_vec = b.ravel() - np.asarray(matrix @ xv).ravel()
+    # THE RESIDUAL IN DOUBLE THE WORKING PRECISION, with the plain one as the declared fallback:
+    # `refinement_residual` returns None exactly when the error-free transformation does not hold
+    # (complex or non-float64), and the estimate below then means what it always meant. See that
+    # function for the measurement that made the difference matter.
+    residual_vec = refinement_residual(matrix, b.ravel(), xv.ravel())
+    if residual_vec is None:
+        residual_vec = b.ravel() - np.asarray(matrix @ xv).ravel()
     try:
         with warnings.catch_warnings():
             warnings.simplefilter('error', MatrixRankWarning)
@@ -488,7 +579,13 @@ def repair_direct_solution(matrix, rhs, x) -> tuple[np.ndarray, tuple[float, ...
         return np.asarray(x), ()
 
     def _step_and_move(vec):
-        step = factor.solve(b - np.asarray(matrix @ vec).ravel())
+        # The SAME estimator `direct_refinement_correction` uses, and it has to be: the repair
+        # steps and the verdict taken on their result must read one instrument, or a vector could
+        # be repaired against one residual and judged against another.
+        residual_vec = refinement_residual(matrix, b, vec)
+        if residual_vec is None:
+            residual_vec = b - np.asarray(matrix @ vec).ravel()
+        step = factor.solve(residual_vec)
         if not np.all(np.isfinite(step)):
             return None, None
         norm = float(np.linalg.norm(vec))
