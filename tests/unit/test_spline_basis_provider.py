@@ -115,7 +115,10 @@ def test_a_field_space_may_be_a_different_degree_from_the_geometry_patch() -> No
     assert basis.geometry_degrees == (2, 1)
     assert basis.field_degrees == (1, 1)
     out = basis.evaluate(np.array([[0.5, 0.5]]), derivative_order=1)
-    assert out.values.shape == (1, 4), 'the FIELD space sets the basis count, not the geometry'
+    # The rows are on the SUPPORT and `n_basis` is the patch width; on this single-span field
+    # space the two coincide, so both are pinned -- one of them alone would stop saying which.
+    assert out.values.shape == (1, 4), 'the FIELD space sets the support width, not the geometry'
+    assert out.n_basis == 4, 'the FIELD space sets the basis count, not the geometry'
 
 
 def test_the_field_space_defaults_to_the_geometry_space_when_unset() -> None:
@@ -281,8 +284,11 @@ def test_the_laplacian_of_a_COORDINATE_is_zero_on_a_curved_rational_patch() -> N
     values = PatchBasis(patch).evaluate(grid, derivative_order=2)
 
     for component in (0, 1):
-        coefficients = patch.control_points[:, component]
-        laplacian = np.einsum('qidd->qi', values.hessians) @ coefficients
+        # GATHERED onto each point's support, which is the stronger statement: the rows are local,
+        # so a basis function scattered to the wrong column gives the wrong coefficient here and
+        # the coordinate stops being reproduced. A dense accessor would hide that.
+        coefficients = patch.control_points[values.columns, component]
+        laplacian = np.einsum('qldd,ql->q', values.hessians, coefficients)
         assert np.abs(laplacian).max() < 1e-10, component
 
 
@@ -295,7 +301,7 @@ def test_the_gradient_of_a_COORDINATE_is_the_unit_vector_along_it() -> None:
     values = PatchBasis(patch).evaluate(grid, derivative_order=2)
 
     for component in (0, 1):
-        gradient = np.einsum('qid,i->qd', values.gradients, patch.control_points[:, component])
+        gradient = np.einsum('qld,ql->qd', values.gradients, patch.control_points[values.columns, component])
         expected = np.zeros(2)
         expected[component] = 1.0
         assert np.abs(gradient - expected).max() < 1e-12, component

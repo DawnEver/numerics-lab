@@ -35,10 +35,28 @@ Four interface constraints, each forced by a consumer that would otherwise be lo
    :class:`FormDegree` is how the space SAYS so -- a caller asking for a form this module does not
    build gets a refusal naming it, never a silent scalar substitute.
 
-Cost note, so nobody reads the loop below as a claim about speed: the basis evaluation is the dense
-Cox-de Boor recursion over the whole knot vector, not a per-span local-support window. That is
-correct and wasteful, and it is the shape a Bezier-extraction rewrite replaces once a real assembly
-is measuring. Nothing here should be quoted as the cost of isogeometric assembly.
+THE EVALUATION IS LOCAL, AND THAT IS A MEMORY PROPERTY BEFORE IT IS A SPEED ONE
+--------------------------------------------------------------------------------
+
+A B-spline basis is LOCAL: at any parameter only ``degree + 1`` functions per direction are
+nonzero, so ``prod(degree + 1)`` in total -- 9 at degree 2. :meth:`PatchBasis.evaluate` therefore
+returns arrays that are ``prod(degree + 1)`` WIDE, beside a :attr:`BasisValues.columns` array
+naming which patch-local function each slot is. The width is a property of the DEGREE, so it does
+not move when the patch is refined.
+
+THIS USED TO RETURN ``(n_points, n_basis)`` DENSE OVER THE WHOLE PATCH, and the module docstring
+called that "correct and wasteful". MEASURED on ``cases/field/pm/spm_slotted`` at
+``SPLINE_REFINE = (2, 2)`` before the change: the spline leg peaked at 2.87 GB RSS, returned
+4.328 GB of dense arrays across 19613 calls against 0.385 GB of actual information (11.2x), and
+its largest single call was 234200 points by 105 basis functions -- ONE array of 0.55 GB, 94% of
+it structural zeros. 1.759 GB of the peak was not even transient: ``SplineNonlinearSystem``
+retains the values and gradients of every patch for the whole Picard loop. Refinement is this
+lane's main physics lever ((2,2) -> (3,3) moved torque from 0.307x to 0.553x of FEMM), and memory
+was what bounded it.
+
+The zeros were EXACT -- Cox-de Boor writes ``0.0`` outside the support, and the rational quotient
+rule carries that through as ``(0 - 0 * W') / W`` -- so dropping them is an exact operation on the
+arrays themselves. Only the SUMS reassociate.
 """
 
 from __future__ import annotations
@@ -58,13 +76,16 @@ from motronics.gauss.contract import contract
 
 __all__ = [
     'EXTRA_QUADRATURE_POINTS',
+    'GRAM_BATCH_POINTS',
     'BasisValues',
     'FormDegree',
     'PatchBasis',
     'QuadratureRule',
     'SplineBasisError',
     'gauss_legendre_1d',
+    'gradient_gram_triplets',
     'patch_quadrature',
+    'scatter_to_patch',
 ]
 
 #: The highest derivative order this wave evaluates. Two is not a placeholder: it is what
@@ -125,20 +146,30 @@ class QuadratureRule(NamedTuple):
 
 @dataclass(frozen=True)
 class BasisValues:
-    """What an evaluation returns: values, and derivatives to the order that was asked for.
+    """What an evaluation returns: values on the SUPPORT, and derivatives to the order asked for.
+
+    Every array is ``n_support = prod(field_degree + 1)`` wide, never ``n_basis`` wide, and
+    :attr:`columns` says which patch-local basis function each slot is. A consumer that genuinely
+    wants the patch-wide array calls :meth:`dense_values` / :meth:`dense_gradients` /
+    :meth:`dense_hessians` and pays for it at that one site, which is the point: the sites that
+    only want a determinant, a Jacobian or an assembled block never pay at all.
 
     Attributes:
-        values: ``(n_points, n_basis)`` basis values.
-        gradients: ``(n_points, n_basis, dim)`` PHYSICAL first derivatives, or ``None`` when order
-            0 was requested. Physical, not parametric: a caller assembling a stiffness wants
+        values: ``(n_points, n_support)`` basis values.
+        gradients: ``(n_points, n_support, dim)`` PHYSICAL first derivatives, or ``None`` when
+            order 0 was requested. Physical, not parametric: a caller assembling a stiffness wants
             ``d/dx``, and doing the chain rule at every call site is how two call sites end up
             disagreeing about it.
-        hessians: ``(n_points, n_basis, dim, dim)`` physical second derivatives, or ``None`` below
-            order 2.
+        hessians: ``(n_points, n_support, dim, dim)`` physical second derivatives, or ``None``
+            below order 2.
         det_jacobian: ``(n_points,)`` determinant of the geometry map's Jacobian, the factor that
             turns a parametric weight into a physical one.
         jacobian: ``(n_points, 3, dim)`` the geometry Jacobian itself, for a caller that needs the
             map rather than only its determinant (a normal, a pull-back).
+        columns: ``(n_points, n_support)`` PATCH-LOCAL index of each slot, i.e. the column it would
+            occupy in the dense array. Add ``PatchBasis.dof_offset`` for a global dof id.
+        n_basis: how wide the patch's basis is -- the width of the dense array these rows scatter
+            into. Carried so a consumer never has to reconstruct it from a shape it no longer sees.
 
     """
 
@@ -147,6 +178,37 @@ class BasisValues:
     hessians: NDArray[np.float64] | None
     det_jacobian: NDArray[np.float64]
     jacobian: NDArray[np.float64]
+    columns: NDArray[np.intp]
+    n_basis: int
+
+    def dense_values(self) -> NDArray[np.float64]:
+        """The ``(n_points, n_basis)`` array these rows scatter into."""
+        out = np.zeros((self.values.shape[0], self.n_basis))
+        np.put_along_axis(out, self.columns, self.values, axis=1)
+        return out
+
+    def dense_gradients(self) -> NDArray[np.float64]:
+        """The ``(n_points, n_basis, dim)`` physical first derivatives, dense over the patch."""
+        if self.gradients is None:
+            msg = 'gradients were not evaluated: this BasisValues was produced at derivative order 0'
+            raise SplineBasisError(msg)
+        dim = self.gradients.shape[2]
+        out = np.zeros((self.values.shape[0], self.n_basis, dim))
+        for d in range(dim):
+            np.put_along_axis(out[:, :, d], self.columns, self.gradients[:, :, d], axis=1)
+        return out
+
+    def dense_hessians(self) -> NDArray[np.float64]:
+        """The ``(n_points, n_basis, dim, dim)`` physical second derivatives, dense over the patch."""
+        if self.hessians is None:
+            msg = 'hessians were not evaluated: this BasisValues was produced below derivative order 2'
+            raise SplineBasisError(msg)
+        dim = self.hessians.shape[2]
+        out = np.zeros((self.values.shape[0], self.n_basis, dim, dim))
+        for a in range(dim):
+            for b in range(dim):
+                np.put_along_axis(out[:, :, a, b], self.columns, self.hessians[:, :, a, b], axis=1)
+        return out
 
 
 class PatchBasis:
@@ -291,40 +353,52 @@ class PatchBasis:
         )
 
         jac, det = self._geometry_jacobian(geom, points.shape[0])
-        values = _rationalise_values(field.values, self._field_weights(field.values.shape[1]))
+        values = _rationalise_values(field.values, self._field_weights(field))
         gradients = hessians = None
         if derivative_order >= 1:
             gradients = self._physical_gradients(field, jac)
         if derivative_order >= MAX_DERIVATIVE_ORDER:
             hessians = self._physical_hessians(field, jac)
-        return BasisValues(values=values, gradients=gradients, hessians=hessians, det_jacobian=det, jacobian=jac)
+        return BasisValues(
+            values=values,
+            gradients=gradients,
+            hessians=hessians,
+            det_jacobian=det,
+            jacobian=jac,
+            columns=field.columns,
+            n_basis=field.n_basis,
+        )
 
     # --- internals -------------------------------------------------------------------
 
-    def _field_weights(self, n_basis: int) -> NDArray[np.float64]:
-        """The weights the FIELD space carries: the patch's own when the spaces coincide.
+    def _field_weights(self, field: _TensorBasis) -> NDArray[np.float64]:
+        """The field weights GATHERED onto each point's support -- ``(n_points, n_support)``.
 
-        A field space of a different degree has no weights of its own -- it is a polynomial space
-        on the same parameter domain -- so it is non-rational by construction. Saying that here is
-        why the sub-parametric case does not silently inherit a rational denominator that belongs
-        to the geometry.
+        The patch's own weights when the spaces coincide. A field space of a different degree has
+        no weights of its own -- it is a polynomial space on the same parameter domain -- so it is
+        non-rational by construction. Saying that here is why the sub-parametric case does not
+        silently inherit a rational denominator that belongs to the geometry.
+
+        Gathered rather than returned whole because every consumer of this multiplies it against a
+        ``(n_points, n_support)`` array: handing back the patch-wide vector would put the density
+        back one line later, which is the shape this module exists to not have.
         """
-        if n_basis == self.patch.n_control_points and self.field_degrees == self.geometry_degrees:
-            return self.patch.weights
-        return np.ones(n_basis)
+        if field.n_basis == self.patch.n_control_points and self.field_degrees == self.geometry_degrees:
+            return self.patch.weights[field.columns]
+        return np.ones(field.columns.shape)
 
     def _geometry_jacobian(self, geom: _TensorBasis, n_points: int) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         """``dX/dq`` and its determinant, from the RATIONAL geometry map."""
-        weights = self.patch.weights
-        weighted = geom.values * weights[None, :]
+        weights = self.patch.weights[geom.columns]
+        weighted = geom.values * weights
         denominator = weighted.sum(axis=1)
         rational = weighted / denominator[:, None]
 
-        d_weighted = geom.gradients * weights[None, :, None]
+        d_weighted = geom.gradients * weights[:, :, None]
         d_denominator = d_weighted.sum(axis=1)
         d_rational = (d_weighted - rational[:, :, None] * d_denominator[:, None, :]) / denominator[:, None, None]
 
-        jac = contract('qid,ic->qcd', d_rational, self.patch.control_points)
+        jac = contract('qid,qic->qcd', d_rational, self.patch.control_points[geom.columns])
         square = jac[:, : self.parametric_dim, :]
         det = np.linalg.det(square)
         # RELATIVE, because a determinant carries units: dX/dq on a 50 mm patch in metres is ~1e-3
@@ -354,7 +428,7 @@ class PatchBasis:
             raise SplineBasisError(msg)
         self._inverse_jacobian = np.linalg.inv(square)
         self._geometry_curvature = (
-            contract('qide,ic->qcde', _rational_hessians(geom, weights), self.patch.control_points)
+            contract('qide,qic->qcde', _rational_hessians(geom, weights), self.patch.control_points[geom.columns])
             if geom.hessians is not None
             else None
         )
@@ -363,7 +437,7 @@ class PatchBasis:
     def _physical_gradients(self, field: _TensorBasis, jac: NDArray[np.float64]) -> NDArray[np.float64]:
         """Chain-rule the parametric derivatives onto physical coordinates."""
         del jac
-        rational = _rationalise_gradients(field, self._field_weights(field.values.shape[1]))
+        rational = _rationalise_gradients(field, self._field_weights(field))
         return contract('qid,qde->qie', rational, self._inverse_jacobian)
 
     def _physical_hessians(self, field: _TensorBasis, jac: NDArray[np.float64]) -> NDArray[np.float64]:
@@ -393,7 +467,7 @@ class PatchBasis:
         if field.hessians is None:
             msg = 'second derivatives were requested but the field basis did not produce them'
             raise SplineBasisError(msg)
-        weights = self._field_weights(field.values.shape[1])
+        weights = self._field_weights(field)
         parametric = _rational_hessians(field, weights)
         gradients = self._physical_gradients(field, None)
         curvature = self._geometry_hessians()
@@ -415,9 +489,18 @@ class PatchBasis:
 
 
 class _TensorBasis(NamedTuple):
+    """The tensor-product basis on each point's SUPPORT, plus which columns that support is.
+
+    ``values`` is ``(n_points, n_support)``; ``columns`` is the same shape and holds the index the
+    slot would occupy in the dense ``(n_points, n_basis)`` array. ``n_basis`` is that dense width,
+    carried because nothing else in the tuple still knows it.
+    """
+
     values: NDArray[np.float64]
     gradients: NDArray[np.float64] | None
     hessians: NDArray[np.float64] | None
+    columns: NDArray[np.intp]
+    n_basis: int
 
 
 def _tensor_basis(
@@ -427,47 +510,78 @@ def _tensor_basis(
     *,
     order: int,
 ) -> _TensorBasis:
-    """Tensor-product basis values and parametric derivatives, first direction varying fastest."""
-    per_direction = [
-        _bspline_1d(knot, degree, points[:, d], order=order)
-        for d, (knot, degree) in enumerate(zip(knots, degrees, strict=True))
-    ]
-    dim = len(degrees)
-    values = per_direction[0][0]
-    for d in range(1, dim):
-        values = _outer_fastest_first(values, per_direction[d][0])
+    """Tensor-product basis on each point's support, first direction varying fastest.
 
+    THE TENSOR PRODUCT IS WHERE THE DENSITY USED TO BE BUILT. Each direction contributes only
+    ``degree + 1`` nonzero functions, so the dense product of two directions was
+    ``n_1 * n_2`` wide to hold ``(p_1 + 1) * (p_2 + 1)`` nonzeros -- 105 columns for 6 numbers on
+    spm_slotted's carriers at refine (2, 2). Windowing each direction FIRST and tensoring the
+    windows gives the same numbers in the same order with the zeros never allocated.
+
+    The per-direction recursion is still evaluated densely and then windowed, which costs
+    ``n_points * n_1d`` per direction -- LINEAR in the knot vector, against the product that was
+    quadratic in it. That is the term left on the table here, and it is named rather than implied.
+    """
+    dim = len(degrees)
+    windows = []
+    firsts = []
+    widths = []
+    for d, (knot, degree) in enumerate(zip(knots, degrees, strict=True)):
+        n_1d = len(knot) - degree - 1
+        span = _knot_span(knot, degree, points[:, d], n_1d)
+        first = span - degree
+        take = first[:, None] + np.arange(degree + 1)[None, :]
+        windows.append([
+            np.take_along_axis(block, take, axis=1) for block in _bspline_1d(knot, degree, points[:, d], order=order)
+        ])
+        firsts.append(first)
+        widths.append(n_1d)
+
+    # The local slot ordering must match the dense flattening the consumers' column index assumes:
+    # the dense index is `i_0 + n_0 * i_1 + n_0 * n_1 * i_2`, first direction fastest -- the same
+    # order the control points and `greville_points` use. Ravelling the meshgrid in Fortran order gives
+    # the local slots in that same sequence, which is what makes `columns` a pure relabelling.
+    offsets = [g.ravel(order='F') for g in np.meshgrid(*[np.arange(p + 1) for p in degrees], indexing='ij')]
+    stride = 1
+    columns = np.zeros((points.shape[0], int(np.prod([p + 1 for p in degrees]))), dtype=np.intp)
+    for d in range(dim):
+        columns += stride * (firsts[d][:, None] + offsets[d][None, :])
+        stride *= widths[d]
+
+    def product(orders: tuple[int, ...]) -> NDArray[np.float64]:
+        block = windows[0][orders[0]][:, offsets[0]]
+        for d in range(1, dim):
+            block = block * windows[d][orders[d]][:, offsets[d]]
+        return block
+
+    values = product((0,) * dim)
     gradients = None
     if order >= 1:
-        columns = []
-        for direction in range(dim):
-            factors = [per_direction[d][1 if d == direction else 0] for d in range(dim)]
-            block = factors[0]
-            for d in range(1, dim):
-                block = _outer_fastest_first(block, factors[d])
-            columns.append(block)
-        gradients = np.stack(columns, axis=2)
-
+        gradients = np.stack(
+            [product(tuple(1 if d == direction else 0 for d in range(dim))) for direction in range(dim)], axis=2
+        )
     hessians = None
     if order >= MAX_DERIVATIVE_ORDER:
-        blocks = np.empty((points.shape[0], values.shape[1], dim, dim))
+        hessians = np.empty((points.shape[0], values.shape[1], dim, dim))
         for a in range(dim):
             for b in range(dim):
-                factors = []
-                for d in range(dim):
-                    order_d = (1 if d == a else 0) + (1 if d == b else 0)
-                    factors.append(per_direction[d][order_d])
-                block = factors[0]
-                for d in range(1, dim):
-                    block = _outer_fastest_first(block, factors[d])
-                blocks[:, :, a, b] = block
-        hessians = blocks
-    return _TensorBasis(values=values, gradients=gradients, hessians=hessians)
+                hessians[:, :, a, b] = product(tuple((1 if d == a else 0) + (1 if d == b else 0) for d in range(dim)))
+    return _TensorBasis(
+        values=values, gradients=gradients, hessians=hessians, columns=columns, n_basis=int(np.prod(widths))
+    )
 
 
-def _outer_fastest_first(accumulated: NDArray[np.float64], nxt: NDArray[np.float64]) -> NDArray[np.float64]:
-    """Tensor two per-direction bases so the ALREADY-ACCUMULATED index varies fastest."""
-    return (accumulated[:, None, :] * nxt[:, :, None]).reshape(accumulated.shape[0], -1)
+def _knot_span(knot: NDArray[np.float64], degree: int, values: NDArray[np.float64], n_basis: int) -> NDArray[np.intp]:
+    """The index of the non-empty knot span each parameter falls in, matching :func:`_cox_de_boor`.
+
+    ``searchsorted(..., 'right') - 1`` lands on the LAST knot not greater than the parameter, which
+    is what makes a repeated interior knot resolve to the span ABOVE it rather than to the empty
+    one between the copies -- the same choice ``_cox_de_boor``'s ``knot[i] <= x < knot[i+1]`` makes.
+    The clamp at the top end is the other half of its ``values == knot[-1]`` special case: the
+    domain's last parameter belongs to the last non-empty span rather than to a span past the end.
+    """
+    span = np.searchsorted(knot, np.asarray(values, dtype=float), side='right') - 1
+    return np.clip(span, degree, n_basis - 1).astype(np.intp)
 
 
 def _bspline_1d(
@@ -530,8 +644,14 @@ def _bspline_derivative(
 
 
 def _rationalise_values(values: NDArray[np.float64], weights: NDArray[np.float64]) -> NDArray[np.float64]:
-    """``R_i = w_i N_i / sum_j w_j N_j`` -- the identity when every weight is one."""
-    weighted = values * weights[None, :]
+    """``R_i = w_i N_i / sum_j w_j N_j`` -- the identity when every weight is one.
+
+    ``weights`` is ``(n_points, n_support)``, already gathered onto each point's support. The
+    denominator sums over the SUPPORT rather than over the patch, which is the same number: every
+    term this drops was an exact ``0.0``, and adding an exact zero to a float changes nothing.
+    Only the pairwise grouping numpy sums in differs, at the last bit.
+    """
+    weighted = values * weights
     return weighted / weighted.sum(axis=1, keepdims=True)
 
 
@@ -540,10 +660,10 @@ def _rationalise_gradients(field: _TensorBasis, weights: NDArray[np.float64]) ->
     if field.gradients is None:
         msg = 'gradients were requested but the field basis did not produce them'
         raise SplineBasisError(msg)
-    weighted = field.values * weights[None, :]
+    weighted = field.values * weights
     denominator = weighted.sum(axis=1)
     rational = weighted / denominator[:, None]
-    d_weighted = field.gradients * weights[None, :, None]
+    d_weighted = field.gradients * weights[:, :, None]
     d_denominator = d_weighted.sum(axis=1)
     return (d_weighted - rational[:, :, None] * d_denominator[:, None, :]) / denominator[:, None, None]
 
@@ -558,15 +678,15 @@ def _rational_hessians(field: _TensorBasis, weights: NDArray[np.float64]) -> NDA
     if field.hessians is None or field.gradients is None:
         msg = 'second derivatives were requested but the field basis did not produce them'
         raise SplineBasisError(msg)
-    weighted = field.values * weights[None, :]
+    weighted = field.values * weights
     denominator = weighted.sum(axis=1)
     rational = weighted / denominator[:, None]
 
-    d_weighted = field.gradients * weights[None, :, None]
+    d_weighted = field.gradients * weights[:, :, None]
     d_denominator = d_weighted.sum(axis=1)
     d_rational = (d_weighted - rational[:, :, None] * d_denominator[:, None, :]) / denominator[:, None, None]
 
-    dd_weighted = field.hessians * weights[None, :, None, None]
+    dd_weighted = field.hessians * weights[:, :, None, None]
     dd_denominator = dd_weighted.sum(axis=1)
     correction = (
         d_rational[:, :, :, None] * d_denominator[:, None, None, :]
@@ -646,6 +766,90 @@ def _reference_gauss(n: int) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     x.flags.writeable = False
     w.flags.writeable = False
     return x, w
+
+
+#: How many quadrature points one :func:`gradient_gram_triplets` batch may hold.
+#:
+#: A CEILING on the one intermediate still proportional to the point count, not a tuning
+#: preference: the per-point outer product is ``n_support**2`` doubles per point, so this caps it
+#: at roughly ``GRAM_BATCH_POINTS * n_support**2 * 8`` bytes -- 75 MB at degree 2 -- however many
+#: points a trimmed rule turns out to carry. Batches split on CELL boundaries, so the value cannot
+#: change the answer, only the footprint.
+GRAM_BATCH_POINTS = 262144
+
+
+def scatter_to_patch(values: BasisValues, weighted: NDArray[np.float64]) -> NDArray[np.float64]:
+    """Sum ``weighted`` -- ``(n_points, n_support)`` -- into the patch-wide ``(n_basis,)`` vector.
+
+    The load-vector half of locality. A dense assembly wrote ``(rows * measure).sum(axis=0)`` and
+    got a patch-wide vector for free because the array was already patch-wide; on the support the
+    same statement is a scatter-add, and ``bincount`` is the vectorised spelling of one.
+    """
+    return np.bincount(
+        values.columns.ravel(), weights=np.asarray(weighted, dtype=float).ravel(), minlength=values.n_basis
+    )
+
+
+def gradient_gram_triplets(
+    values: BasisValues, dof_ids: NDArray[np.intp], measure: NDArray[np.float64]
+) -> tuple[NDArray[np.intp], NDArray[np.intp], NDArray[np.float64]]:
+    """COO triplets of ``INT measure * grad N_i . grad N_j`` over one patch, built on the SUPPORT.
+
+    THE CELL IS THE UNIT THAT EMITS ENTRIES, not the point and not the patch. Points sharing a knot
+    cell share a support, so this emits ``n_cells * n_support**2`` entries -- against the
+    ``n_basis**2`` a dense patch block holds (11025 for 6 numbers per point on spm_slotted's
+    carriers at refine (2, 2), and growing with the square of the refinement) and the
+    ``n_points * n_support**2`` a per-point scatter would emit. The cell is identified by the FIRST
+    column of the support, which is a bijection with the span indices that produced it.
+
+    ``measure`` carries whatever the caller integrates against -- a reluctivity, a conductivity, a
+    bare area element. Nothing here knows which, which is why it lives in ``gauss``.
+
+    The sum over quadrature points is REASSOCIATED into per-cell partial sums. That is a last-bit
+    change and not a modelling one, the same class as the BLAS reassociation ``gauss.contract``
+    already accepts.
+    """
+    if values.gradients is None:
+        msg = 'a gradient Gram block was requested but the basis was evaluated at derivative order 0'
+        raise SplineBasisError(msg)
+    key = values.columns[:, 0]
+    order = np.argsort(key, kind='stable')
+    key_sorted = key[order]
+    starts = np.flatnonzero(np.concatenate([[True], key_sorted[1:] != key_sorted[:-1]]))
+    gradients = values.gradients[order]
+    weights = np.asarray(measure, dtype=float)[order]
+
+    # BATCHED OVER CELLS, because the per-point outer product is the one array here still
+    # proportional to the POINT COUNT: ``(n_points, n_support, n_support)`` is 36 doubles per point
+    # at degree 2. A batch boundary is a CELL boundary, so every cell's ``reduceat`` is still taken
+    # whole and the result is the same to the last bit -- this bounds the footprint, not the answer,
+    # and the six recorded spm_slotted values came back byte-for-byte identical with and without it.
+    #
+    # WHAT IT IS NOT, MEASURED. It was introduced on the guess that this intermediate dominated the
+    # compile's peak at ``SPLINE_REFINE = (4, 4)``, and that guess is REFUTED: the (4, 4) compile
+    # peaks at 34.37 GB with the ceiling and 34.37 GB without it, unchanged, while the wall fell
+    # 378.9 s -> 311.3 s. So this is a real ceiling on a real array that is not the binding one --
+    # the (4, 4) peak lives in the trimmed rule's own point accumulation, not here. Kept because a
+    # bound proportional to nothing is what the rest of this module now provides, and quoted with
+    # the refutation so nobody reads it as the fix for that peak.
+    bounds = np.append(starts, key_sorted.size)
+    blocks_by_batch = []
+    batch_start = 0
+    while batch_start < starts.size:
+        batch_end = int(np.searchsorted(bounds, bounds[batch_start] + GRAM_BATCH_POINTS, side='right')) - 1
+        batch_end = max(batch_end, batch_start + 1)
+        lo, hi = int(bounds[batch_start]), int(bounds[batch_end])
+        outer = contract('qld,qmd,q->qlm', gradients[lo:hi], gradients[lo:hi], weights[lo:hi])
+        blocks_by_batch.append(np.add.reduceat(outer, starts[batch_start:batch_end] - lo, axis=0))
+        batch_start = batch_end
+    blocks = np.concatenate(blocks_by_batch, axis=0)
+    support = np.asarray(dof_ids, dtype=np.intp)[values.columns[order][starts]]
+    width = support.shape[1]
+    return (
+        np.repeat(support, width, axis=1).ravel(),
+        np.tile(support, (1, width)).ravel(),
+        blocks.ravel(),
+    )
 
 
 def patch_quadrature(patch: Patch, *, extra_points: int = 0) -> QuadratureRule:
