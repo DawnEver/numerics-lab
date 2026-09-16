@@ -54,6 +54,7 @@ from numpy.typing import NDArray
 
 from motronics.contracts.errors import MotronicsError
 from motronics.contracts.ir.spline_space_ir import Patch
+from motronics.gauss.contract import contract
 
 __all__ = [
     'EXTRA_QUADRATURE_POINTS',
@@ -323,7 +324,7 @@ class PatchBasis:
         d_denominator = d_weighted.sum(axis=1)
         d_rational = (d_weighted - rational[:, :, None] * d_denominator[:, None, :]) / denominator[:, None, None]
 
-        jac = np.einsum('qid,ic->qcd', d_rational, self.patch.control_points)
+        jac = contract('qid,ic->qcd', d_rational, self.patch.control_points)
         square = jac[:, : self.parametric_dim, :]
         det = np.linalg.det(square)
         # RELATIVE, because a determinant carries units: dX/dq on a 50 mm patch in metres is ~1e-3
@@ -353,7 +354,7 @@ class PatchBasis:
             raise SplineBasisError(msg)
         self._inverse_jacobian = np.linalg.inv(square)
         self._geometry_curvature = (
-            np.einsum('qide,ic->qcde', _rational_hessians(geom, weights), self.patch.control_points)
+            contract('qide,ic->qcde', _rational_hessians(geom, weights), self.patch.control_points)
             if geom.hessians is not None
             else None
         )
@@ -363,7 +364,7 @@ class PatchBasis:
         """Chain-rule the parametric derivatives onto physical coordinates."""
         del jac
         rational = _rationalise_gradients(field, self._field_weights(field.values.shape[1]))
-        return np.einsum('qid,qde->qie', rational, self._inverse_jacobian)
+        return contract('qid,qde->qie', rational, self._inverse_jacobian)
 
     def _physical_hessians(self, field: _TensorBasis, jac: NDArray[np.float64]) -> NDArray[np.float64]:
         """Second derivatives on PHYSICAL coordinates, with the map's own curvature included.
@@ -398,8 +399,8 @@ class PatchBasis:
         curvature = self._geometry_hessians()
         inv = self._inverse_jacobian
         dim = self.parametric_dim
-        corrected = parametric - np.einsum('qic,qcde->qide', gradients, curvature[:, :dim])
-        return np.einsum('qide,qdf,qeg->qifg', corrected, inv, inv)
+        corrected = parametric - contract('qic,qcde->qide', gradients, curvature[:, :dim])
+        return contract('qide,qdf,qeg->qifg', corrected, inv, inv)
 
     def _geometry_hessians(self) -> NDArray[np.float64]:
         """``d2X/dq dq`` of the RATIONAL geometry map -- the term the chain rule needs.
