@@ -192,3 +192,64 @@ def test_the_detector_is_scale_free(n: int) -> None:
     assert floats_on_a_constant(mat) is True
     assert floats_on_a_constant(csr_matrix(mat.toarray() * 1e6)) is True
     assert floats_on_a_constant(csr_matrix(mat.toarray() * 1e-6)) is True
+
+
+# --- PORTED FROM `feat/jmag-integration` AT THE 2026-09-16 INTEGRATION -----------------------
+#
+# That lane wrote its own copy of this file under `tests/unit/hamilton/fem/`, against its own
+# `has_no_reference` / `gauge_pin_constant_mode` API. THE COPY COULD NOT IMPORT ON ITS OWN BRANCH:
+# it imports `_gauge_pin_constant_mode` and `_gauge_pin_orphan_dofs` from
+# `hamilton/discretizations/fem/_solve.py`, which defines neither -- it imports the PUBLIC names
+# from `gauss.linear`. So it was a collection error there and had never run.
+#
+# THE API DID NOT SURVIVE THE MERGE AND THE REASON IS ON RECORD: their detector infers the
+# reference FROM THE MATRIX, and `gauge_pin_floating_constant`'s docstring is the argument against
+# doing that -- "a real Dirichlet row and a fold's eliminated slave row are the SAME OBJECT ... a
+# detector that guessed would eventually pin a SECOND dof on a properly constrained model". Their
+# `test_an_ANTIPERIODIC_pair_also_counts_as_a_reference` asserts exactly the guessing this side
+# refuses, so the file could not be ported wholesale.
+#
+# THESE TWO CLAIMS COULD, and they are the lane's real finding rather than its API: an orphan pin
+# writes an IDENTITY row, an identity row sums to 1, and a detector that counts it as a reference
+# leaves the coupled bulk floating. This side is immune BY CONSTRUCTION -- `constraint_rows`
+# excludes a lone diagonal before `floats_on_a_constant` reads it -- and that immunity is worth a
+# test that says so rather than an argument that implies it.
+
+
+def _with_orphan(n: int) -> csr_matrix:
+    """A bulk Laplacian plus one DISCONNECTED dof, whose row is all zero."""
+    bulk = _laplacian_1d(n).toarray()
+    big = np.zeros((n + 1, n + 1))
+    big[:n, :n] = bulk
+    return csr_matrix(big)
+
+
+def test_an_EMPTY_system_is_not_a_crash() -> None:
+    """The degenerate edge, where there is no dof to pin."""
+    empty = csr_matrix((0, 0), dtype=float)
+    assert gauge_pin_floating_constant(empty, np.zeros(0), has_dirichlet=False).shape == (0, 0)
+
+
+def test_an_ORPHAN_PIN_DOES_NOT_MASK_A_FREE_CONSTANT_IN_EITHER_ORDER() -> None:
+    """The lane's ordering hole, asserted as ABSENT here rather than as a hazard to sequence around.
+
+    On an API that infers the reference from the matrix, pinning the orphan FIRST leaves the system
+    singular: the identity row it writes reads as an anchor while the coupled bulk still floats,
+    measured there at rank 6 of 7. `constraint_rows` is why that cannot happen on this side -- it
+    masks a lone-diagonal row out of the equations before `floats_on_a_constant` looks -- so BOTH
+    orders must come out full rank, and asserting both is what makes the immunity checkable.
+    """
+    n = 6
+    mat = _with_orphan(n)
+
+    orphan_first = gauge_pin_floating_constant(
+        gauge_pin_orphan_rows(mat, np.zeros(n + 1)), np.zeros(n + 1), has_dirichlet=False
+    )
+    assert np.linalg.matrix_rank(orphan_first.toarray()) == n + 1, (
+        'pinning the orphan first left the system singular -- the identity row it writes is being '
+        'read as a reference, which is the defect `constraint_rows` exists to prevent'
+    )
+
+    constant_first_mat = gauge_pin_floating_constant(mat, np.zeros(n + 1), has_dirichlet=False)
+    constant_first = gauge_pin_orphan_rows(constant_first_mat, np.zeros(n + 1))
+    assert np.linalg.matrix_rank(constant_first.toarray()) == n + 1, 'constant-first must be full rank too'

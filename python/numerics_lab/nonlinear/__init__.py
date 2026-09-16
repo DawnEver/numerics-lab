@@ -509,6 +509,21 @@ class _IncrementTrend:
         return True
 
 
+#: How small the SHAPE (mean-removed) part of an increment must be, RELATIVE TO THE INCREMENT, for
+#: :func:`increment_ratio` to read the increment as pure gauge drift and report the shape instead.
+#:
+#: DERIVED FROM BOTH MEASURED POPULATIONS, not fitted to either. The gauge-drift defect measured
+#: mean-removed 1.0e-06 against a raw 3.5e-02 -- a shape fraction of ~3e-05, which is 33x below
+#: this line. A genuine 1 % shape change riding on a large constant offset measures 2.1e-02, which
+#: is 21x above it. Nothing observed lands between, and the two margins are what make the number a
+#: separator rather than a tuned constant.
+#:
+#: STATED AS A FRACTION OF THE INCREMENT rather than as a "constant fraction near 1", because the
+#: two differ exactly where it matters: a constant fraction of 0.9999 and one of 0.99978 are 1.7e-04
+#: apart, so a threshold between them would sit inside the noise of both measurements.
+_GAUGE_ONLY_SHAPE_FRACTION = 1e-3
+
+
 def increment_ratio(x: np.ndarray, x_next: np.ndarray, /) -> float:
     """``||x_next - x|| / ||x||`` -- the SECOND half of :func:`_has_converged`, on its own.
 
@@ -520,7 +535,35 @@ def increment_ratio(x: np.ndarray, x_next: np.ndarray, /) -> float:
     error, and the log could not distinguish those two -- which is why this is observable now.
     """
     x_scale = max(float(np.linalg.norm(x)), 1e-12)
-    return float(np.linalg.norm(np.asarray(x_next) - np.asarray(x))) / x_scale
+    dx = np.asarray(x_next) - np.asarray(x)
+    dx_norm = float(np.linalg.norm(dx))
+    if dx_norm == 0.0:
+        return 0.0  # the degenerate edge, where the constant fraction is undefined
+    # A UNIFORM SHIFT IN A GAUGE-FREE POTENTIAL IS NOT MOVEMENT. In 2-D magnetostatics the unknown
+    # is the vector potential `A`, defined only up to an additive constant unless a Dirichlet row
+    # pins it; that constant carries no energy and no `B`, so an iterate drifting along it has
+    # reached the fixed point of every physical quantity while `||dx|| / ||x||` goes on reporting a
+    # solution that will not settle. MEASURED 2026-09-06 on `spm_ferrari_luce_rear`, 400
+    # consecutive increments instrumented inside the newton and picard strategies: raw increment
+    # 3.5e-02..2.7e-01 against a criterion needing < 1e-4, mean-removed 1.0e-06..1.8e-06, constant
+    # fraction 1.0000 to four decimals on all 400, energy flat at 185.69 to six digits. All four
+    # one-hot solves ran to the 100-iteration cap and the matrix they produced was refused by
+    # `require_physical_inductance` (eigenvalue -5.76e-05 H at 364.177 A; 19 % reciprocity residual
+    # at 36.4 A). The solve was physically converged; the CRITERION was measuring a gauge mode.
+    #
+    # ITS TWIN IS `gauss.linear.gauge.gauge_pin_constant_mode`, and the two are halves of one fix:
+    # that one stops the LINEAR solve from having no reference at all, this one stops the NONLINEAR
+    # criterion from counting the resulting drift as movement.
+    #
+    # THE RELAXATION IS NARROW, and that is the floor on it. Subtracting the mean unconditionally
+    # would be the wrong shape -- a real change can carry a nonzero mean (an anchored field growing
+    # everywhere) and removing it would under-report genuine movement. So it fires only when the
+    # SHAPE part of the increment is negligible against the increment itself, and the moment a
+    # shape change enters, the raw ratio is what answers.
+    shape_norm = float(np.linalg.norm(dx - dx.mean()))
+    if shape_norm / dx_norm < _GAUGE_ONLY_SHAPE_FRACTION:
+        return shape_norm / x_scale
+    return dx_norm / x_scale
 
 
 def _energy_flux_convergence(
