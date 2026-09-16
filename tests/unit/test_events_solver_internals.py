@@ -49,14 +49,14 @@ def test_the_relative_tolerance_labels_a_scale_stalled_step_converged() -> None:
     state = IntegratorState(us=[np.array([0.0]), np.array([0.0])], t=0.0)
     form = _bdf2_variable_form(state, 0.1, 0.1, 0.1)
 
-    _u, converged_abs, _it, residual = _solve_step(
+    _u, converged_abs, _it, residual, _on_floor = _solve_step(
         problem, form, state.last_u, solve=lambda _j, r: -r, max_newton=5, tol=1e-12
     )
     assert not converged_abs, 'the absolute contract must label the scale stall exhausted'
     assert residual == pytest.approx(1.0e-1, rel=1e-9, abs=0.0)
 
     problem.calls = 0  # the relative run starts its own stall
-    _u, converged_rel, _it, residual = _solve_step(
+    _u, converged_rel, _it, residual, _on_floor = _solve_step(
         problem, form, state.last_u, solve=lambda _j, r: -r, max_newton=5, tol=1e-12, tol_rel=1e-4
     )
     assert converged_rel, (
@@ -102,11 +102,11 @@ def test_the_backtracking_line_search_halves_an_overshooting_step() -> None:
     overshoot_solve = lambda _j, r: 10.0 * r  # noqa: E731 -- the seam's 10x overstep
 
     problem_bt = _Quadratic()
-    u_bt, _converged, _it, _residual = _solve_step(
+    u_bt, _converged, _it, _residual, _on_floor = _solve_step(
         problem_bt, form, np.array([1.0]), solve=overshoot_solve, max_newton=2, tol=1e-12
     )
     problem_bare = _Quadratic()
-    u_bare, _converged, _it, _residual = _solve_step(
+    u_bare, _converged, _it, _residual, _on_floor = _solve_step(
         problem_bare,
         form,
         np.array([1.0]),
@@ -178,13 +178,13 @@ def test_the_stall_polish_switches_to_the_tangent_and_converges() -> None:
     guess = np.array([0.5, 0.5])
 
     problem = _ChordOnly()
-    _u, converged_chord, _it, residual = _solve_step(
+    _u, converged_chord, _it, residual, _on_floor = _solve_step(
         problem, form, guess, solve=solve, max_newton=30, tol=1e-12, tol_rel=1e-6
     )
     assert not converged_chord, f'the chord jacobian must stall (the precondition, residual {residual:g})'
 
     problem = _CouplingChord()
-    _u, converged, _it, residual = _solve_step(
+    _u, converged, _it, residual, _on_floor = _solve_step(
         problem, form, guess, solve=solve, max_newton=30, tol=1e-12, tol_rel=1e-6
     )
     assert converged, f'the stall-polish must converge (residual {residual:g})'

@@ -187,7 +187,7 @@ def test_an_event_inside_a_quadratic_ramp_costs_no_accuracy_at_all() -> None:
 
     state = IntegratorState(us=[np.array([0.045]), np.array([0.18])], t=0.6)
     form = _bdf2_variable_form(state, 0.15, 0.3, 0.75)
-    u_step, converged, iterations, residual = _solve_step(
+    u_step, converged, iterations, residual, _on_floor = _solve_step(
         problem, form, state.last_u, solve=lambda j, r: np.linalg.solve(np.atleast_2d(j), r), max_newton=1, tol=1e-12
     )
     assert abs(float(u_step[0]) - 0.28125) <= 1e-12
