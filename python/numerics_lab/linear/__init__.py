@@ -456,6 +456,15 @@ def refinement_residual(matrix, rhs, x) -> np.ndarray | None:
     xv = np.asarray(x.todense() if sp.issparse(x) else x).ravel()
     if b.dtype != np.float64 or xv.dtype != np.float64:
         return None
+    # A NON-FINITE ITERATE CANNOT BE JUDGED HERE, and saying so is what keeps the SINGULAR
+    # refusal intact. An exactly singular solve hands back inf/NaN, and the error-free
+    # transformation below is stated for FINITE binary64: `inf - inf` in the Dekker split is NaN
+    # and `math.fsum` RAISES `-inf + inf in fsum` on the mixed signs that follow -- so without
+    # this the compensated path turns a clean `LinearSolveError` into a ValueError from inside
+    # the estimator, and a caller that was refusing a singular system starts crashing on it.
+    # `None` is the channel that already exists for "cannot speak", and the caller refuses on it.
+    if not (np.all(np.isfinite(b)) and np.all(np.isfinite(xv))):
+        return None
     csr = sp.csr_matrix(matrix)
     if csr.dtype != np.float64:
         return None
