@@ -70,8 +70,8 @@ def _build() -> dict:
                 'park_inverse': park_inverse(d, q, zero, theta, n_phase=n_phase).tolist(),
             }
             if n_phase == 3:
-                alpha, beta = clarke_forward(x)
-                entry['clarke_forward'] = {'alpha': alpha.tolist(), 'beta': beta.tolist()}
+                alpha, i_phase_angle = clarke_forward(x)
+                entry['clarke_forward'] = {'alpha': alpha.tolist(), 'i_phase_angle': i_phase_angle.tolist()}
             cases[f'{label}_{n_phase}ph'] = entry
 
     # The dq bridge, on a deliberately ASYMMETRIC L so the (2/n) factor cannot cancel by luck.
