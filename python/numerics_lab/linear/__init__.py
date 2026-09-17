@@ -65,6 +65,7 @@ __all__ = [
     'LinearSolver',
     'apply_dirichlet_triplets',
     'constraint_rows',
+    'describe_refinement_trajectory',
     'direct_refinement_correction',
     'direct_relative_residual',
     'floats_on_a_constant',
@@ -74,6 +75,7 @@ __all__ = [
     'make_preconditioner',
     'orphan_rows',
     'pin_rows',
+    'refinement_move_trajectory',
     'refinement_residual',
     'reject_nonfinite_solution',
     'reject_unsolved_direct_system',
@@ -631,6 +633,80 @@ def repair_direct_solution(matrix, rhs, x) -> tuple[np.ndarray, tuple[float, ...
     return current, tuple(moves)
 
 
+#: How far a trajectory must fall for :func:`refinement_move_trajectory` to be called COLLAPSING.
+#: Six decades, and it is a RATIO between two points of the same run rather than a value at one --
+#: so it carries no unit, no scale and no dependence on the order of the system. The two plants in
+#: `test_the_refusal_says_whether_refinement_collapses_or_stalls.py` sit on either side of it by
+#: many decades; it is not a knob tuned to squeeze one of them across.
+_REFINEMENT_COLLAPSE_RATIO = 1e-6
+
+
+def refinement_move_trajectory(matrix, rhs, x, *, max_steps: int = _DIRECT_REFINEMENT_MAX_STEPS) -> tuple[float, ...]:
+    """The sequence of relative refinement moves from ``x`` -- EVIDENCE, never a repaired vector.
+
+    :func:`repair_direct_solution` stops at :data:`_DIRECT_REPAIRABLE_MAX` and hands the guard a
+    single number, so a refusal above that ceiling cannot say which of two things it saw: a
+    solvable system whose starting vector is merely further out than the ceiling (the moves
+    COLLAPSE, because refinement converges to the one answer), or a genuinely rank-deficient one
+    (the moves STALL, because there is no unique answer to converge to). Both used to be reported
+    as "singular / rank-deficient", which sends the reader of the second message looking for a
+    missing gauge on a system that has none missing.
+
+    IT CANNOT CHANGE A VERDICT, by construction: it returns floats and no vector, and its only
+    caller is :func:`reject_unsolved_direct_system` on the path that is already raising. So no bar
+    moves and nothing that is refused today becomes accepted -- the refusal simply names what it
+    measured. It is priced at one factorization plus ``max_steps`` triangular solves, paid ONLY by
+    a solve that is about to fail, which is the one place that cost is already lost.
+
+    Returns the moves in order, or ``()`` when no step could be taken (a non-square matrix, an
+    exactly singular factorization, or a non-finite step): unmeasured is reported as unmeasured.
+    """
+    shape = np.shape(matrix)
+    if len(shape) != 2 or shape[0] != shape[1]:
+        return ()
+    b = np.asarray(rhs.todense() if sp.issparse(rhs) else rhs).ravel()
+    current = np.asarray(x.todense() if sp.issparse(x) else x).ravel().astype(float)
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', MatrixRankWarning)
+            factor = splu(sp.csc_matrix(matrix))
+    except (RuntimeError, MatrixRankWarning, ValueError):
+        return ()
+    moves: list[float] = []
+    for _step in range(int(max_steps)):
+        residual_vec = refinement_residual(matrix, b, current)
+        if residual_vec is None:
+            residual_vec = b - np.asarray(matrix @ current).ravel()
+        step = factor.solve(residual_vec)
+        if not np.all(np.isfinite(step)):
+            break
+        norm = float(np.linalg.norm(current))
+        moves.append(float(np.linalg.norm(step)) / norm if norm else np.inf)
+        current = current + step
+    return tuple(moves)
+
+
+def describe_refinement_trajectory(moves: tuple[float, ...]) -> str:
+    """One clause naming what *moves* shows -- COLLAPSES, STALLS, or was not measurable."""
+    if not moves:
+        return 'diagnostic refinement trajectory: unavailable (no step could be taken)'
+    shown = ', '.join(f'{m:.3e}' for m in moves)
+    if len(moves) < 2:
+        verdict = 'only ONE step was available, so it says nothing about convergence'
+    elif moves[-1] <= moves[0] * _REFINEMENT_COLLAPSE_RATIO:
+        verdict = (
+            'the trajectory COLLAPSES, so this system is SOLVABLE and the starting vector was '
+            f'merely further out than the repair ceiling {_DIRECT_REPAIRABLE_MAX:.0e} -- look at '
+            'CONDITIONING and at the backend, not for a missing gauge'
+        )
+    else:
+        verdict = (
+            'the trajectory STALLS, so refinement has no unique answer to converge to -- this is '
+            'a genuine rank deficiency and the gauge/reference advice above applies'
+        )
+    return f'diagnostic refinement trajectory [{shown}]: {verdict}'
+
+
 def reject_unsolved_direct_system(matrix, rhs, x, backend: str, *, refinement: float | None = None) -> None:
     """Raise :class:`LinearSolveError` when a DIRECT solve did not actually solve its system.
 
@@ -687,6 +763,12 @@ def reject_unsolved_direct_system(matrix, rhs, x, backend: str, *, refinement: f
         'not this finding -- it scales with the condition number, and an ill-conditioned but '
         'well-posed system (e.g. stiffness in SI units) passes here on its refinement step.'
     )
+    # AND WHICH OF THE TWO IT ACTUALLY IS. The sentence above is the right advice for a rank
+    # deficiency and the wrong advice for a solvable system whose starting vector landed past
+    # `_DIRECT_REPAIRABLE_MAX` -- a ceiling measured on an n=864 system, which a field solve is
+    # under no obligation to stay below. The trajectory separates them and costs one factorization
+    # on a solve that is already lost. It changes no verdict: this line is inside the raise.
+    msg = f'{msg} {describe_refinement_trajectory(refinement_move_trajectory(matrix, rhs, x))}'
     raise LinearSolveError(msg)
 
 
