@@ -59,6 +59,7 @@ __all__ = [
     'get_integrator',
     'integrate_transient',
     'residual_floor',
+    'residual_floor_of_magnitude',
 ]
 
 
@@ -107,6 +108,23 @@ def residual_floor(tangent, u: NDArray[np.floating]) -> float:
     else:
         dense = np.abs(np.asarray(tangent, dtype=float))
         magnitude = dense * u_abs if dense.ndim == 0 else dense @ u_abs
+    return residual_floor_of_magnitude(magnitude)
+
+
+def residual_floor_of_magnitude(magnitude: NDArray[np.floating]) -> float:
+    """THE FLOOR RULE ITSELF, for a caller that builds ``|J| . |u|`` without ever forming ``J``.
+
+    :func:`residual_floor` is this function applied to ``|J| . |u|``; the bordered field<->circuit
+    system (:mod:`motronics.hamilton.coupling.monolithic`) can supply the magnitude but NOT the
+    matrix -- ``J`` there is a 2x2 block system whose ``(n1, n1)`` corner is a 52185-DOF sparse
+    field tangent, so an assembly is the defect that module exists to avoid. It builds the stacked
+    magnitude from its four blocks and hands it here.
+
+    ONE HOME FOR ``_FLOOR_SAFETY * _EPS * ||.|``, because a second spelling of it is exactly the
+    drift :data:`~motronics.hamilton.coupling.monolithic._BACKTRACK_CAP`'s comment warns about: a
+    criterion written twice is two criteria as soon as one of them is edited.
+    """
+    magnitude = np.asarray(magnitude, dtype=float).reshape(-1)
     return _FLOOR_SAFETY * _EPS * float(np.linalg.norm(magnitude)) if magnitude.size else 0.0
 
 
