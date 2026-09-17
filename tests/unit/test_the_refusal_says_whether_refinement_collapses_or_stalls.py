@@ -147,7 +147,12 @@ def test_the_broken_backend_plant_is_STILL_REFUSED_and_says_so_by_magnitude() ->
     """
     matrix, rhs = _spd()
 
-    def _finite_garbage(m, b, *, x0=None, M=None):  # noqa: ARG001 -- a fixed wrong-but-finite vector
+    # `**_kwargs` IS THE FIX, NOT A RENAME: the registry calls this substitution by keyword for
+    # the optional hooks, so declaring those names would make them a contract the caller could
+    # break. No names remain to break. See `test_suppression_ratchet.py`'s docstring -- this is
+    # the shape it names as the only legitimate way past that ratchet.
+    def _finite_garbage(_m, b, **_kwargs):
+        del _kwargs  # accepted and deliberately ignored: this vector is wrong by construction
         return np.ones_like(b)
 
     original = LINEAR_SOLVER_REGISTRY['direct']
