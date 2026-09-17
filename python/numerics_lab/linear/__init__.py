@@ -34,6 +34,7 @@ from scipy.sparse.linalg import (
     cg,
     gmres,
     minres,
+    onenormest,
     qmr,
     spilu,
     splu,
@@ -64,6 +65,7 @@ __all__ = [
     'LinearSolveError',
     'LinearSolver',
     'apply_dirichlet_triplets',
+    'condition_estimate',
     'constraint_rows',
     'describe_refinement_trajectory',
     'direct_refinement_correction',
@@ -73,6 +75,7 @@ __all__ = [
     'gauge_pin_orphan_rows',
     'get_linear_solver',
     'make_preconditioner',
+    'move_is_this_systems_conditioning',
     'orphan_rows',
     'pin_rows',
     'refinement_move_trajectory',
@@ -171,17 +174,80 @@ _DIRECT_REFINEMENT_MAX_STEPS = 4
 # repair above silently corrects a BROKEN BACKEND instead of reporting it, which is the same
 # family as a warning on an unchanged success return, minus the warning.
 #
-# THE RATIO IS WHAT PINS IT, never the value at one point. Measured 2026-09-07:
+# TWO STATISTICS, AND NEITHER SUBSUMES THE OTHER. This is the distinction the constant that stood
+# here used to conflate, which is why its refusal said "singular / rank-deficient" about two
+# different animals:
+#
+#     the TRAJECTORY  (does it collapse?)  answers   does the SYSTEM have a unique answer?
+#     the MAGNITUDE   (how big is move 0?) answers   did the BACKEND answer THIS system?
+#
+# A broken backend on a well-posed system COLLAPSES -- measured, `np.ones_like(rhs)` on an n=8 SPD
+# plant gives [9.722e-01, 2.062e-15, ...], fifteen decades -- so collapse alone would repair
+# garbage into the right answer. A rank-deficient system STALLS whatever its magnitude. Both gates
+# are required and each catches what the other cannot.
+#
+# WHY THE MAGNITUDE GATE IS NO LONGER AN ABSOLUTE NUMBER. It stood at `1e-3`, calibrated
+# 2026-09-07 on exactly two points:
 #
 #     the real conditioning artefact  (n=864 tied-contact KKT)       first move = 2.5893e-05
 #     a backend returning garbage     (`np.ones_like(rhs)` on SPD)   first move = 9.7219e-01
 #
-# a separation of 3.76e+04 -- 4.6 decades -- and `test_high_residual_direct_solve_is_rejected`
-# PLANTS the second one, which is what caught the uncapped first draft. 1e-3 sits ~1.6 decades
-# above the artefact and ~3 below the plant, near the geometric mean (5.0e-3). Above this the
-# starting vector is not an ANSWER that conditioning spoiled; it is unrelated to the system, and
-# the refusal is the correct output.
-_DIRECT_REPAIRABLE_MAX = 1e-3
+# Neither point carries n, and the first refinement move goes as cond*eps -- so a PHYSICALLY SOUND
+# solve crosses the ceiling simply by getting bigger, and the larger the problem the more certain
+# the false refusal. Measured 2026-09-17 on `spm_ferrari_luce_rear --scope full --chart
+# cartesian_3d --select fea,tet --mesh-size "5 mm"`: n = 123,233, a move of 1.434e-03 that is
+# 1.43x past the old ceiling, and a trajectory [1.434e-03, 2.062e-06, 2.961e-09, 4.252e-12] that
+# collapses nine decades to three orders INSIDE `_DIRECT_REFINEMENT_RTOL`. The solve was always
+# solvable; the instrument said otherwise, and it said so more confidently the bigger n grew.
+# A 140x growth in n was enough to break it.
+#
+# So the ceiling is now pinned to the system's OWN conditioning -- `move <= C * cond_1(A) * eps`,
+# a dimensionless ratio rather than a value at one operating point, which is what `taste.md` asks
+# for. See :data:`_REPAIRABLE_CONDITION_FACTOR` for how C itself is pinned.
+#: The safety factor C in ``move[0] <= C * cond_1(A) * eps``: how many times its own conditioning
+#: floor a starting vector may sit above and still be treated as an ANSWER this system spoiled
+#: rather than a vector unrelated to it.
+#:
+#: PINNED AS A RATIO BETWEEN TWO MEASURED OPERATING POINTS, never chosen. Both are live plants:
+#:
+#:     np.ones_like(rhs) on a well-posed n=8 SPD    R = move0 / (cond_1 * eps) = 5.91e+14
+#:     the n=123,233 `spm_ferrari_luce_rear` ring   R = 4.09e-07 to 9.38e-07 (three Newton solves)
+#:
+#: C is their geometric mean, which is how the constant it replaces was placed between ITS two
+#: points. Margin: 1.07e+08 on the repair side (C / 9.38e-07) and 5.91e+12 on the refusal side (5.91e+14 / C).
+#:
+#: THE ESTIMATE LEANS SAFE, and a reader checking that should not have to derive it.
+#: :func:`condition_estimate` uses `onenormest`, which returns a LOWER bound on the 1-norm, so
+#: `cond_1` comes out UNDER-estimated (measured 0.85x and 0.95x of the dense truth on n=8 and
+#: n=200 plants). An underestimated `cond` LOWERS the ceiling and makes this gate STRICTER: the
+#: error direction can only cause a false refusal, never a false repair.
+#:
+#: The n=864 tied-contact KKT artefact (first move 2.5893e-05) cannot be placed on this axis --
+#: its `cond` was never recorded and the system is not kept -- so it is two points, not three.
+_REPAIRABLE_CONDITION_FACTOR = 100.0
+
+# WHY 100 AND NOT THE GEOMETRIC MEAN, which is how the constant this replaces was placed. That
+# rule was right THERE because both its points were raw magnitudes with no model behind them, so
+# their midpoint was the only pin available. Here there IS a model -- one step of refinement from
+# a backward-stable solve moves the answer by about cond*eps -- so C is an allowance on a theory,
+# not a midpoint between two observations. The geometric mean of the two points below is ~2e+07,
+# which at cond = 1e12 puts the ceiling at 4.4e+03: every possible move passes, and the gate that
+# exists to catch a broken backend would catch nothing. Two decades is the round allowance for the
+# modest unknown constant in `move ~ cond*eps` and for `onenormest`'s underestimate.
+#
+# THE RING DOES NOT NEED THE ALLOWANCE, which is the point: measured 2026-09-17 its R is 4.09e-07
+# to 9.38e-07, so it passes at C = 1 -- the bare model with no fudge -- by six decades. C is not
+# fitted to it. What the allowance protects is some OTHER sound system whose move sits a little
+# above its conditioning floor, and the n=864 artefact that cannot be placed here is exactly that
+# unknown.
+#
+# AND ON A BADLY ENOUGH CONDITIONED SYSTEM THIS GATE IS INERT, which it must SAY rather than
+# pretend otherwise. The ring measured cond_1 = 1.16e+17 to 2.41e+19, i.e. cond*eps = 25.8 to
+# 5.3e+03: past cond*eps = 1 no digits are guaranteed and NO magnitude is anomalous, so magnitude
+# cannot discriminate and the TRAJECTORY is the only working gate there. That is the correct
+# behaviour and not a gap -- a gate claiming to separate what it cannot is the declaration that
+# lies. The two gates are independent precisely so that one can go quiet without taking the other
+# with it.
 
 
 class LinearSolveError(RuntimeError):
@@ -612,12 +678,18 @@ def repair_direct_solution(matrix, rhs, x) -> tuple[np.ndarray, tuple[float, ...
     # function did, and `tests/unit/gauss/test_nonlinear_port_golden.py`'s frozen trajectories
     # moved with it. The move is still REPORTED, so the verdict below costs no factorization.
     # ONE DECISION WITH A WINDOW, not two: repair only a move that is BOTH past the acceptance bar
-    # and small enough to be this system's conditioning. Below `_DIRECT_REFINEMENT_RTOL` the guard
+    # and explicable as THIS system's own conditioning. Below `_DIRECT_REFINEMENT_RTOL` the guard
     # already accepts the answer and refining it would move a number never in question. Above
-    # `_DIRECT_REPAIRABLE_MAX` the vector is not an answer conditioning spoiled but one unrelated
-    # to the system -- a broken backend, which must be reported rather than corrected. Outside the
-    # window `x` goes back bit-identical and the guard's verdict is exactly what it always was.
-    if move <= _DIRECT_REFINEMENT_RTOL or not move <= _DIRECT_REPAIRABLE_MAX:
+    # `_REPAIRABLE_CONDITION_FACTOR * cond * eps` the vector is not an answer conditioning spoiled
+    # but one unrelated to the system -- a broken backend, which must be reported rather than
+    # corrected. Outside the window `x` goes back bit-identical and the guard's verdict is exactly
+    # what it always was.
+    #
+    # UNDECIDABLE IS NOT A PASS. When no condition estimate can be formed the magnitude gate has
+    # no scale to judge against, and the answer is to DECLINE the repair -- the caller keeps its
+    # vector and the guard below judges it on the acceptance bar, which is the behaviour that
+    # existed before any repair did.
+    if move <= _DIRECT_REFINEMENT_RTOL or move_is_this_systems_conditioning(matrix, move, factor=factor) is not True:
         return np.asarray(x), (move,)
 
     moves = [move]
@@ -633,6 +705,73 @@ def repair_direct_solution(matrix, rhs, x) -> tuple[np.ndarray, tuple[float, ...
     return current, tuple(moves)
 
 
+def _factorize(matrix):
+    """``splu`` of *matrix*, or ``None`` when it is not square or is exactly singular.
+
+    ONE factorization is shared by :func:`condition_estimate` and
+    :func:`refinement_move_trajectory` because a refusal wants both numbers and they are both
+    about the same operator; taking two would double the most expensive thing on the path.
+    """
+    shape = np.shape(matrix)
+    if len(shape) != 2 or shape[0] != shape[1]:
+        return None
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', MatrixRankWarning)
+            return splu(sp.csc_matrix(matrix))
+    except (RuntimeError, MatrixRankWarning, ValueError):
+        return None
+
+
+def condition_estimate(matrix, *, factor=None) -> float | None:
+    """A 1-norm condition estimate ``||A||_1 * ||A^-1||_1``, reusing a factorization if given.
+
+    THE SCALE THE REFINEMENT MOVE IS JUDGED AGAINST. One step of iterative refinement from a
+    backward-stable direct solve moves the answer by about ``cond * eps``, so "is this move big?"
+    is not a question a constant can answer -- it is big RELATIVE TO THIS SYSTEM or it is not, and
+    a solve gets a bigger ``cond`` by being a bigger solve. :data:`_REPAIRABLE_CONDITION_FACTOR`
+    is the ratio that turns this into the ceiling.
+
+    ``A^-1``'s norm is estimated through the factorization rather than formed: `onenormest` needs
+    only matvecs, and both ``solve`` and its transpose come off the same `splu`. Priced at a
+    handful of triangular solves on top of a factorization the caller already has.
+
+    THE ERROR LEANS ONE WAY AND IT IS THE SAFE ONE. `onenormest` returns a LOWER bound, so this
+    UNDER-estimates (measured 0.85x and 0.95x against the dense truth on n=8 and n=200 SPD
+    plants). Used as a ceiling that makes the gate stricter, never looser.
+
+    ``None`` when the operator cannot be factorized -- an exactly singular system has no finite
+    condition number, and that case is the trajectory's to report, not this one's.
+    """
+    lu = factor if factor is not None else _factorize(matrix)
+    if lu is None:
+        return None
+    n = int(np.shape(matrix)[0])
+    operator = LinearOperator((n, n), matvec=lu.solve, rmatvec=lambda v: lu.solve(v, 'T'))
+    try:
+        return float(onenormest(sp.csc_matrix(matrix)) * onenormest(operator))
+    except (ValueError, RuntimeError):
+        return None
+
+
+def move_is_this_systems_conditioning(matrix, move: float, *, factor=None) -> bool | None:
+    """Is *move* explicable as this system's own ``cond * eps``, or is it an unrelated vector?
+
+    THE MAGNITUDE GATE, and the half of the decision the trajectory cannot make: refinement
+    converges on any solvable system whatever it is started from, so a backend returning garbage
+    collapses exactly like a backend returning a conditioning-spoiled answer. What separates them
+    is whether the starting vector was ever NEAR the answer, and ``cond * eps`` is the scale that
+    says so in this system's own units.
+
+    ``None`` when no condition estimate could be formed -- undecidable is reported as undecidable
+    and the caller must not read it as either verdict.
+    """
+    cond = condition_estimate(matrix, factor=factor)
+    if cond is None or not np.isfinite(cond):
+        return None
+    return bool(move <= _REPAIRABLE_CONDITION_FACTOR * cond * float(np.finfo(float).eps))
+
+
 #: How far a trajectory must fall for :func:`refinement_move_trajectory` to be called COLLAPSING.
 #: Six decades, and it is a RATIO between two points of the same run rather than a value at one --
 #: so it carries no unit, no scale and no dependence on the order of the system. The two plants in
@@ -641,7 +780,9 @@ def repair_direct_solution(matrix, rhs, x) -> tuple[np.ndarray, tuple[float, ...
 _REFINEMENT_COLLAPSE_RATIO = 1e-6
 
 
-def refinement_move_trajectory(matrix, rhs, x, *, max_steps: int = _DIRECT_REFINEMENT_MAX_STEPS) -> tuple[float, ...]:
+def refinement_move_trajectory(
+    matrix, rhs, x, *, max_steps: int = _DIRECT_REFINEMENT_MAX_STEPS, factor=None
+) -> tuple[float, ...]:
     """The sequence of relative refinement moves from ``x`` -- EVIDENCE, never a repaired vector.
 
     :func:`repair_direct_solution` stops at :data:`_DIRECT_REPAIRABLE_MAX` and hands the guard a
@@ -661,16 +802,10 @@ def refinement_move_trajectory(matrix, rhs, x, *, max_steps: int = _DIRECT_REFIN
     Returns the moves in order, or ``()`` when no step could be taken (a non-square matrix, an
     exactly singular factorization, or a non-finite step): unmeasured is reported as unmeasured.
     """
-    shape = np.shape(matrix)
-    if len(shape) != 2 or shape[0] != shape[1]:
-        return ()
     b = np.asarray(rhs.todense() if sp.issparse(rhs) else rhs).ravel()
     current = np.asarray(x.todense() if sp.issparse(x) else x).ravel().astype(float)
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter('error', MatrixRankWarning)
-            factor = splu(sp.csc_matrix(matrix))
-    except (RuntimeError, MatrixRankWarning, ValueError):
+    factor = factor if factor is not None else _factorize(matrix)
+    if factor is None:
         return ()
     moves: list[float] = []
     for _step in range(int(max_steps)):
@@ -686,18 +821,31 @@ def refinement_move_trajectory(matrix, rhs, x, *, max_steps: int = _DIRECT_REFIN
     return tuple(moves)
 
 
-def describe_refinement_trajectory(moves: tuple[float, ...]) -> str:
-    """One clause naming what *moves* shows -- COLLAPSES, STALLS, or was not measurable."""
+def describe_refinement_trajectory(moves: tuple[float, ...], cond: float | None = None) -> str:
+    """One clause naming WHICH of the two gates refused, and what the evidence was.
+
+    The two are independent and the message must say which fired, because they send the reader to
+    opposite places: a STALL is a missing gauge or a collapsed region, a magnitude past the
+    conditioning ceiling is a backend that did not answer this system. Reporting the wrong one is
+    the declaration-that-lies shape, and it is what the single constant here used to do.
+    """
     if not moves:
         return 'diagnostic refinement trajectory: unavailable (no step could be taken)'
     shown = ', '.join(f'{m:.3e}' for m in moves)
+    ceiling = (
+        f'{_REPAIRABLE_CONDITION_FACTOR * cond * float(np.finfo(float).eps):.3e}'
+        if cond is not None and np.isfinite(cond)
+        else 'unavailable'
+    )
+    scale = f'cond_1 ~ {cond:.3e}, so the repairable ceiling is {ceiling}' if cond is not None else 'cond_1 unavailable'
     if len(moves) < 2:
         verdict = 'only ONE step was available, so it says nothing about convergence'
     elif moves[-1] <= moves[0] * _REFINEMENT_COLLAPSE_RATIO:
         verdict = (
-            'the trajectory COLLAPSES, so this system is SOLVABLE and the starting vector was '
-            f'merely further out than the repair ceiling {_DIRECT_REPAIRABLE_MAX:.0e} -- look at '
-            'CONDITIONING and at the backend, not for a missing gauge'
+            'the trajectory COLLAPSES, so the SYSTEM is solvable and this is NOT a rank '
+            f'deficiency -- the refusal is the MAGNITUDE gate ({scale}): the starting vector is '
+            'too far out to be an answer this system spoiled, so suspect the BACKEND, not a '
+            'missing gauge'
         )
     else:
         verdict = (
@@ -768,7 +916,11 @@ def reject_unsolved_direct_system(matrix, rhs, x, backend: str, *, refinement: f
     # `_DIRECT_REPAIRABLE_MAX` -- a ceiling measured on an n=864 system, which a field solve is
     # under no obligation to stay below. The trajectory separates them and costs one factorization
     # on a solve that is already lost. It changes no verdict: this line is inside the raise.
-    msg = f'{msg} {describe_refinement_trajectory(refinement_move_trajectory(matrix, rhs, x))}'
+    factor = _factorize(matrix)
+    msg = (
+        f'{msg} '
+        f'{describe_refinement_trajectory(refinement_move_trajectory(matrix, rhs, x, factor=factor), condition_estimate(matrix, factor=factor))}'
+    )
     raise LinearSolveError(msg)
 
 

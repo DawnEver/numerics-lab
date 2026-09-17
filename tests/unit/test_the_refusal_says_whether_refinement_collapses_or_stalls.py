@@ -1,8 +1,8 @@
-"""A refusal past the repair ceiling must say WHICH of the two things it is.
+"""A refusal must say WHICH of two independent gates refused it, and neither gate subsumes the other.
 
-`_DIRECT_REPAIRABLE_MAX = 1e-3` is a ceiling on the REPAIR, not a diagnosis: above it
-`repair_direct_solution` returns the vector bit-identical and the guard refuses with
-"singular / rank-deficient". But two different systems land there --
+The repair ceiling is a ceiling, not a diagnosis: above it `repair_direct_solution` returns the
+vector bit-identical and the guard refuses with "singular / rank-deficient". But two different
+systems land there --
 
 * one whose refinement moves COLLAPSE (a starting vector this system's conditioning spoiled,
   merely further out than the ceiling the repair was calibrated for -- the ceiling was measured
@@ -26,10 +26,14 @@ import pytest
 import scipy.sparse as sp
 
 from motronics.gauss.linear import (
-    _DIRECT_REPAIRABLE_MAX,
+    _REPAIRABLE_CONDITION_FACTOR,
+    LINEAR_SOLVER_REGISTRY,
     LinearSolveError,
+    condition_estimate,
+    move_is_this_systems_conditioning,
     refinement_move_trajectory,
     reject_unsolved_direct_system,
+    solve_linear_system,
 )
 
 GOLDEN = Path(__file__).parent / 'goldens' / 'lipo_inductor_m6_singular_157.npz'
@@ -54,12 +58,12 @@ def test_a_solvable_system_past_the_ceiling_has_a_COLLAPSING_trajectory() -> Non
     """THE FLOOR: the plant is solvable, the start is past the ceiling, and refinement converges."""
     matrix, rhs = _solvable_system()
     exact = sp.linalg.spsolve(sp.csc_matrix(matrix), rhs)
-    x = exact * 1.05  # 5% off: two decades past `_DIRECT_REPAIRABLE_MAX`, and repairable
+    x = exact * 1.05  # 5% off: two decades past the retired absolute ceiling, and repairable
 
     moves = refinement_move_trajectory(matrix, rhs, x)
 
     assert moves, 'a diagnostic that measures nothing cannot separate anything'
-    assert moves[0] > _DIRECT_REPAIRABLE_MAX
+    assert moves[0] > 1.0e-3, 'the plant must sit past the absolute ceiling this design replaced'
     assert moves[-1] < moves[0] * 1e-6
 
 
@@ -90,3 +94,77 @@ def test_the_trajectory_rides_on_a_REFUSAL_and_never_replaces_one(plant: str) ->
     message = str(excinfo.value)
     assert 'refinement trajectory' in message
     assert ('COLLAPSES' in message) or ('STALLS' in message)
+
+
+def _spd(n: int = 8):
+    """A well-conditioned SPD system -- the plant `test_high_residual_direct_solve_is_rejected` uses."""
+    rng = np.random.default_rng(0)
+    m = rng.standard_normal((n, n))
+    return sp.csr_matrix(m @ m.T + n * np.eye(n)), rng.standard_normal(n)
+
+
+def test_a_broken_backend_COLLAPSES_TOO_which_is_why_the_trajectory_cannot_decide_alone() -> None:
+    """THE REFUTATION THAT SHAPED THE DESIGN, planted so it cannot be re-derived away.
+
+    Refinement drives ANY finite start to the answer of a SOLVABLE system, so `np.ones_like(rhs)`
+    on a well-posed SPD system collapses exactly like a conditioning-spoiled answer does. A
+    criterion made only of "does the trajectory collapse" would therefore have repaired garbage
+    into the right answer and silently flipped the test that exists to catch it. Measured here so
+    the next reader sees the collapse rather than trusting the claim.
+    """
+    matrix, rhs = _spd()
+    moves = refinement_move_trajectory(matrix, rhs, np.ones_like(rhs))
+
+    assert moves[-1] <= moves[0] * 1.0e-6, 'the broken-backend plant COLLAPSES -- that is the whole point'
+    assert moves[0] > 1.0e-3
+
+
+def test_the_two_gates_are_INDEPENDENT_and_the_magnitude_one_refuses_the_collapsing_garbage() -> None:
+    """The ratchet: passing one gate is not passing the decision.
+
+    The broken-backend plant passes the TRAJECTORY gate (it collapses, above) and fails the
+    MAGNITUDE one, because `np.ones_like(rhs)` sits ~5.9e+14 times its system's own `cond * eps`.
+    A system on which both gates agreed would not need two.
+    """
+    matrix, rhs = _spd()
+    moves = refinement_move_trajectory(matrix, rhs, np.ones_like(rhs))
+    cond = condition_estimate(matrix)
+
+    assert cond is not None
+    ratio = moves[0] / (cond * float(np.finfo(float).eps))
+    assert ratio > _REPAIRABLE_CONDITION_FACTOR * 1.0e6, f'the plant must be far past the gate, got {ratio:.3e}'
+    assert move_is_this_systems_conditioning(matrix, moves[0]) is False
+
+
+def test_the_broken_backend_plant_is_STILL_REFUSED_and_says_so_by_magnitude() -> None:
+    """CONDITION (2), asserted where it can actually regress: nothing refused today is accepted.
+
+    This is `test_high_residual_direct_solve_is_rejected`'s plant driven through the whole
+    `solve_linear_system` path, which is the path the conditioning gate changed. It must still
+    raise, and the message must blame the MAGNITUDE gate rather than a rank deficiency -- the
+    system is well posed and telling its reader to go looking for a missing gauge would be the
+    declaration that lies.
+    """
+    matrix, rhs = _spd()
+
+    def _finite_garbage(m, b, *, x0=None, M=None):  # noqa: ARG001 -- a fixed wrong-but-finite vector
+        return np.ones_like(b)
+
+    original = LINEAR_SOLVER_REGISTRY['direct']
+    LINEAR_SOLVER_REGISTRY['direct'] = _finite_garbage
+    try:
+        with pytest.raises(LinearSolveError) as excinfo:
+            solve_linear_system(sp.csc_matrix(matrix), rhs, linear_solver='direct')
+    finally:
+        LINEAR_SOLVER_REGISTRY['direct'] = original
+
+    message = str(excinfo.value)
+    assert 'MAGNITUDE' in message
+    assert 'STALLS' not in message
+
+
+def test_an_undecidable_condition_estimate_DECLINES_the_repair_rather_than_allowing_it() -> None:
+    """Unmeasured is not a pass. With no scale to judge against, the gate must not open."""
+    matrix, _rhs = _spd()
+
+    assert move_is_this_systems_conditioning(matrix[:4], 1.0e-3) is None
