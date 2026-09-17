@@ -38,6 +38,19 @@ from motronics.gauss.linear import (
     solve_linear_system,
 )
 
+# MEASURED 2026-09-17 on this tree via `runner.py measure --price --with-heavy` (`-n0`, per-test
+# timeout DISABLED so no reading is censored by the kill being priced): 4 tests, 4 passed, 0.352 s
+# of CALL time for the whole file and 0.368 s over all phases, worst single test 0.240 s. The work
+# is a handful of small sparse factorisations built to a DECLARED condition number -- no mesher, no
+# vendor, no OCC import -- so the cost is set by `splu` on matrices sized in this file, not by
+# anything that can grow under it.
+# 600 s is therefore a HANG DETECTOR at ~1700x the measured file, never a performance assertion. It
+# is the low end of the band a ceiling may occupy here: above `PER_TEST_TIMEOUT_S['measure']` = 300,
+# so it grants MORE than an ordinary run rather than becoming the only thing that can kill its
+# worker under `timeout_method = "thread"`, and below `HEAVY_PER_TEST_TIMEOUT_S` = 3000.
+# THE READING WAS TAKEN CONTENDED (another agent held the box with a 3-D `motronics run`), which is
+# stated because a busy-box timing is not a property of the file. It can only INFLATE the number,
+# and the claim made from it -- that 600 s is three orders above the work -- only strengthens.
 pytestmark = pytest.mark.timeout(600)
 
 #: The conditioning at which the working-precision floor (``cond * eps``) crosses the 1e-6 bar.
