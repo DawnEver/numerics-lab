@@ -15,7 +15,7 @@ The two numbers are quoted together deliberately -- a zero beside a zero is a br
 beside 595,898 is a finding. So every shipped circuit march is on the unguarded side.
 
 No shipped node trips the criterion (worst relative residual measured over a full
-`boost_closed_pi` march: 5.8e-11 over 532,365 judged solves, nothing over the 1e-6 trigger). A
+a `boost`'s `closed_pi` march: 5.8e-11 over 532,365 judged solves, nothing over the 1e-6 trigger). A
 SINGULAR one does, and before this file the user saw:
 
     LinAlgWarning: Diagonal number 4 is exactly zero. Singular matrix.
