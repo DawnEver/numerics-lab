@@ -4,7 +4,7 @@ An implicit step solves ``J du = -R`` with the weighted tangent ``J``. On a fixe
 re-factors the SAME matrix thousands of times: a linear problem's tangent depends only on the
 derivative weights (constant while ``dt`` is), and even a switched-linear problem's tangent moves
 only at an event. Measured pre-W6 (2026-07-22, laplace ladder): rlc_series paid 600 dense LU
-factorizations for 2 distinct matrices; buck_open_loop paid 190902 -- one per Newton solve, while
+factorizations for 2 distinct matrices; `buck_stage`'s `open_loop` point paid 190902 -- one per Newton solve, while
 the matrix itself takes fewer than eleven thousand distinct values over the whole march (the
 locator's bisection probes each carry a unique ``dt``, and those are irreducible).
 
