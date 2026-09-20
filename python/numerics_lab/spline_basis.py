@@ -69,6 +69,7 @@ millimetres -- an absolute floor on a determinant would be a tolerance with a hi
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum
 from typing import NamedTuple
 
@@ -130,6 +131,7 @@ class FormDegree(Enum):
     THREE = 3
 
 
+@dataclass(frozen=True)
 class BasisValues:
     """What an evaluation returns: values on the SUPPORT, and derivatives to the order asked for.
 
