@@ -25,7 +25,7 @@
 //! flagged it as above "the 1e-10 that was assumed". That 1e-10 was never this file's bar — it was
 //! the assumed SIZE of the departure, and the bar has stood at 1e-8 throughout, so the measured
 //! 2.3e-10 was inside it by two orders the whole time. The user accepted the departure on
-//! 2026-09-05 ("暂时接受"), which removes it as an objection and leaves the constant untouched.
+//! 2026-09-05 ("accept for now"), which removes it as an objection and leaves the constant untouched.
 //!
 //! It does NOT reopen the wiring decision. `gauss::linear::direct` is unwired because there is no
 //! size crossover to defend -- 31,901 -> 0.81x, 32,572 -> 1.70x, 35,430 -> 0.78x, reproduced at 9
