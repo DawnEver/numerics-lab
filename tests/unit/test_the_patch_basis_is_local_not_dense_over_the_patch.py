@@ -36,7 +36,7 @@ import pytest
 
 from motronics.contracts.ir.spline_space_ir import arc_patch_quarter_annulus
 from motronics.euclid.mesh.spline_refine import refine_patch
-from motronics.gauss.quadrature import PatchBasis
+from motronics.gauss.spline_basis import PatchBasis
 
 #: How many times wider the DENSE width must be than the local one before the locality claim says
 #: anything. Without it a bilinear patch -- 4 control points, a support of 4 -- passes every

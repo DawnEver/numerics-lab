@@ -26,11 +26,13 @@ from motronics.contracts.ir.spline_space_ir import Patch, arc_patch_quarter_annu
 from motronics.euclid.mesh.producers.patch import annular_sector_patches
 from motronics.euclid.mesh.spline_refine import refine_space
 from motronics.gauss.quadrature import (
+    gauss_legendre_1d,
+    patch_quadrature,
+)
+from motronics.gauss.spline_basis import (
     FormDegree,
     PatchBasis,
     SplineBasisError,
-    gauss_legendre_1d,
-    patch_quadrature,
 )
 
 
