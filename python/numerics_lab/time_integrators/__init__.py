@@ -284,9 +284,16 @@ def _roundoff_floor(problem, tangent, u: NDArray[np.floating], form) -> float | 
     """
     floor_fn = getattr(problem, 'residual_roundoff_floor', None)
     if callable(floor_fn):
-        floor = float(floor_fn(u, form))
-        if np.isfinite(floor):
-            return floor
+        # `None` IS AN ANSWER HERE -- "this problem cannot bound its own cancellation" -- and it
+        # must fall through to the generic fallback rather than be accepted. It was not expressible
+        # before: `float(...)` would have raised on it, so `mna_solves.transient_residual_floor`
+        # said "no floor" by returning `0.0`, which is finite, was accepted, and suppressed the
+        # fallback entirely while comparing every real residual against zero.
+        declared = floor_fn(u, form)
+        if declared is not None:
+            floor = float(declared)
+            if np.isfinite(floor):
+                return floor
     if tangent is None:
         return None
     floor = float(residual_floor(tangent, u))
