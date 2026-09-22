@@ -193,11 +193,11 @@ def _direct(matrix, rhs, *, x0=None, M=None):  # noqa: ARG001 -- direct ignores 
             raise LinearSolveError(msg) from exc
 
 
-def _krylov(fn: Callable, *, symmetric: bool):
+def _krylov(fn: Callable):
     """Wrap a scipy Krylov solver as a :class:`LinearSolver`.
 
-    ``symmetric`` documents the intended operator class (cg/minres assume SPD/symmetric); the wrapper
-    itself is agnostic. Converts the rhs to dense (scipy Krylov wants a 1-D array), forwards ``x0``
+    Operator-class requirements live beside the named registry below; the wrapper itself is
+    agnostic. Converts the rhs to dense (scipy Krylov wants a 1-D array), forwards ``x0``
     as the warm start and ``M`` as the preconditioner, and raises :class:`LinearSolveError` on a
     non-zero ``info`` (non-convergence within maxiter or a breakdown) rather than returning a wrong x.
 
@@ -228,15 +228,13 @@ def _krylov(fn: Callable, *, symmetric: bool):
         return x
 
     _solve.__name__ = fn.__name__
-    # Tag the backend with the operator class it assumes (cg/minres want SPD/symmetric); the
-    # benchmark harness reads this to skip a symmetric-only solver on a non-symmetric Jacobian.
-    _solve.requires_symmetric = symmetric
     return _solve
 
 
 def requires_symmetric(name: str) -> bool:
     """Whether the named linear backend assumes a symmetric/SPD operator (cg / minres)."""
-    return bool(getattr(LINEAR_SOLVER_REGISTRY[name], 'requires_symmetric', False))
+    LINEAR_SOLVER_REGISTRY[name]
+    return name in _SYMMETRIC_SOLVERS
 
 
 def _pardiso(matrix, rhs, *, x0=None, M=None):  # noqa: ARG001 -- the direct-shaped signature
@@ -256,12 +254,13 @@ def _pardiso(matrix, rhs, *, x0=None, M=None):  # noqa: ARG001 -- the direct-sha
 # 'pardiso' joins when pypardiso is installed (the optional MKL entry above).
 LINEAR_SOLVER_REGISTRY: dict[str, LinearSolver] = {
     'direct': _direct,
-    'cg': _krylov(cg, symmetric=True),
-    'minres': _krylov(minres, symmetric=True),
-    'gmres': _krylov(gmres, symmetric=False),
-    'bicgstab': _krylov(bicgstab, symmetric=False),
-    'qmr': _krylov(qmr, symmetric=False),
+    'cg': _krylov(cg),
+    'minres': _krylov(minres),
+    'gmres': _krylov(gmres),
+    'bicgstab': _krylov(bicgstab),
+    'qmr': _krylov(qmr),
 }
+_SYMMETRIC_SOLVERS = frozenset({'cg', 'minres'})
 if _pardiso_spsolve is not None:
     LINEAR_SOLVER_REGISTRY['pardiso'] = _pardiso
 
