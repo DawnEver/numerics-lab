@@ -38,7 +38,13 @@ import numpy as np
 import scipy.sparse as sp
 from numpy.typing import NDArray
 
-from motronics.contracts.spec.analysis_formulation import DerivativeWeights, SemiDiscreteProblem
+from motronics.contracts.spec.analysis_formulation import (
+    AlternativeJacobianProblem,
+    DerivativeWeights,
+    FactorReusableProblem,
+    ResidualFloorProblem,
+    SemiDiscreteProblem,
+)
 from motronics.contracts.spec.study_spec import TransientStudy
 from motronics.gauss.linear import solve_linear_system
 from motronics.gauss.time_integrators.factor_reuse import FactorCache
@@ -282,14 +288,13 @@ def _roundoff_floor(problem, tangent, u: NDArray[np.floating], form) -> float | 
     fallback and needs only the tangent. A non-finite reading from either is discarded rather
     than compared -- a floor that is not a number cannot bound anything.
     """
-    floor_fn = getattr(problem, 'residual_roundoff_floor', None)
-    if callable(floor_fn):
+    if isinstance(problem, ResidualFloorProblem):
         # `None` IS AN ANSWER HERE -- "this problem cannot bound its own cancellation" -- and it
         # must fall through to the generic fallback rather than be accepted. It was not expressible
         # before: `float(...)` would have raised on it, so `mna_solves.transient_residual_floor`
         # said "no floor" by returning `0.0`, which is finite, was accepted, and suppressed the
         # fallback entirely while comparing every real residual against zero.
-        declared = floor_fn(u, form)
+        declared = problem.residual_roundoff_floor(u, form)
         if declared is not None:
             floor = float(declared)
             if np.isfinite(floor):
@@ -454,7 +459,7 @@ def _solve_step(
     arithmetic with nothing for a caller to read -- the shape ``taste.md`` forbids. The flag
     rides out to :attr:`TransientSolution.floor_converged_times`.
     """
-    key_fn = getattr(problem, 'factor_reuse_key', None) if factor_cache is not None else None
+    reusable = factor_cache is not None and isinstance(problem, FactorReusableProblem)
     # The stall-polish's phase-2 source (MANUAL-627 (i)): the problem's local-derivative
     # jacobian, engaged when the default jacobian's per-iteration creep marks a stalled
     # direction. The default ``None`` reads the problem's optional ``jacobian_tangent``
@@ -464,8 +469,13 @@ def _solve_step(
     # switches, the diodes -- their stamps already ARE the local derivative) would pay
     # the tangent phase's factor-cache bypass for nothing (measured: the buck's reuse
     # counts broke without the gate).
-    tangent_source = jacobian_tangent if jacobian_tangent is not None else getattr(problem, 'jacobian_tangent', None)
-    tangent_helpful = tangent_source is not None and bool(getattr(problem, 'has_tangent_jacobian', True))
+    alternative = problem if isinstance(problem, AlternativeJacobianProblem) else None
+    tangent_source = (
+        jacobian_tangent
+        if jacobian_tangent is not None
+        else (alternative.jacobian_tangent if alternative is not None else None)
+    )
+    tangent_helpful = jacobian_tangent is not None or (alternative is not None and alternative.has_tangent_jacobian)
     u = np.asarray(guess, dtype=float).copy()
     t = form.t_eval
     converged = False
@@ -519,12 +529,12 @@ def _solve_step(
             jac = tangent_source(u_arg, u_dot, u_ddot, t, form.weights)
             tangent = jac
             du = np.asarray(solve(jac, -r), dtype=float)
-        elif key_fn is None:
+        elif not reusable:
             jac = problem.jacobian(u_arg, u_dot, u_ddot, t, form.weights)
             tangent = jac
             du = np.asarray(solve(jac, -r), dtype=float)
         else:
-            key = key_fn(u_arg, u_dot, u_ddot, t, form.weights)
+            key = problem.factor_reuse_key(u_arg, u_dot, u_ddot, t, form.weights)
             du = np.asarray(
                 factor_cache.solve(key, lambda: problem.jacobian(u_arg, u_dot, u_ddot, t, form.weights), -r),
                 dtype=float,
@@ -634,7 +644,7 @@ def integrate_transient(
     cache when the problem exposes ``factor_reuse_key`` and none otherwise, so a keyed problem
     reuses by default and an unkeyed one is untouched. Pass a cache in to READ the counters.
     """
-    if factor_cache is None and callable(getattr(problem, 'factor_reuse_key', None)):
+    if factor_cache is None and isinstance(problem, FactorReusableProblem):
         factor_cache = FactorCache()
     integrator = get_integrator(study.integrator)
     if adaptive and integrator.name != 'bdf2':

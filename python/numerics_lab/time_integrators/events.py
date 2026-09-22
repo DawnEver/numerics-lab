@@ -59,6 +59,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from numpy.typing import NDArray
 
+from motronics.contracts.spec.analysis_formulation import FactorReusableProblem
 from motronics.contracts.spec.study_spec import TransientStudy
 from motronics.gauss.time_integrators import (
     FactorCache,
@@ -222,7 +223,7 @@ def integrate_transient_with_events(
     cache on their own -- a stale factor across an event is impossible unless the key itself
     under-reads the system (the hole the module docstring names).
     """
-    if factor_cache is None and callable(getattr(problem, 'factor_reuse_key', None)):
+    if factor_cache is None and isinstance(problem, FactorReusableProblem):
         factor_cache = FactorCache()
     integrator = get_integrator(study.integrator)
     u0 = np.asarray(u0, dtype=float)

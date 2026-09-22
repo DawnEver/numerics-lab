@@ -136,7 +136,7 @@ def test_the_stall_polish_switches_to_the_tangent_and_converges() -> None:
     from motronics.gauss.time_integrators import IntegratorState, _solve_step
     from motronics.gauss.time_integrators.events import _bdf2_variable_form
 
-    class _CouplingChord:
+    class _CouplingChordBase:
         """Two switches coupled through G: the ON channel's saturation
         (i = c u/(1+m u), the chord = i/u, the tangent = 1/(1+m u)^2) beside the OFF
         channel's near-zero chord (joff) -- the chord jacobian is near-singular and the
@@ -159,18 +159,19 @@ def test_the_stall_polish_switches_to_the_tangent_and_converges() -> None:
             d1 = self.c / (1.0 + self.m * u1) if u1 != 0.0 else self.c
             return np.array([[d1 + self.G, -self.G], [-self.G, self.joff + self.G]])
 
+    class _CouplingChord(_CouplingChordBase):
+        @property
+        def has_tangent_jacobian(self):
+            return True
+
         def jacobian_tangent(self, u_arg, u_dot, u_ddot, t, weights):
             self.tangent_calls += 1
             u1, _u2 = u_arg
             d1 = self.c / (1.0 + self.m * u1) ** 2
             return np.array([[d1 + self.G, -self.G], [-self.G, self.joff + self.G]])
 
-    class _ChordOnly(_CouplingChord):
-        """No jacobian_tangent seam (the attribute shadowed to None) -- the pure chord
-        Newton, the pre-polish behavior.
-        """
-
-        jacobian_tangent = None  # type: ignore[assignment] -- the seam's absence
+    class _ChordOnly(_CouplingChordBase):
+        """No alternative-Jacobian capability: the pure chord Newton's pre-polish behavior."""
 
     solve = lambda j, r: np.linalg.solve(np.asarray(j), r)  # noqa: E731 -- the seam's solve
     state = IntegratorState(us=[np.array([0.5, 0.5]), np.array([0.5, 0.5])], t=0.0)
