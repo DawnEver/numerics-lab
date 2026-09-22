@@ -26,6 +26,26 @@ from motronics.gauss.nonlinear import _ALPHA_MIN, AssembledState, get_strategy
 pytestmark = pytest.mark.unit
 
 
+#: The undamped step both fixtures hold CONSTANT so the run cannot converge out from under the
+#: question they ask about alpha. It carries SHAPE -- its entries are not all equal -- and that is
+#: the whole of why it is a vector and not `+ 10.0`.
+#:
+#: IT USED TO BE `self.x + 10.0`, A UNIFORM SHIFT, AND A LATER PRODUCTION CHANGE MADE THAT MEAN THE
+#: OPPOSITE OF WHAT IT SAYS (found 2026-09-22). `increment_ratio` gained a gauge relaxation on
+#: 2026-09-06: in a gauge-free potential an increment that is the SAME in every entry moves no
+#: physical quantity, so it is reported as no movement. That is correct, and it is precisely the
+#: shape `+ 10.0` has. The increment these fixtures fed the strategy therefore read 0.0 from that
+#: day on, the solve met the second half of `_has_converged` on its first step, and the run ended
+#: after one undisturbed iteration -- so "alpha stayed pinned for all 1 undisturbed steps" was a
+#: report about a fixture that no longer ran long enough to observe anything.
+#:
+#: THE DOCSTRINGS ALREADY PROMISED THIS AND THE CODE STOPPED DELIVERING IT: both say the increment
+#: is held constant "so the run cannot converge out from under the question". Nothing refused the
+#: sentence when it stopped being true. Mean-zero keeps it true against the relaxation by
+#: construction -- a step whose shape part IS the whole step can never be read as gauge.
+_UNDAMPED_STEP = np.array([10.0, 0.0, -10.0])
+
+
 class _OscillateThenSettle:
     """Oscillate ABOVE tolerance long enough to drive alpha to the floor, then go genuinely flat.
 
@@ -51,7 +71,7 @@ class _OscillateThenSettle:
         return AssembledState(system_matrix=None, total_energy=energy, payload=None)
 
     def solve_linear(self, state, /) -> np.ndarray:
-        return self.x + 10.0
+        return self.x + _UNDAMPED_STEP
 
     def on_iteration(self, i, state, err, alpha, increment) -> None:
         self.alphas.append(float(alpha))
@@ -125,7 +145,7 @@ class _SettleAfter:
         return AssembledState(system_matrix=None, total_energy=energy, payload=None)
 
     def solve_linear(self, state, /) -> np.ndarray:
-        return self.x + 10.0
+        return self.x + _UNDAMPED_STEP
 
     def on_iteration(self, i, state, err, alpha, increment) -> None:
         self.alphas.append(float(alpha))

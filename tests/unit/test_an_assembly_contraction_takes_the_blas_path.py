@@ -41,17 +41,55 @@ import pytest
 import motronics
 from motronics.gauss.contract import contract
 
-#: Every module that assembles an operator by contracting basis values against a measure.
-_ASSEMBLY_MODULES = (
+#: The module GLOBS this scan reads. A GLOB AND NOT A HAND-WRITTEN LIST, and that is the whole
+#: repair (2026-09-22). The list that stood here named four files:
+#:
+#:     gauss/quadrature.py, hamilton/discretizations/spline{,_interface,_nonlinear}.py
+#:
+#: and all four still EXIST, so the `path.is_file()` guard below stayed green while the code walked
+#: out from under it. `spline.py` was split into `spline_estimate`, `spline_stabilise`,
+#: `spline_structural`, `spline_thermal`, `spline_trim_interface`, `spline_airgap` and
+#: `spline_electrostatic`; `gauss/quadrature.py`'s contractions moved to `gauss/spline_basis.py`.
+#: The four named files were left holding 7 contractions against a floor of 12 -- which is the
+#: floor doing exactly its job, and the reason this was found at all.
+#:
+#: A SPLIT CANNOT EMPTY A GLOB. That is the property being bought: the failure mode here was never
+#: "someone deleted a module", it was "someone moved the code and the list still resolved".
+_ASSEMBLY_MODULE_GLOBS = (
     'gauss/quadrature.py',
-    'hamilton/discretizations/spline.py',
-    'hamilton/discretizations/spline_interface.py',
-    'hamilton/discretizations/spline_nonlinear.py',
+    'gauss/spline_basis.py',
+    'hamilton/discretizations/spline*.py',
 )
 
 #: Below this, the scan is not looking at the code that was measured. A scan that finds NOTHING is
 #: vacuous rather than green, so it carries a floor as well as a verdict.
-_MINIMUM_CONTRACTIONS_SCANNED = 12
+#:
+#: RE-MEASURED 2026-09-22 after the globs above replaced the stale list: 37 multi-operand
+#: contractions across 18 modules, against the 7 the four named files still held. The floor sits
+#: below the census rather than at it, so adding an assembly site does not red this.
+_MINIMUM_CONTRACTIONS_SCANNED = 30
+
+#: The modules that STILL take numpy's naive path, by name, and this set MAY ONLY SHRINK.
+#:
+#: WHY THEY ARE RECORDED RATHER THAN CONVERTED HERE. The scan was blind for as long as the split
+#: has existed, and 18 naive multi-operand contractions accumulated in the new siblings behind it.
+#: Converting them is not a no-op: `optimize=` changes the CONTRACTION ORDER, which changes the
+#: floating-point associativity of a structural, thermal and electrostatic assembly. That is a
+#: numerics change owed a measurement against this repo's goldens, and bundling it into the repair
+#: of the INSTRUMENT would land it unmeasured -- so the debt is named and frozen instead.
+#:
+#: NAMED MODULES AND NOT A COUNT OR A LINE LIST: a count is blind to a swap (one converted, one
+#: added, still 18) and line numbers move under any edit. A module leaving this set is a
+#: conversion; a module ARRIVING is a new naive contraction in code that was clean, and the
+#: equality below reds on both -- which is what makes it a ratchet rather than an allowlist.
+_NAIVE_EINSUM_DEBT = frozenset({
+    'hamilton/discretizations/spline_airgap.py',
+    'hamilton/discretizations/spline_electrostatic.py',
+    'hamilton/discretizations/spline_estimate.py',
+    'hamilton/discretizations/spline_stabilise.py',
+    'hamilton/discretizations/spline_structural.py',
+    'hamilton/discretizations/spline_thermal.py',
+})
 
 
 def _source_root() -> Path:
@@ -123,9 +161,10 @@ def test_NO_ASSEMBLY_SITE_TAKES_THE_NAIVE_MULTI_OPERAND_EINSUM() -> None:
     root = _source_root()
     scanned = 0
     offenders: list[str] = []
-    for relative in _ASSEMBLY_MODULES:
-        path = root / relative
-        assert path.is_file(), f'{relative} is not in the source tree; the scan names a module that moved'
+    paths = sorted({q for pattern in _ASSEMBLY_MODULE_GLOBS for q in root.glob(pattern)})
+    assert paths, 'the globs matched no module at all, so this scan reads nothing'
+    for path in paths:
+        relative = path.relative_to(root).as_posix()
         tree = ast.parse(path.read_text(encoding='utf-8'))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
@@ -142,11 +181,15 @@ def test_NO_ASSEMBLY_SITE_TAKES_THE_NAIVE_MULTI_OPERAND_EINSUM() -> None:
             if name == 'einsum' and not any(keyword.arg == 'optimize' for keyword in node.keywords):
                 offenders.append(f'{relative}:{node.lineno}')
     assert scanned >= _MINIMUM_CONTRACTIONS_SCANNED, (
-        f'the scan found only {scanned} multi-operand contractions across {len(_ASSEMBLY_MODULES)} '
+        f'the scan found only {scanned} multi-operand contractions across {len(paths)} '
         f'modules, below the floor {_MINIMUM_CONTRACTIONS_SCANNED} -- it is no longer reading the '
         'code that was measured, so finding no offender proves nothing'
     )
-    assert not offenders, (
-        "these multi-operand contractions still take numpy's naive path, which measured 15.9x "
-        f'slower across the assembly: {offenders}. Call motronics.gauss.contract.contract instead.'
+    owing = {site.split(':')[0] for site in offenders}
+    assert owing == _NAIVE_EINSUM_DEBT, (
+        "the set of modules taking numpy's naive multi-operand path moved. Modules that appeared "
+        f'(a NEW naive contraction where the code was clean -- call motronics.gauss.contract.contract '
+        f'instead): {sorted(owing - _NAIVE_EINSUM_DEBT)}. Modules that left (converted -- delete them '
+        f'from `_NAIVE_EINSUM_DEBT`, the set may only shrink): {sorted(_NAIVE_EINSUM_DEBT - owing)}. '
+        f'The measured cost of the naive path is 15.9x across the assembly. Sites: {sorted(offenders)}'
     )
