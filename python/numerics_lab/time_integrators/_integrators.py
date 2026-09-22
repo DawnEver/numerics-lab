@@ -5,6 +5,8 @@ for the affine-weights contract these implement.
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -26,6 +28,16 @@ def _zeros_like(u: NDArray[np.floating]) -> NDArray[np.floating]:
     return np.zeros_like(np.asarray(u, dtype=float))
 
 
+@lru_cache(maxsize=64)
+def _bdf1_weights(dt: float) -> DerivativeWeights:
+    return DerivativeWeights(alpha0=1.0, alpha1=1.0 / dt)
+
+
+@lru_cache(maxsize=64)
+def _bdf2_weights(dt: float) -> DerivativeWeights:
+    return DerivativeWeights(alpha0=1.0, alpha1=1.5 / dt)
+
+
 class BDF1Integrator:
     """Backward Euler (BDF1) -- first order, unconditionally stable, for the ``u_dot`` (eddy) form.
 
@@ -39,7 +51,7 @@ class BDF1Integrator:
     order = 1
 
     def weights(self, dt: float) -> DerivativeWeights:
-        return DerivativeWeights(alpha0=1.0, alpha1=1.0 / dt)
+        return _bdf1_weights(dt)
 
     def start(self, u0, t0, v0=None, a0=None) -> IntegratorState:
         return IntegratorState(us=[np.asarray(u0, dtype=float)], t=t0)
@@ -73,7 +85,7 @@ class BDF2Integrator:
         self._bdf1 = BDF1Integrator()
 
     def weights(self, dt: float) -> DerivativeWeights:
-        return DerivativeWeights(alpha0=1.0, alpha1=1.5 / dt)
+        return _bdf2_weights(dt)
 
     def start(self, u0, t0, v0=None, a0=None) -> IntegratorState:
         return IntegratorState(us=[np.asarray(u0, dtype=float)], t=t0)
