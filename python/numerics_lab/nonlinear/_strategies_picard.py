@@ -15,12 +15,14 @@ from motronics.gauss.nonlinear import (
     AssembledState,
     IterationResult,
     NonlinearSystem,
+    RawStateSystem,
     _energy_error_pct,
     _energy_flux_convergence,
     _has_converged,
     _IncrementTrend,
     _StagnationWatch,
     increment_ratio,
+    unwrap_system,
 )
 
 __all__ = [
@@ -308,31 +310,24 @@ class NuRelaxationDampedPicardStrategy:
 
     name = 'nu-damped'
 
-    #: WHAT THIS STRATEGY NEEDS OF A SYSTEM, as data. The requirement was enforced in `solve` and
-    #: stated in three docstrings, and nothing could ASK it -- so `test_iteration_method_matrix`
-    #: generated a `nu-damped` cell for the MEC `_ReluctanceSystem`, which cannot supply either
-    #: attribute, and read the designed refusal as a red (heavy shard 1, 2026-08-29). A boundary
-    #: only the failure announces is a boundary no caller can plan around.
-    requires = ('raw_state', 'fold_raw')
-
     def solve(
         self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
     ) -> IterationResult:
-        raw_state = getattr(system, 'raw_state', None)
-        fold_raw = getattr(system, 'fold_raw', None)
-        if raw_state is None or fold_raw is None:
+        inner = unwrap_system(system)
+        if not isinstance(inner, RawStateSystem):
             # THE WRAPPER IS TRANSPARENT, so naming it is naming the wrong object. A budgeted
             # system delegates every attribute it does not define, including a MISSING one -- so
             # `_TimeBudgetedSystem` appearing here says only that a budget was set, while the
             # system that actually lacks the two attributes is inside it. Measured 2026-08-29:
             # the message read "got _TimeBudgetedSystem" and sent the reader to the budget wrapper
             # introduced in 55e8fd37c, which is not the reason this combination cannot run.
-            inner = getattr(system, 'unwrapped', system)
             named = type(inner).__name__
             if inner is not system:
                 named = f'{named} (inside {type(system).__name__})'
             msg = f"'nu-damped' requires a system exposing raw_state/fold_raw; got {named}"
             raise TypeError(msg)
+        raw_state = inner.raw_state
+        fold_raw = inner.fold_raw
         x = system.initial_guess()
         alpha = 1.0
         alpha_min = 0.05  # frozen floor for the reluctivity under-relaxation factor

@@ -652,5 +652,37 @@ class _SeededSystem:
     def initial_guess(self) -> np.ndarray:
         return self._seed
 
-    def __getattr__(self, name: str) -> object:
-        return getattr(self._base, name)
+    @property
+    def unwrapped(self) -> NonlinearSystem:
+        return self._base
+
+    @property
+    def is_linear(self) -> bool:
+        return bool(self._base.is_linear)
+
+    def assemble(self, x, /):
+        return self._base.assemble(x)
+
+    def solve_linear(self, state, /):
+        return self._base.solve_linear(state)
+
+    def residual(self, x, state, /):
+        return self._base.residual(x, state)
+
+    def residual_norm(self, x, state, /):
+        return self._base.residual_norm(x, state)
+
+    def tangent(self, x, state, /):
+        return self._base.tangent(x, state)
+
+    def solve_system(self, matrix, rhs, /):
+        return self._base.solve_system(matrix, rhs)
+
+    def solve_secant(self, state, rhs, /):
+        return self._base.solve_secant(state, rhs)
+
+    def on_iteration(self, i, state, err, alpha, increment, /):
+        return self._base.on_iteration(i, state, err, alpha, increment)
+
+    def scale_source(self, lam, /):
+        return self._base.scale_source(lam)

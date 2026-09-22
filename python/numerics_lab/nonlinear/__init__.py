@@ -20,7 +20,7 @@ import itertools
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 import numpy as np
 
@@ -182,6 +182,29 @@ class NonlinearSystem(Protocol):
         """
 
 
+@runtime_checkable
+class RawStateSystem(Protocol):
+    """Optional pre-boundary-fold assembly capability required by ``nu-damped``."""
+
+    def raw_state(self, x: np.ndarray, /): ...
+    def fold_raw(self, s_row, s_col, s_val, t_mat, total_energy, /) -> AssembledState: ...
+
+
+@runtime_checkable
+class WrappedNonlinearSystem(Protocol):
+    """A transparent nonlinear wrapper with an explicitly reachable wrapped system."""
+
+    @property
+    def unwrapped(self) -> NonlinearSystem: ...
+
+
+def unwrap_system(system: NonlinearSystem) -> NonlinearSystem:
+    """Return the concrete system beneath any explicit transparent wrappers."""
+    while isinstance(system, WrappedNonlinearSystem):
+        system = system.unwrapped
+    return system
+
+
 class IterationBudgetExceeded(RuntimeError):
     """A nonlinear solve ran past the wall-clock it was given, and stopped ITSELF.
 
@@ -252,10 +275,24 @@ class _TimeBudgetedSystem:
         """
         return self._inner
 
-    def __getattr__(self, name: str) -> object:
-        # Reached only for names this wrapper does not define, which is every part of the
-        # protocol that costs nothing -- `initial_guess`, `residual`, `on_iteration`, `is_linear`.
-        return getattr(self._inner, name)
+    @property
+    def is_linear(self) -> bool:
+        return bool(self._inner.is_linear)
+
+    def initial_guess(self):
+        return self._inner.initial_guess()
+
+    def residual(self, x, state, /):
+        return self._inner.residual(x, state)
+
+    def residual_norm(self, x, state, /):
+        return self._inner.residual_norm(x, state)
+
+    def on_iteration(self, i, state, err, alpha, increment, /):
+        return self._inner.on_iteration(i, state, err, alpha, increment)
+
+    def scale_source(self, lam, /):
+        return self._inner.scale_source(lam)
 
     def _check(self, where: str) -> None:
         elapsed = self._clock() - self._started
@@ -637,6 +674,8 @@ ITERATION_REGISTRY: dict[str, IterationStrategy] = {
     'continuation': ContinuationStrategy(),
 }
 
+_STRATEGY_REQUIREMENTS: dict[str, tuple[str, ...]] = {'nu-damped': ('raw_state', 'fold_raw')}
+
 
 def strategy_requires(name: str) -> tuple[str, ...]:
     """The system attributes strategy ``name`` needs, or ``()`` when it needs nothing special.
@@ -647,7 +686,8 @@ def strategy_requires(name: str) -> tuple[str, ...]:
     pair cannot run the strategy at all, and asking beforehand is the difference between a matrix
     that declares a cell unsupported and one that discovers it as a TypeError.
     """
-    return tuple(getattr(ITERATION_REGISTRY[name], 'requires', ()))
+    ITERATION_REGISTRY[name]
+    return _STRATEGY_REQUIREMENTS.get(name, ())
 
 
 def strategy_runs_on(name: str, system: object) -> bool:
@@ -658,7 +698,10 @@ def strategy_runs_on(name: str, system: object) -> bool:
     a future system type all answer correctly by construction, while a list of solver names would
     have to be maintained alongside the registry it describes.
     """
-    return all(getattr(system, attribute, None) is not None for attribute in strategy_requires(name))
+    requirements = strategy_requires(name)
+    if not requirements:
+        return True
+    return requirements == ('raw_state', 'fold_raw') and isinstance(unwrap_system(system), RawStateSystem)
 
 
 def get_strategy(name: str | None) -> IterationStrategy:
