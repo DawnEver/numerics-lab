@@ -6,6 +6,8 @@ protocol these implement.
 from __future__ import annotations
 
 import numpy as np
+import scipy.sparse as sp
+from scipy.sparse.linalg import LinearOperator, gmres, splu
 
 from motronics.gauss.nonlinear import (
     _RTOL_ENERGY_PCT,
@@ -156,11 +158,6 @@ def _lu_factorize(matrix):
     Returns ``None`` for a non-scipy tangent (e.g. FEA's opaque reduced-increment bundle), so those
     equations transparently fall back to the equation's own ``solve_system``.
     """
-    # Local import (matches NewtonKrylovStrategy): keep scipy off this module's hot default (Picard)
-    # import path; only the factorization-reusing strategies pull it in.
-    import scipy.sparse as sp  # noqa: PLC0415
-    from scipy.sparse.linalg import splu  # noqa: PLC0415
-
     if not sp.issparse(matrix):
         return None
     return splu(sp.csc_matrix(matrix))
@@ -554,11 +551,6 @@ class NewtonKrylovStrategy:
     def solve(
         self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
     ) -> IterationResult:
-        # Local imports: the Krylov seam + LinearOperator are only needed by this one strategy, and
-        # keeping them here avoids a scipy import on the module's hot default (Picard) path.
-        import scipy.sparse as _sp  # noqa: PLC0415
-        from scipy.sparse.linalg import LinearOperator, gmres  # noqa: PLC0415
-
         x = system.initial_guess()
         state: AssembledState | None = None
         last_energy: float | None = None
@@ -576,7 +568,7 @@ class NewtonKrylovStrategy:
             r = system.residual(x, state)
             jac = system.tangent(x, state)
             n = x.shape[0]
-            if jac is not None and not (_sp.issparse(jac) or isinstance(jac, LinearOperator)):
+            if jac is not None and not (sp.issparse(jac) or isinstance(jac, LinearOperator)):
                 # The equation returned an OPAQUE tangent bundle (FEA's reduced-increment dict), not a
                 # scipy operator GMRES can apply. Its own solve_system does the correct reduced Newton
                 # increment solve (direct), so route through it: still an exact Newton step converging to
