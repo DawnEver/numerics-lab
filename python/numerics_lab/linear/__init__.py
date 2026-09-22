@@ -45,7 +45,7 @@ from scipy.sparse.linalg import (
     spsolve,
 )
 
-from motronics.gauss.linear.dirichlet import apply_dirichlet_triplets
+from motronics.gauss.linear.dirichlet import apply_dirichlet_csr, apply_dirichlet_triplets
 
 #: ``errors`` (2026-09-17) -- THE SEAM'S OWN ERROR TYPE, and a TRUE LEAF. Both the backends above
 #: and the direct-solve guard in ``refinement`` raise it, so it can sit in neither without a cycle;
@@ -98,6 +98,7 @@ __all__ = [
     'PRECONDITIONER_REGISTRY',
     'LinearSolveError',
     'LinearSolver',
+    'apply_dirichlet_csr',
     'apply_dirichlet_triplets',
     'condition_estimate',
     'constraint_rows',
