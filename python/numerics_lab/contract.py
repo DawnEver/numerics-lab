@@ -9,7 +9,7 @@ is that the inner loop becomes a blocked, vectorised, cache-aware BLAS kernel in
 scalar one.
 
 Measured 2026-09-16 on ``cases/field/pm/spm_slotted`` at ``SPLINE_REFINE = (2, 2)``, timing every
-``np.einsum`` on ``compile_spline_magnetostatic``'s path by subscript and pricing the same call
+``np.einsum`` on ``compile_iga_magnetostatic``'s path by subscript and pricing the same call
 with ``optimize=True``:
 
 ===========================  =====  ==========  =========  ========

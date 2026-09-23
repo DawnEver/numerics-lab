@@ -52,7 +52,7 @@ called that "correct and wasteful". MEASURED on ``cases/field/pm/spm_slotted`` a
 ``SPLINE_REFINE = (2, 2)`` before the change: the spline leg peaked at 2.87 GB RSS, returned
 4.328 GB of dense arrays across 19613 calls against 0.385 GB of actual information (11.2x), and
 its largest single call was 234200 points by 105 basis functions -- ONE array of 0.55 GB, 94% of
-it structural zeros. 1.759 GB of the peak was not even transient: ``SplineNonlinearSystem``
+it structural zeros. 1.759 GB of the peak was not even transient: ``IgaNonlinearSystem``
 retains the values and gradients of every patch for the whole Picard loop. Refinement is this
 lane's main physics lever ((2,2) -> (3,3) moved torque from 0.307x to 0.553x of FEMM), and memory
 was what bounded it.

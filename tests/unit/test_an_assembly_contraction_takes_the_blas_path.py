@@ -2,7 +2,7 @@
 helper that guarantees it.
 
 THE MEASUREMENT THAT PUT THIS HERE, taken 2026-09-16 on ``cases/field/pm/spm_slotted`` at
-``SPLINE_REFINE = (2, 2)`` with ``compile_spline_magnetostatic``. Every ``np.einsum`` on the
+``SPLINE_REFINE = (2, 2)`` with ``compile_iga_magnetostatic``. Every ``np.einsum`` on the
 assembly path was timed by subscript, and the same call priced with ``optimize=True``:
 
 ===========================  =====  ==========  =========  ========
@@ -21,7 +21,7 @@ pairwise ``tensordot`` calls that land on ``dgemm``. Both languages are compiled
 was the ALGORITHM, not the implementation.
 
 Note WHICH site dominated, because the lane's standing suspicion was the other one: the 82.5 s is
-the VOLUME stiffness (``spline.py``), while ``trim_nitsche_blocks`` -- the 68 cut interfaces that
+the VOLUME stiffness (``iga.py``), while ``trim_nitsche_blocks`` -- the 68 cut interfaces that
 were the prime suspect for the assembly blow-up -- account for the 0.71 s row, 0.6% of the budget.
 
 WHY A HELPER RATHER THAN ``optimize=True`` AT EACH SITE: the defect is a DEFAULT, so any site that
@@ -44,9 +44,9 @@ from motronics.gauss.contract import contract
 #: Every module that assembles an operator by contracting basis values against a measure.
 _ASSEMBLY_MODULES = (
     'gauss/quadrature.py',
-    'hamilton/discretizations/spline.py',
-    'hamilton/discretizations/spline_interface.py',
-    'hamilton/discretizations/spline_nonlinear.py',
+    'hamilton/discretizations/iga.py',
+    'hamilton/discretizations/iga_interface.py',
+    'hamilton/discretizations/iga_nonlinear.py',
 )
 
 #: Below this, the scan is not looking at the code that was measured. A scan that finds NOTHING is
