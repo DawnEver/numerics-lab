@@ -56,6 +56,7 @@ __all__ = [
     'NewmarkIntegrator',
     'StepForm',
     'TransientSolution',
+    'bdf2_variable_form',
     'get_integrator',
     'integrate_transient',
     'residual_floor',
@@ -315,6 +316,11 @@ def _bdf2_variable_form(state: IntegratorState, dt: float, h: float, t_new: floa
         h_ddot=np.zeros_like(u_n),
         t_eval=t_new,
     )
+
+
+#: The public spelling of the variable-step BDF2 form, for a CHECK that must replay the march's own
+#: weights (`hamilton.coupling.terminal_balance`). One function, two names, never two formulas.
+bdf2_variable_form = _bdf2_variable_form
 
 
 def _default_solve(matrix: object, rhs: NDArray[np.floating]) -> NDArray[np.floating]:
