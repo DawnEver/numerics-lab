@@ -49,7 +49,7 @@ not move when the patch is refined.
 
 THIS USED TO RETURN ``(n_points, n_basis)`` DENSE OVER THE WHOLE PATCH, and the module docstring
 called that "correct and wasteful". MEASURED on ``cases/field/pm/spm_slotted`` at
-``SPLINE_REFINE = (2, 2)`` before the change: the spline leg peaked at 2.87 GB RSS, returned
+``SPLINE_REFINE = (2, 2)`` before the change: the isogeometric leg peaked at 2.87 GB RSS, returned
 4.328 GB of dense arrays across 19613 calls against 0.385 GB of actual information (11.2x), and
 its largest single call was 234200 points by 105 basis functions -- ONE array of 0.55 GB, 94% of
 it structural zeros. 1.759 GB of the peak was not even transient: ``IgaNonlinearSystem``

@@ -7,7 +7,7 @@ carries 333 control points, so **97% of every array it returned was a structural
 are exact (Cox-de Boor writes ``0.0`` outside the support and every later step multiplies or
 divides that through unchanged), so they carried no information at all.
 
-MEASURED, ``cases/field/pm/spm_slotted`` at ``SPLINE_REFINE = (2, 2)``, the spline leg through
+MEASURED, ``cases/field/pm/spm_slotted`` at ``SPLINE_REFINE = (2, 2)``, the isogeometric leg through
 ``run_case_comparison`` -- the profile that named this defect before anything was changed:
 
     peak RSS                                       2.87 GB
