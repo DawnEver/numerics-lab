@@ -97,6 +97,22 @@ def test_registry_covers_the_roadmap_backends():
     assert set(PRECONDITIONER_REGISTRY) == {'jacobi', 'ilu', 'ssor'}
 
 
+def test_the_symmetric_direct_backend_is_the_direct_answer_on_an_spd_system():
+    """``direct-symmetric`` is a different ORDERING of the same factorization, not a new method."""
+    n = 30
+    lap = sp.diags([-np.ones(n - 1), 4.0 * np.ones(n), -np.ones(n - 1)], [-1, 0, 1])
+    A = (sp.kron(sp.eye(n), lap) + sp.kron(sp.diags([-np.ones(n - 1), -np.ones(n - 1)], [-1, 1]), sp.eye(n))).tocsc()
+    b = np.random.default_rng(3).normal(size=n * n)
+    x = solve_linear_system(A, b, linear_solver='direct-symmetric')
+    np.testing.assert_allclose(x, spsolve(A, b), rtol=1e-12, atol=1e-12 * np.abs(x).max())
+
+
+def test_the_symmetric_direct_backend_refuses_a_singular_system():
+    A = sp.csc_matrix(np.array([[1.0, -1.0], [-1.0, 1.0]]))
+    with pytest.raises(LinearSolveError):
+        solve_linear_system(A, np.array([1.0, 0.0]), linear_solver='direct-symmetric')
+
+
 def test_unknown_backend_raises():
     A, b = _spd_system(n=8)
     with pytest.raises(KeyError, match='unknown linear solver'):
