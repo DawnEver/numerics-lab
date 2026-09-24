@@ -103,8 +103,8 @@ class FieldEvaluator(Protocol):
 
     ``granularity`` names the discretization unit the evaluator is keyed on (``'branch'``,
     ``'element'``, ``'edge'``) so a caller can tell what an unfamiliar evaluator produces without
-    inspecting its class -- the same role :mod:`~motronics.hamilton.discretizations.reduced_order`
-    documentation gives ``chart.kind``: a property the code CONSULTS, not a name that merely says so.
+    inspecting its class -- the same role ``chart.kind`` plays for a mesh: a property the code
+    CONSULTS, not a name that merely says so.
 
     This BASE Protocol intentionally carries no ``evaluate`` method of its own: the field-evaluation
     calling convention differs by granularity (a per-branch ``|B|`` array plus the owning system as
