@@ -5,6 +5,8 @@ bicgstab/qmr) must reach that same solution within tolerance -- the linear analo
 "converge-to-reference" contract. Preconditioners (Jacobi/ILU) must not change the converged answer.
 """
 
+import time
+
 import numpy as np
 import pytest
 import scipy.sparse as sp
@@ -177,3 +179,24 @@ def test_pardiso_registers_when_installed_and_is_hinted_when_not():
         A, b = _spd_system(n=8)
         with pytest.raises(KeyError, match='pip install pypardiso'):
             solve_linear_system(A, b, linear_solver='pardiso')
+
+
+def test_the_symmetric_ordering_is_cheaper_than_colamd_on_a_2d_stiffness():
+    """A RATIO, not a seconds bar. MEASURED 2026-09-25: 1.46-1.96x on this 200 x 200 five-point
+    Laplacian and 2.0x on spm_slotted's sdm loop matrix (n = 89,871); the bar is 1.2x, best of three.
+    """
+    n = 200
+    lap = sp.diags([-np.ones(n - 1), 4.0 * np.ones(n), -np.ones(n - 1)], [-1, 0, 1])
+    A = (sp.kron(sp.eye(n), lap) + sp.kron(sp.diags([-np.ones(n - 1), -np.ones(n - 1)], [-1, 1]), sp.eye(n))).tocsc()
+    b = np.ones(n * n)
+
+    def best(name):
+        times = []
+        for _ in range(3):
+            t0 = time.perf_counter()
+            solve_linear_system(A, b, linear_solver=name)
+            times.append(time.perf_counter() - t0)
+        return min(times)
+
+    ratio = best('direct') / best('direct-symmetric')
+    assert ratio > 1.2, ratio
