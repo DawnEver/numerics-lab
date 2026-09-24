@@ -41,17 +41,53 @@ import pytest
 import motronics
 from motronics.gauss.contract import contract
 
-#: Every module that assembles an operator by contracting basis values against a measure.
+#: Every module on the ISOGEOMETRIC assembly path that contracts basis values against a measure.
+#:
+#: WIDENED 2026-09-24, and the old four-entry list is why this comment exists. It named
+#: `spline.py` for the volume stiffness measured at 82.5 s -- and that assembly has since been
+#: split across `spline_structural.py`, `spline_stabilise.py`, `spline_estimate.py`,
+#: `spline_thermal.py`, `spline_trim_interface.py` and `spline_airgap.py`, leaving `spline.py`
+#: itself with ONE contraction. The scan went on reading four modules, found 8 sites against its
+#: own floor of 12, and FAILED ON THE FLOOR -- which short-circuits the offender assertion below
+#: it, so the naive four-operand `np.einsum` at `gauss/quadrature.py:219` sat inside a scanned
+#: module, uncaught, for as long as the list was stale. A floor that fires is not a floor that
+#: protects: it stopped the scan before the scan's actual job.
 _ASSEMBLY_MODULES = (
     'gauss/quadrature.py',
+    'gauss/spline_basis.py',
+    'hamilton/coupling/spline_transfer.py',
     'hamilton/discretizations/spline.py',
+    'hamilton/discretizations/spline_airgap.py',
+    'hamilton/discretizations/spline_estimate.py',
     'hamilton/discretizations/spline_interface.py',
     'hamilton/discretizations/spline_nonlinear.py',
+    'hamilton/discretizations/spline_stabilise.py',
+    'hamilton/discretizations/spline_structural.py',
+    'hamilton/discretizations/spline_thermal.py',
+    'hamilton/discretizations/spline_trim_interface.py',
+)
+
+#: NOT COVERED, BY NAME, so that "the scan is green" cannot be read as "the tree is converted".
+#: The ELEMENT (FEM) assembly path carries multi-operand contractions of the same class --
+#: `fem/_assemble_quad.py`, `fem/_kernels.py`, `fem/_newton.py`, `hcurl/_nonlinear.py`,
+#: `physics/structural/backend.py` -- and converting them is a separate decision, not an
+#: oversight: those kernels are pinned by BIT-FOR-BIT port goldens
+#: (`test_solve_port_golden`, `test_newton_port_golden`), and reassociating a floating-point sum
+#: is precisely what a bit-for-bit golden refuses. The measurement that justifies the conversion
+#: there has to be taken on that path and against those goldens first.
+_NOT_SCANNED_BY_DESIGN = (
+    'hamilton/discretizations/fem/_assemble_quad.py',
+    'hamilton/discretizations/fem/_kernels.py',
+    'hamilton/discretizations/fem/_newton.py',
+    'hamilton/discretizations/hcurl/_nonlinear.py',
+    'hamilton/physics/structural/backend.py',
 )
 
 #: Below this, the scan is not looking at the code that was measured. A scan that finds NOTHING is
-#: vacuous rather than green, so it carries a floor as well as a verdict.
-_MINIMUM_CONTRACTIONS_SCANNED = 12
+#: vacuous rather than green, so it carries a floor as well as a verdict. Raised 12 -> 30 with the
+#: widened list, against 39 found: `RATCHET-TWO-SIDES` -- the number may only move with the list it
+#: measures, and it is a floor on the SCAN's reach, not a budget for offenders.
+_MINIMUM_CONTRACTIONS_SCANNED = 30
 
 
 def _source_root() -> Path:
@@ -113,6 +149,36 @@ def test_the_HELPER_IS_FASTER_THAN_THE_NAIVE_PATH_BY_A_STATED_RATIO() -> None:
     assert naive / fast >= 5.0, f'the helper is only {naive / fast:.1f}x the naive path, not the 35.5x measured'
 
 
+def test_THE_UNCOVERED_ELEMENT_PATH_IS_NAMED_AND_STILL_UNCOVERED() -> None:
+    """The exclusion is two-sided, so it cannot rot in either direction.
+
+    A named exclusion that nobody checks is the same failure as a stale module list: the file it
+    names gets deleted or converted and the prose goes on claiming a gap. This asserts each
+    excluded module still EXISTS, still carries at least one multi-operand contraction (so the
+    gap is real and not already closed), and is not also in the scanned list (so the two
+    declarations cannot contradict each other).
+    """
+    root = _source_root()
+    for relative in _NOT_SCANNED_BY_DESIGN:
+        path = root / relative
+        assert path.is_file(), f'{relative} is named as an uncovered module but is not in the tree'
+        assert relative not in _ASSEMBLY_MODULES, f'{relative} is declared both scanned and uncovered'
+        tree = ast.parse(path.read_text(encoding='utf-8'))
+        naive = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == 'einsum'
+            and len(node.args) >= 3
+            and not any(keyword.arg == 'optimize' for keyword in node.keywords)
+        ]
+        assert naive, (
+            f'{relative} is named as an uncovered element-path module but carries no naive '
+            'multi-operand einsum any more -- the gap is closed, so move it into _ASSEMBLY_MODULES.'
+        )
+
+
 def test_NO_ASSEMBLY_SITE_TAKES_THE_NAIVE_MULTI_OPERAND_EINSUM() -> None:
     """The scan that makes the helper a declaration the code must consult.
 
@@ -123,15 +189,19 @@ def test_NO_ASSEMBLY_SITE_TAKES_THE_NAIVE_MULTI_OPERAND_EINSUM() -> None:
     root = _source_root()
     scanned = 0
     offenders: list[str] = []
+    silent: list[str] = []
     for relative in _ASSEMBLY_MODULES:
         path = root / relative
         assert path.is_file(), f'{relative} is not in the source tree; the scan names a module that moved'
+        before = scanned
         tree = ast.parse(path.read_text(encoding='utf-8'))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             target = node.func
-            name = target.attr if isinstance(target, ast.Attribute) else getattr(target, 'id', '')
+            name = (
+                target.attr if isinstance(target, ast.Attribute) else target.id if isinstance(target, ast.Name) else ''
+            )
             # args[0] is the subscript string, so two or more OPERANDS is len(args) >= 3.
             if name not in {'einsum', 'contract'} or len(node.args) < 3:
                 continue
@@ -141,6 +211,15 @@ def test_NO_ASSEMBLY_SITE_TAKES_THE_NAIVE_MULTI_OPERAND_EINSUM() -> None:
             scanned += 1
             if name == 'einsum' and not any(keyword.arg == 'optimize' for keyword in node.keywords):
                 offenders.append(f'{relative}:{node.lineno}')
+        if scanned == before:
+            silent.append(relative)
+    # A NAMED SET BEATS THE COUNT, and the count alone is what let this scan go stale: a module
+    # whose contractions moved out contributes nothing and the total is made up elsewhere, so the
+    # list stops describing the tree without the number ever falling. `NAMED-SETS-NOT-COUNTS`.
+    assert not silent, (
+        f'{silent} are declared assembly modules but contribute NO multi-operand contraction, so '
+        'the list no longer describes where the assembly is. Move the entry, do not keep it.'
+    )
     assert scanned >= _MINIMUM_CONTRACTIONS_SCANNED, (
         f'the scan found only {scanned} multi-operand contractions across {len(_ASSEMBLY_MODULES)} '
         f'modules, below the floor {_MINIMUM_CONTRACTIONS_SCANNED} -- it is no longer reading the '

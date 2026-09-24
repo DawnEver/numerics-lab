@@ -216,4 +216,4 @@ def diffusion_blocks(
         ``(n_cell, n_basis, n_basis)``.
 
     """
-    return np.einsum('eqid,eqjd,ed,eq->eij', gradients, gradients, conductivity, measure)
+    return contract('eqid,eqjd,ed,eq->eij', gradients, gradients, conductivity, measure)
