@@ -25,6 +25,11 @@ from motronics.gauss.nonlinear import _ALPHA_MIN, AssembledState, get_strategy
 
 pytestmark = pytest.mark.unit
 
+#: The held undamped increment. NOT uniform: a uniform shift of every unknown is a gauge mode, which
+#: the increment criterion rightly reads as no movement -- the run would converge on step one and
+#: never ask the recovery question.
+_SHAPED_STEP = np.array([10.0, 20.0, 30.0])
+
 
 class _OscillateThenSettle:
     """Oscillate ABOVE tolerance long enough to drive alpha to the floor, then go genuinely flat.
@@ -51,7 +56,7 @@ class _OscillateThenSettle:
         return AssembledState(system_matrix=None, total_energy=energy, payload=None)
 
     def solve_linear(self, state, /) -> np.ndarray:
-        return self.x + 10.0
+        return self.x + _SHAPED_STEP
 
     def on_iteration(self, i, state, err, alpha, increment) -> None:
         self.alphas.append(float(alpha))
@@ -125,7 +130,7 @@ class _SettleAfter:
         return AssembledState(system_matrix=None, total_energy=energy, payload=None)
 
     def solve_linear(self, state, /) -> np.ndarray:
-        return self.x + 10.0
+        return self.x + _SHAPED_STEP
 
     def on_iteration(self, i, state, err, alpha, increment) -> None:
         self.alphas.append(float(alpha))
