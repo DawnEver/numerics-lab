@@ -576,6 +576,19 @@ def increment_ratio(x: np.ndarray, x_next: np.ndarray, /) -> float:
     dx_norm = float(np.linalg.norm(dx))
     if dx_norm == 0.0:
         return 0.0  # the degenerate edge, where the constant fraction is undefined
+    if dx.size < 2:
+        # A ONE-COMPONENT ITERATE HAS NO SHAPE TO SEPARATE FROM ITS GAUGE. The relaxation below
+        # splits `dx` into a constant mode and a mean-removed shape; for n = 1 the shape subspace
+        # is {0}, so `dx - dx.mean()` is EXACTLY zero for every possible increment and the test
+        # `shape_norm / dx_norm < _GAUGE_ONLY_SHAPE_FRACTION` passes unconditionally. The function
+        # then returned 0.0 -- "the iterate has stopped moving" -- on a step of any size.
+        # MEASURED on the plateau fixture: `increment_ratio([5.0], [7.5])` returned 0.0, so
+        # `_has_converged` fired at x = 7.5 against a fixed point of 10.0 and six strategies
+        # reported `converged=True` three iterations into a solve that was still crossing the
+        # plateau their own tests were written to refuse.
+        # This is not a tolerance: the decomposition carries no information at n = 1, so the raw
+        # ratio is the only thing there is to report.
+        return dx_norm / x_scale
     # A UNIFORM SHIFT IN A GAUGE-FREE POTENTIAL IS NOT MOVEMENT. In 2-D magnetostatics the unknown
     # is the vector potential `A`, defined only up to an additive constant unless a Dirichlet row
     # pins it; that constant carries no energy and no `B`, so an iterate drifting along it has
@@ -597,9 +610,23 @@ def increment_ratio(x: np.ndarray, x_next: np.ndarray, /) -> float:
     # everywhere) and removing it would under-report genuine movement. So it fires only when the
     # SHAPE part of the increment is negligible against the increment itself, and the moment a
     # shape change enters, the raw ratio is what answers.
-    shape_norm = float(np.linalg.norm(dx - dx.mean()))
-    if shape_norm / dx_norm < _GAUGE_ONLY_SHAPE_FRACTION:
-        return shape_norm / x_scale
+    #
+    # AND IT NEEDS A PROPER SUBSPACE TO SUBTRACT, which is the guard below (2026-09-22). Removing
+    # the mean removes ONE dimension of `dx`. At `dx.size == 1` that is every dimension: the
+    # constant mode IS the whole space, `dx - dx.mean()` is identically the zero vector for any
+    # increment whatever, and this function returned 0.0 for a 1-DOF solve that had just moved from
+    # 0 to 20. `_has_converged` ANDs on that number, so EVERY single-unknown nonlinear solve
+    # reported converged on its first iteration -- "the iterate has stopped moving" derived from a
+    # measurement that cannot express movement.
+    #
+    # STRUCTURALLY ZERO IS NOT NEGLIGIBLY SMALL, and the test above cannot tell them apart: the
+    # relaxation's own warrant is that it "fires only when the SHAPE part of the increment is
+    # negligible AGAINST THE INCREMENT ITSELF", a statement about a ratio of two real quantities.
+    # When the shape part does not exist, there is no ratio to be small.
+    if dx.size > 1:
+        shape_norm = float(np.linalg.norm(dx - dx.mean()))
+        if shape_norm / dx_norm < _GAUGE_ONLY_SHAPE_FRACTION:
+            return shape_norm / x_scale
     return dx_norm / x_scale
 
 
