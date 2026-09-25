@@ -45,6 +45,7 @@ __all__ = [
     'NonlinearSystem',
     'NuRelaxationDampedPicardStrategy',
     'PicardStrategy',
+    'ResidualMarchStrategy',
     'get_strategy',
     'increment_ratio',
     'strategy_requires',
@@ -673,6 +674,7 @@ from motronics.gauss.nonlinear._strategies_newton import (  # noqa: E402
     NewtonKrylovStrategy,
     NewtonLineSearchStrategy,
     NewtonStrategy,
+    ResidualMarchStrategy,
 )
 from motronics.gauss.nonlinear._strategies_picard import (  # noqa: E402
     AdaptiveDampedPicardStrategy,
