@@ -134,6 +134,49 @@ def _sign(value: float) -> bool:
     return value >= 0.0
 
 
+def _locate_bracket(
+    lo_t: float, g_lo: float, hi_t: float, g_hi: float, probe: Callable[[float], float], tol: float
+) -> tuple[float, float]:
+    """Shrink a sign-change bracket to ``tol`` wide; every ``probe`` is a whole re-step.
+
+    ILLINOIS regula falsi, safeguarded: the secant point is probed, and the end that survives twice
+    has its ``g`` halved so neither end stalls. A probe is aimed half a tolerance
+    bracket past the secant root, so a secant that has converged straddles the root and closes the
+    bracket in one more probe. Two probes that do not together halve the bracket earn a bisection
+    (Brent's guard), so a pathological ``g`` still terminates. Same sign convention, same final width, same midpoint
+    rule as the plain bisection this replaced (which spent ~21 re-steps per crossing, measured).
+    """
+    lo_sign = _sign(g_lo)
+    side = 0  # which end moved on the last probe: -1 lo, +1 hi
+    widths = [hi_t - lo_t]
+    while hi_t - lo_t > tol:
+        width = hi_t - lo_t
+        # Brent's guard: two probes that did not together halve the bracket earn a bisection.
+        if len(widths) >= 3 and width > 0.5 * widths[-3]:
+            mid_t = 0.5 * (lo_t + hi_t)
+            widths.clear()
+        elif g_hi == g_lo or not (np.isfinite(g_lo) and np.isfinite(g_hi)):
+            mid_t = 0.5 * (lo_t + hi_t)
+        else:
+            # Aim half a tolerance PAST the secant root, toward the end that did not move: once the
+            # secant has converged this probe straddles the root and the bracket closes.
+            mid_t = hi_t - g_hi * width / (g_hi - g_lo) + (0.5 * tol if side <= 0 else -0.5 * tol)
+            mid_t = min(max(mid_t, lo_t + 0.25 * tol), hi_t - 0.25 * tol)
+        g_mid = probe(mid_t)
+        if _sign(g_mid) == lo_sign:
+            lo_t, g_lo = mid_t, g_mid
+            if side == -1:
+                g_hi *= 0.5
+            side = -1
+        else:
+            hi_t, g_hi = mid_t, g_mid
+            if side == 1:
+                g_lo *= 0.5
+            side = 1
+        widths.append(hi_t - lo_t)
+    return lo_t, hi_t
+
+
 def integrate_transient_with_events(
     problem,
     study: TransientStudy,
@@ -455,17 +498,13 @@ def integrate_transient_with_events(
                 elif t_step - t_from <= bracket_tol:
                     candidates.append((t_from, i, np.array(checkpoint.state.last_u, dtype=float, copy=True)))
                 else:
-                    lo_t, lo_sign = t_from, _sign(g_prev[i])
-                    hi_t = t_step
-                    u_mid = u_probe
-                    while hi_t - lo_t > bracket_tol:
-                        mid_t = 0.5 * (lo_t + hi_t)
+
+                    def _probe(mid_t: float, i: int = i, t_from: float = t_from, checkpoint=checkpoint) -> float:
                         trial_state, trial_prev_dt = _rollback(checkpoint, solution)
                         _ps, u_mid, _ok = step_from(trial_state, trial_prev_dt, mid_t - t_from, mid_t)
-                        if _sign(float(event_fns[i](u_mid, mid_t))) == lo_sign:
-                            lo_t = mid_t
-                        else:
-                            hi_t = mid_t
+                        return float(event_fns[i](u_mid, mid_t))
+
+                    lo_t, hi_t = _locate_bracket(t_from, float(g_prev[i]), t_step, float(g_new[i]), _probe, bracket_tol)
                     t_star_i = 0.5 * (lo_t + hi_t)
                     trial_state, trial_prev_dt = _rollback(checkpoint, solution)
                     _ps, u_star_i, _ok = step_from(trial_state, trial_prev_dt, t_star_i - t_from, t_star_i)
