@@ -37,10 +37,12 @@ import numpy as np
 __all__ = [
     'COEFFICIENT_NAMES',
     'CompositeUpdate',
+    'FrozenNu',
     'MaterialCoeffs',
     'MaterialFields',
     'MaterialLoop',
     'MaterialUpdate',
+    'frozen_resolve',
     'relax_linear',
 ]
 
@@ -194,3 +196,53 @@ class MaterialLoop:
 
     def commit(self) -> None:
         self.committed = self._trial
+
+
+def frozen_resolve(system, x_frozen: np.ndarray, /) -> np.ndarray:
+    """ONE linear solve of ``system`` with its material coefficients FROZEN at the iterate ``x_frozen``.
+
+    The frozen-permeability re-solve, native and solver-agnostic. Every system in this repo
+    evaluates its reversible coefficients (a steel ``nu``) from the field of the iterate it is
+    assembled at and NOT from its source, so assembling ``system`` -- which may carry a DIFFERENT
+    source than the solve that converged to ``x_frozen`` (magnets only, one current axis) -- at
+    ``x_frozen`` builds exactly the operator of that converged material state; solving it with the
+    system's own source is the satellite study. By linearity of that frozen operator the satellite
+    fields superpose to the converged one, which is the whole method.
+    """
+    return system.solve_linear(system.assemble(np.asarray(x_frozen)))
+
+
+class FrozenNu:
+    """A material update whose ``nu`` is FROZEN per point: the coefficients of one converged evaluation.
+
+    Built from any reversible update at a converged field (:meth:`from_update`), it ignores the
+    field it is later evaluated at -- the frozen-permeability material state as a
+    :class:`MaterialUpdate`, for a system that assembles from per-point coefficients.
+    """
+
+    irreversible = False
+
+    def __init__(self, nu: np.ndarray) -> None:
+        self.nu = np.asarray(nu, dtype=float).copy()
+
+    @classmethod
+    def from_update(cls, update: MaterialUpdate, fields: MaterialFields, temperature=None) -> FrozenNu:
+        _state, coeffs = update.evaluate(update.init_state(fields), fields, temperature)
+        if coeffs.nu is None:
+            msg = f'{type(update).__name__} sets no nu, so there is nothing to freeze'
+            raise ValueError(msg)
+        return cls(coeffs.nu)
+
+    def init_state(self, fields: MaterialFields, /) -> None:
+        del fields
+
+    def evaluate(self, state, fields: MaterialFields, temperature=None, /):
+        del fields, temperature
+        return state, MaterialCoeffs(nu=self.nu.copy())
+
+    def relax(self, previous: MaterialCoeffs, target: MaterialCoeffs, alpha: float, /) -> MaterialCoeffs:
+        return relax_linear(previous, target, alpha)
+
+    def change(self, committed, trial, /) -> float:
+        del committed, trial
+        return 0.0
