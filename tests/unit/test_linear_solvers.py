@@ -10,7 +10,7 @@ import time
 import numpy as np
 import pytest
 import scipy.sparse as sp
-from scipy.sparse.linalg import spsolve
+from scipy.sparse.linalg import splu, spsolve
 
 from motronics.gauss import linear
 from motronics.gauss.linear import (
@@ -182,21 +182,29 @@ def test_pardiso_registers_when_installed_and_is_hinted_when_not():
 
 
 def test_the_symmetric_ordering_is_cheaper_than_colamd_on_a_2d_stiffness():
-    """A RATIO, not a seconds bar. MEASURED 2026-09-25: 1.46-1.96x on this 200 x 200 five-point
-    Laplacian and 2.0x on spm_slotted's sdm loop matrix (n = 89,871); the bar is 1.2x, best of three.
+    """The CAUSE pinned deterministically, the wall time as a RATIO -- never a seconds bar.
+
+    MEASURED 2026-09-25: COLAMD fills this 200 x 200 five-point Laplacian 1.78x as much as the
+    symmetric minimum-degree ordering (spm_slotted's sdm loop matrix: 1.75x, 16.96 M / 9.69 M), and
+    the factor-and-solve ran 1.46-1.96x faster on a quiet box but 1.11x under a concurrent gate. So
+    the fill carries the bar (1.5x) and the time only has to not be SLOWER, best of five.
     """
     n = 200
     lap = sp.diags([-np.ones(n - 1), 4.0 * np.ones(n), -np.ones(n - 1)], [-1, 0, 1])
     A = (sp.kron(sp.eye(n), lap) + sp.kron(sp.diags([-np.ones(n - 1), -np.ones(n - 1)], [-1, 1]), sp.eye(n))).tocsc()
     b = np.ones(n * n)
+    colamd = splu(A)
+    symmetric = splu(A, permc_spec='MMD_AT_PLUS_A', diag_pivot_thresh=0.0, options={'SymmetricMode': True})
+    fill_ratio = (colamd.L.nnz + colamd.U.nnz) / (symmetric.L.nnz + symmetric.U.nnz)
+    assert fill_ratio > 1.5, fill_ratio
 
     def best(name):
         times = []
-        for _ in range(3):
+        for _ in range(5):
             t0 = time.perf_counter()
             solve_linear_system(A, b, linear_solver=name)
             times.append(time.perf_counter() - t0)
         return min(times)
 
     ratio = best('direct') / best('direct-symmetric')
-    assert ratio > 1.2, ratio
+    assert ratio > 1.0, ratio
