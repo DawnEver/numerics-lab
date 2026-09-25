@@ -517,6 +517,15 @@ def _solve_step(
         if prev_residual is not None:
             ratio = residual / prev_residual
             slow = slow + 1 if (capped or ratio > _STALL_RATIO) else 0
+            # A RESIDUAL AT THE FLOOR IS FINISHED: it is already rounding, so the remaining
+            # iterations can only reshuffle it (and a rounding residual need not fall
+            # monotonically, so no stall ratio can be relied on to see it). It is the same floor
+            # verdict the exhaustion branch below gives, reached before the ceiling instead of at
+            # it (measured on ipm_uv's chopper: 50 iterations, ~30 s a step, at |r| ~ 4e-9).
+            if (floor := _roundoff_floor(problem, tangent, u, form)) is not None and residual <= floor:
+                converged = True
+                on_floor = True
+                break
             if slow >= 2 and tangent_helpful:
                 tangent_active = True
         prev_residual = residual
@@ -576,8 +585,9 @@ def _solve_step(
             # problem declares one, :func:`residual_floor` derives ``eps * |J| . |u|`` from the
             # tangent, which needs nothing of the caller and covers every other problem.
             #
-            # Consulted ONLY after the requested bar was missed, so neither source can stop an
-            # iteration early or alter the trajectory.
+            # Consulted ONLY after the requested bar was missed: here at the ceiling, and inside
+            # the loop from the second iteration on, where a residual at the floor has no progress
+            # left to make.
             converged = True
     if not converged and gmin_stages is not None:
         # The SPICE-standard gmin continuation (opt-in): a fresh damped Newton path from the
