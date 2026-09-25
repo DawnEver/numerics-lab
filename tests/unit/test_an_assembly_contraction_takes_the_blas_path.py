@@ -41,13 +41,16 @@ import pytest
 import motronics
 from motronics.gauss.contract import contract
 
-#: Every module that assembles an operator by contracting basis values against a measure.
-_ASSEMBLY_MODULES = (
-    'gauss/quadrature.py',
-    'hamilton/discretizations/spline.py',
-    'hamilton/discretizations/spline_interface.py',
-    'hamilton/discretizations/spline_nonlinear.py',
-)
+#: Every module that assembles an operator by contracting basis values against a measure: DERIVED
+#: from the two trees that hold assembly, never listed -- a hand list went stale the day a new
+#: assembler (the coupled SDM subdomain) landed outside it.
+_ASSEMBLY_TREES = ('gauss', 'hamilton/discretizations')
+
+
+def _assembly_modules() -> list[str]:
+    root = _source_root()
+    return sorted(path.relative_to(root).as_posix() for tree in _ASSEMBLY_TREES for path in (root / tree).rglob('*.py'))
+
 
 #: Below this, the scan is not looking at the code that was measured. A scan that finds NOTHING is
 #: vacuous rather than green, so it carries a floor as well as a verdict.
@@ -123,9 +126,9 @@ def test_NO_ASSEMBLY_SITE_TAKES_THE_NAIVE_MULTI_OPERAND_EINSUM() -> None:
     root = _source_root()
     scanned = 0
     offenders: list[str] = []
-    for relative in _ASSEMBLY_MODULES:
+    modules = _assembly_modules()
+    for relative in modules:
         path = root / relative
-        assert path.is_file(), f'{relative} is not in the source tree; the scan names a module that moved'
         tree = ast.parse(path.read_text(encoding='utf-8'))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
@@ -142,7 +145,7 @@ def test_NO_ASSEMBLY_SITE_TAKES_THE_NAIVE_MULTI_OPERAND_EINSUM() -> None:
             if name == 'einsum' and not any(keyword.arg == 'optimize' for keyword in node.keywords):
                 offenders.append(f'{relative}:{node.lineno}')
     assert scanned >= _MINIMUM_CONTRACTIONS_SCANNED, (
-        f'the scan found only {scanned} multi-operand contractions across {len(_ASSEMBLY_MODULES)} '
+        f'the scan found only {scanned} multi-operand contractions across {len(modules)} '
         f'modules, below the floor {_MINIMUM_CONTRACTIONS_SCANNED} -- it is no longer reading the '
         'code that was measured, so finding no offender proves nothing'
     )
