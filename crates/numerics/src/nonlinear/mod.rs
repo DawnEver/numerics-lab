@@ -781,7 +781,8 @@ pub fn strategy_runs_on<S: NonlinearSystem>(
 pub fn get_strategy<S: NonlinearSystem + 'static>(
     name: Option<&str>,
 ) -> Result<Box<dyn IterationStrategy<S>>, NonlinearError> {
-    let name = name.unwrap_or("picard-damped");
+    // `None` is Newton, mirroring the Python `DEFAULT_ITERATION_STRATEGY` (2026-09-25).
+    let name = name.unwrap_or("newton");
     let s: Box<dyn IterationStrategy<S>> = match name {
         "picard-damped" => Box::new(DampedPicardStrategy),
         "nu-damped" => Box::new(NuRelaxationDampedPicardStrategy),

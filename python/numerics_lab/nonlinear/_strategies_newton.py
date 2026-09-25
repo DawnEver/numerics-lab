@@ -106,6 +106,10 @@ class NewtonStrategy:
         self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
     ) -> IterationResult:
         x = system.initial_guess()
+        if max_iter <= 0:
+            # NO ITERATION RUNS NO ASSEMBLY, the contract every strategy keeps: the caller gets
+            # back its pre-initialised fields, never an assembly nobody asked for.
+            return IterationResult(x=x, state=None, iterations=0, converged=False)
         state = system.assemble(x)
         r_norm = _free_residual_norm(system, x, state)
         reference = _residual_reference(system, state, r_norm)

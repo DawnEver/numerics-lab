@@ -77,6 +77,15 @@ impl NewtonStrategy {
     ) -> Result<ResultOf<S>, NonlinearError> {
         let rtol = opts.rtol_energy_pct;
         let mut x = opts.start(system);
+        if opts.max_iter == 0 {
+            // NO ITERATION RUNS NO ASSEMBLY, the contract every strategy keeps.
+            return Ok(IterationResult {
+                x,
+                state: None,
+                iterations: 0,
+                converged: false,
+            });
+        }
         let mut state = system.assemble(&x)?;
         let mut r_norm = system.residual_norm(&x, &state)?;
         let reference = residual_reference(system, &state, r_norm)?;
