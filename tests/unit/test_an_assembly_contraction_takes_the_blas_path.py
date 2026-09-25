@@ -82,14 +82,7 @@ _MINIMUM_CONTRACTIONS_SCANNED = 30
 #: added, still 18) and line numbers move under any edit. A module leaving this set is a
 #: conversion; a module ARRIVING is a new naive contraction in code that was clean, and the
 #: equality below reds on both -- which is what makes it a ratchet rather than an allowlist.
-_NAIVE_EINSUM_DEBT = frozenset({
-    'hamilton/discretizations/spline_airgap.py',
-    'hamilton/discretizations/spline_electrostatic.py',
-    'hamilton/discretizations/spline_estimate.py',
-    'hamilton/discretizations/spline_stabilise.py',
-    'hamilton/discretizations/spline_structural.py',
-    'hamilton/discretizations/spline_thermal.py',
-})
+_NAIVE_EINSUM_DEBT: frozenset[str] = frozenset()
 
 #: NOT COVERED BY THE GLOBS ABOVE, BY NAME, so that "the scan is green" cannot be read as "the tree
 #: is converted". The ELEMENT (FEM) assembly path carries multi-operand contractions of the same
