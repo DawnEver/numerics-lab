@@ -620,9 +620,10 @@ def increment_ratio(x: np.ndarray, x_next: np.ndarray, /) -> float:
     # would be the wrong shape -- a real change can carry a nonzero mean (an anchored field growing
     # everywhere) and removing it would under-report genuine movement. So it fires only when the
     # SHAPE part of the increment is negligible against the increment itself, and the moment a
-    # shape change enters, the raw ratio is what answers.
+    # shape change enters, the raw ratio is what answers. And a gauge needs a shape to be separate
+    # from: on ONE unknown the uniform shift IS the whole solution, never a gauge mode.
     shape_norm = float(np.linalg.norm(dx - dx.mean()))
-    if shape_norm / dx_norm < _GAUGE_ONLY_SHAPE_FRACTION:
+    if dx.size > 1 and shape_norm / dx_norm < _GAUGE_ONLY_SHAPE_FRACTION:
         return shape_norm / x_scale
     return dx_norm / x_scale
 
