@@ -98,6 +98,40 @@ def test_the_eventful_march_REJECTS_a_step_its_newton_could_not_take() -> None:
     assert times[-1] == pytest.approx(t1, abs=dt), f'the march stopped at {times[-1]}, not {t1}'
 
 
+class _StiffOnlyAtLargeSteps:
+    """``u_dot = 1`` whose Jacobian is WRONG (5x too soft) unless the step is short.
+
+    Newton on a 5x-too-soft Jacobian overshoots by 4x per iteration and diverges, so a nominal
+    step exhausts and its halves converge in one iteration. The trajectory is exact either way.
+    """
+
+    def residual(self, u, u_dot, u_ddot, t):
+        return np.asarray(u_dot) - 1.0
+
+    def jacobian(self, u, u_dot, u_ddot, t, weights):
+        alpha = weights.alpha1.real
+        return np.array([[alpha if alpha > 12.0 else 0.2 * alpha]])
+
+
+def test_a_step_rejected_and_then_re_landed_converged_is_not_labelled_non_converged() -> None:
+    """The rejected full step's failure is a PROBE's; the halves that reach its instant converged.
+
+    MEASURED 2026-09-25 on lipo_inductor's chopper: every step the retry rescued was still listed in
+    ``nonconverged_times`` -- the landing at the same instant promoted the rejected attempt's record
+    -- so the run was labelled `coarse` with every landed step solved.
+    """
+    dt = 0.1
+    study = TransientStudy(t0=0.0, t1=0.3, dt=dt, integrator=IntegratorKind.BDF1)
+    common = {'event_fns': (_SharpLayer.never,), 'max_newton': 4, 'tol': 1e-10, 'backtrack_cap': 0}
+    fixed = integrate_transient_with_events(_StiffOnlyAtLargeSteps(), study, np.array([0.0]), **common)
+    assert fixed.nonconverged_times, 'PREMISE: the nominal step must exhaust, or nothing is rescued'
+    shrunk = integrate_transient_with_events(_StiffOnlyAtLargeSteps(), study, np.array([0.0]), adaptive=True, **common)
+    assert any(abs(t / dt - round(t / dt)) > 1e-9 for t in shrunk.times), 'no step was shortened'
+    assert shrunk.nonconverged_times == []
+    assert shrunk.nonconverged_probe_times, 'the rejected attempts stay on record as probes'
+    np.testing.assert_allclose([u[0] for u in shrunk.states], shrunk.times, atol=1e-9)
+
+
 def test_refine_lands_finer_steps_where_the_full_step_under_resolves() -> None:
     """``refine`` is ACCURACY-controlled: a converged step whose half-size re-take disagrees
     beyond the tolerance is replaced by the two half-steps, so the grid adapts where the fast

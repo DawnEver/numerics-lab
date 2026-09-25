@@ -302,6 +302,9 @@ def integrate_transient_with_events(
     # suppressed with the spurious one -- physically indistinguishable from chatter, which
     # _MAX_EVENTS_PER_CELL already refuses.
     last_fired: dict[int, float] = {}
+    # Whether the MOST RECENT step to each instant failed. A rejected attempt and the shortened steps
+    # that later reach the same instant share its time, so the time alone cannot say which one landed.
+    latest_failed: dict[float, bool] = {}
 
     def step_from(
         from_state: IntegratorState, from_prev_dt: float | None, dt_step: float, t_new: float
@@ -343,6 +346,7 @@ def integrate_transient_with_events(
             solution.floor_converged_times.append(t_new)
         if not converged:
             solution.nonconverged_probe_times.append(t_new)
+        latest_failed[t_new] = not converged
         return integrator.advance(from_state, u_new, dt_step, t_new), u_new, converged
 
     def _commit(t_new: float, u_new: NDArray) -> None:
@@ -351,7 +355,10 @@ def integrate_transient_with_events(
         solution.states.append(u_new)
         # The step that produced this point recorded any failure against t_new; it landed, so it
         # is a real non-converged STEP. Only the most recent such record is promoted -- an earlier
-        # discarded probe at the same instant stays a probe.
+        # discarded probe at the same instant stays a probe, and so does every record when the step
+        # that actually reached this instant converged (a retry's halves re-land a rejected target).
+        if not latest_failed.get(t_new, False):
+            return
         for j in range(len(solution.nonconverged_probe_times) - 1, -1, -1):
             if solution.nonconverged_probe_times[j] == t_new:
                 del solution.nonconverged_probe_times[j]
