@@ -72,7 +72,9 @@ class NewtonStrategy:
                 dx = system.solve_system(jac, -system.residual(x, state))
                 x = x + dx
             increment = increment_ratio(x_prev, x)
-            converged = _has_converged(err, x_prev, x, rtol_energy_pct) or watch.observe(err, increment)
+            converged = _has_converged(
+                err, x_prev, x, rtol_energy_pct, material_change=state.material_change
+            ) or watch.observe(err, increment, state.material_change)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0, increment)
@@ -140,7 +142,9 @@ class AndersonStrategy:
                 if self.beta != 1.0:
                     x = x + (self.beta - 1.0) * (f - dF @ gamma)
             increment = increment_ratio(x_prev, x)
-            converged = _has_converged(err, x_prev, x, rtol_energy_pct) or watch.observe(err, increment)
+            converged = _has_converged(
+                err, x_prev, x, rtol_energy_pct, material_change=state.material_change
+            ) or watch.observe(err, increment, state.material_change)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, self.beta, increment)
@@ -253,7 +257,9 @@ class ModifiedNewtonStrategy:
                             dx = cached_lu.solve(-r) if cached_lu is not None else system.solve_system(cached_jac, -r)
                             x = x + dx
             increment = increment_ratio(x_prev, x)
-            converged = _has_converged(err, x_prev, x, rtol_energy_pct) or watch.observe(err, increment)
+            converged = _has_converged(
+                err, x_prev, x, rtol_energy_pct, material_change=state.material_change
+            ) or watch.observe(err, increment, state.material_change)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0, increment)
@@ -320,7 +326,9 @@ class BroydenStrategy:
             x = x + dx
             prev_r, prev_dx = r, dx
             increment = increment_ratio(x_prev, x)
-            converged = _has_converged(err, x_prev, x, rtol_energy_pct) or watch.observe(err, increment)
+            converged = _has_converged(
+                err, x_prev, x, rtol_energy_pct, material_change=state.material_change
+            ) or watch.observe(err, increment, state.material_change)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0, increment)
@@ -395,7 +403,9 @@ class BFGSStrategy:
             x = x + dx
             prev_r, prev_dx = r, dx
             increment = increment_ratio(x_prev, x)
-            converged = _has_converged(err, x_prev, x, rtol_energy_pct) or watch.observe(err, increment)
+            converged = _has_converged(
+                err, x_prev, x, rtol_energy_pct, material_change=state.material_change
+            ) or watch.observe(err, increment, state.material_change)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0, increment)
@@ -464,7 +474,9 @@ class LBFGSStrategy:
             x = x + dx
             prev_r, prev_dx = r, dx
             increment = increment_ratio(x_prev, x)
-            converged = _has_converged(err, x_prev, x, rtol_energy_pct) or watch.observe(err, increment)
+            converged = _has_converged(
+                err, x_prev, x, rtol_energy_pct, material_change=state.material_change
+            ) or watch.observe(err, increment, state.material_change)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0, increment)
@@ -525,7 +537,9 @@ class NewtonLineSearchStrategy:
                     lam *= self.shrink
                 x = x + lam * dx
             increment = increment_ratio(x_prev, x)
-            converged = _has_converged(err, x_prev, x, rtol_energy_pct) or watch.observe(err, increment)
+            converged = _has_converged(
+                err, x_prev, x, rtol_energy_pct, material_change=state.material_change
+            ) or watch.observe(err, increment, state.material_change)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0, increment)
@@ -592,7 +606,9 @@ class NewtonKrylovStrategy:
                     dx = system.solve_linear(state) - x  # Krylov breakdown -> Picard substitution
             x = x + dx
             increment = increment_ratio(x_prev, x)
-            converged = _has_converged(err, x_prev, x, rtol_energy_pct) or watch.observe(err, increment)
+            converged = _has_converged(
+                err, x_prev, x, rtol_energy_pct, material_change=state.material_change
+            ) or watch.observe(err, increment, state.material_change)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0, increment)

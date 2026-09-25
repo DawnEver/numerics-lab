@@ -74,12 +74,16 @@ class AssembledState:
         total_energy: the scalar the convergence test tracks.
         payload: equation-specific extras the CALLER reads back off the final state (e.g. the
             per-branch energy/flux/B for MEC); the strategy never inspects it.
+        material_change: relative change of the IRREVERSIBLE material state this assembly's trial
+            implies (`gauss.nonlinear.material_state`); ``0`` for a system whose materials are all
+            reversible. The material term of :func:`_has_converged`.
 
     """
 
     system_matrix: object
     total_energy: float
     payload: object = None
+    material_change: float = 0.0
 
 
 @dataclass
@@ -376,8 +380,18 @@ def _has_converged(
     x: np.ndarray,
     x_next: np.ndarray,
     rtol_energy_pct: float,
+    *,
+    material_change: float,
 ) -> bool:
-    """The ONE convergence rule: the energy has settled AND the iterate has stopped moving.
+    """The ONE convergence rule: the energy has settled, the iterate has stopped moving, AND the
+    irreversible material state has stopped changing.
+
+    THE MATERIAL TERM (D4, 2026-09-25). A reversible law (steel B-H) is a function of the iterate,
+    so the iterate test already sees it settle and its change is ``0``. A one-way remanence clamp
+    is NOT: its state is history, and an iterate can sit still for a step while the clamp is still
+    walking down the recoil line. ``material_change`` is that state's relative change on this
+    step, held to the same bar as the increment. It is REQUIRED (keyword, no default) so a strategy
+    cannot consult the rule without deciding what it passes.
 
     A FLAT ENERGY IS NOT A FIXED POINT. `total_energy` can sit on a near-flat plateau that is not
     the solution -- measured on a saturating-BH case, which read 0.00% energy change for 20+
@@ -403,7 +417,8 @@ def _has_converged(
     increment is a FRACTION, so the ``/ 100`` is the unit conversion between them, not a second,
     tighter tolerance.
     """
-    return err < rtol_energy_pct and increment_ratio(x, x_next) < rtol_energy_pct / 100.0
+    bar = rtol_energy_pct / 100.0
+    return err < rtol_energy_pct and increment_ratio(x, x_next) < bar and float(material_change) < bar
 
 
 #: Consecutive steps of the stagnation window. MEASURED (lane K, 2026-09-01): on
@@ -452,8 +467,16 @@ class _StagnationWatch:
         self._errs: deque[float] = deque(maxlen=self._window)
         self._increments: deque[float] = deque(maxlen=self._window)
 
-    def observe(self, err: float, increment: float, /) -> bool:
-        """Record one iteration's pair; True iff the full window is settled AND stationary."""
+    def observe(self, err: float, increment: float, material_change: float, /) -> bool:
+        """Record one iteration's pair; True iff the full window is settled AND stationary.
+
+        A stationary INCREMENT is no escape while the irreversible material state is still moving:
+        ``material_change`` must be under the same bar :func:`_has_converged` holds it to.
+        """
+        if float(material_change) >= self._rtol / 100.0:
+            self._errs.clear()
+            self._increments.clear()
+            return False
         self._errs.append(float(err))
         self._increments.append(float(increment))
         if len(self._errs) < self._window:

@@ -171,7 +171,9 @@ class DampedPicardStrategy:
             prev_err = err
             x_solve = system.solve_linear(state)
             increment = increment_ratio(x, x_solve)
-            converged = _has_converged(err, x, x_solve, rtol_energy_pct) or watch.observe(err, increment)
+            converged = _has_converged(
+                err, x, x_solve, rtol_energy_pct, material_change=state.material_change
+            ) or watch.observe(err, increment, state.material_change)
             last_energy = state.total_energy
             trend.observe(increment)
             x = x + alpha * (x_solve - x)
@@ -235,7 +237,9 @@ class AdaptiveDampedPicardStrategy:
             prev_err = err
             x_solve = system.solve_linear(state)
             increment = increment_ratio(x, x_solve)
-            converged = _has_converged(err, x, x_solve, rtol_energy_pct) or watch.observe(err, increment)
+            converged = _has_converged(
+                err, x, x_solve, rtol_energy_pct, material_change=state.material_change
+            ) or watch.observe(err, increment, state.material_change)
             last_energy = state.total_energy
             trend.observe(increment)
             x = x + alpha * (x_solve - x)
@@ -370,7 +374,10 @@ class NuRelaxationDampedPicardStrategy:
             increment = increment_ratio(x_prev, x)
             # THE ITERATE HAS TO HAVE STOPPED TOO, which is why this decision sits AFTER the solve
             # rather than before it: `increment` does not exist until `x` has been updated.
-            if (metrics_settled and _has_converged(err, x_prev, x, rtol_energy_pct)) or watch.observe(err, increment):
+            if (
+                metrics_settled
+                and _has_converged(err, x_prev, x, rtol_energy_pct, material_change=state.material_change)
+            ) or watch.observe(err, increment, state.material_change):
                 is_convergence = True
                 reached_tol = True
             ran = i + 1
@@ -409,7 +416,9 @@ class PicardStrategy:
             err = _energy_error_pct(state.total_energy, last_energy)
             x_solve = system.solve_linear(state)
             increment = increment_ratio(x, x_solve)
-            converged = _has_converged(err, x, x_solve, rtol_energy_pct) or watch.observe(err, increment)
+            converged = _has_converged(
+                err, x, x_solve, rtol_energy_pct, material_change=state.material_change
+            ) or watch.observe(err, increment, state.material_change)
             last_energy = state.total_energy
             x = x_solve  # undamped: take the full substitution
             if system.is_linear:
