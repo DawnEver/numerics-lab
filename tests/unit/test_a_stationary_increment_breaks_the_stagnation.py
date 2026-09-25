@@ -31,10 +31,13 @@ WHAT IS PINNED HERE.
   (c) a system already at its fixed point still converges in a handful of iterations, long before
       the window can fill: the fast break still fires first.
 
-WHY ONLY THREE STRATEGIES ARE DRIVEN. The test controls the increment by controlling the STEP the
+WHY ONLY TWO STRATEGIES ARE DRIVEN. The test controls the increment by controlling the STEP the
 strategy takes, which is only true for the strategies whose step IS the Picard map's (`picard`,
-`picard-damped` at alpha=1, and `newton` with a `None` tangent, which falls back to the Picard
-substitution). Anderson / the quasi-Newton family mix their own steps from history, so a synthetic
+`picard-damped` at alpha=1). `newton` was the third until 2026-09-25, driven through the Picard
+step it took on a `None` tangent; it now REFUSES a tangent-less system
+(`test_a_flat_energy_plateau_is_not_convergence::test_newton_refuses_a_system_with_no_tangent`), and
+it judges the residual rather than the energy, so the byd-newton creep this file measured is no
+longer reachable through it. Anderson / the quasi-Newton family mix their own steps from history, so a synthetic
 map cannot pin their increment -- the same reason `_PlateauSystem` next door drives them only for
 the NOT-converged direction. `nu-damped` and `continuation` are undrivable here for the reasons
 `test_a_flat_energy_plateau_is_not_convergence` names.
@@ -48,7 +51,7 @@ import pytest
 from motronics.gauss.nonlinear import _STAGNATION_WINDOW as _K
 from motronics.gauss.nonlinear import AssembledState, get_strategy
 
-_DRIVABLE = ['picard', 'picard-damped', 'newton']
+_DRIVABLE = ['picard', 'picard-damped']
 _ENERGY = 100.0
 
 
@@ -89,7 +92,7 @@ class _CreepingSystem:
         return float(abs(float(np.asarray(x)[0])))
 
     def tangent(self, x, state, /):
-        return None  # no Jacobian: newton falls back to the Picard substitution
+        return None  # no Jacobian: a Newton strategy refuses this system
 
     def solve_secant(self, state, rhs, /):
         return np.asarray(rhs, dtype=float)

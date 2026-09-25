@@ -1,9 +1,9 @@
 //! Newton-family, quasi-Newton and continuation iteration strategies.
 
 use super::{
-    energy_error_pct, has_converged, increment_ratio, norm, DampedPicardStrategy, IterationResult,
-    IterationStrategy, NonlinearError, NonlinearSystem, ResultOf, SolveOptions, StagnationWatch,
-    StateOf,
+    energy_error_pct, has_converged, has_converged_residual, increment_ratio, norm,
+    DampedPicardStrategy, IterationResult, IterationStrategy, NonlinearError, NonlinearSystem,
+    ResultOf, SolveOptions, StagnationWatch, StateOf,
 };
 
 /// `a + s * b`, elementwise.
@@ -23,16 +23,148 @@ pub(crate) fn dot(a: &[f64], b: &[f64]) -> f64 {
     a.iter().zip(b).map(|(p, q)| p * q).sum()
 }
 
-/// Newton-Raphson: `J(x_k) dx = -r(x_k); x_{k+1} = x_k + dx`.
+/// The scale Newton's relative residual is taken against: `max(||r(x_0)||, ||rhs||)`.
 ///
-/// Uses the equation's `tangent` (secant + differential `dnu` term); at `x = 0` the field is zero
-/// so `dnu = 0` and the first Newton step equals the first Picard iterate, then the true Jacobian
-/// gives quadratic convergence near the solution (Picard is linear and needs damping on saturating
-/// B-H). Falls back to a Picard step whenever `tangent` returns `None` (a combo with no Jacobian),
-/// so wiring Newton never breaks a solver that cannot supply one. Same assemble-at-top /
-/// one-step-delayed-break / energy-change convergence bookkeeping as the Picard strategies.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NewtonStrategy;
+/// Mirrors the Python `_residual_reference`: the seed residual alone is the right-hand side only
+/// for a ZERO seed, so a warm start near the root would otherwise be held to a bar that tightens
+/// the better the guess. A system that knows its free-DOF source norm returns it from
+/// [`NonlinearSystem::rhs_norm`]; one that does not is judged against its seed residual.
+fn residual_reference<S: NonlinearSystem>(
+    system: &mut S,
+    state: &StateOf<S>,
+    seed_norm: f64,
+) -> Result<f64, NonlinearError> {
+    Ok(match system.rhs_norm(state)? {
+        Some(rhs) => seed_norm.max(rhs),
+        None => seed_norm,
+    })
+}
+
+/// Newton-Raphson with a backtracking line search -- THE Newton every family runs.
+///
+/// `J(x_k) dx = -r(x_k)`, then `x_{k+1} = x_k + lam dx` with the first `lam` in
+/// `1, shrink, shrink^2, ...` meeting the Armijo decrease `||r(x + lam dx)|| <= (1 - c lam)
+/// ||r(x)||` on the free-DOF residual norm. No accepted `lam` takes the FULL step (plain Newton's
+/// move, so the search can only ever help). Convergence is the relative residual
+/// `||r(x_k)|| / max(||r(x_0)||, ||rhs||)` AND the increment, both below `rtol_energy_pct / 100`
+/// ([`has_converged_residual`]); the stagnation watch stays as the floor escape. A system with no
+/// tangent is REFUSED ([`NonlinearError::UnsupportedSystem`]) -- the Picard step this used to take
+/// ran a different algorithm under Newton's name. Port of the Python `NewtonStrategy` of
+/// 2026-09-25; the golden trajectories are regenerated from it.
+#[derive(Debug, Clone, Copy)]
+pub struct NewtonStrategy {
+    pub max_backtracks: usize,
+    pub shrink: f64,
+    pub armijo: f64,
+}
+
+impl Default for NewtonStrategy {
+    fn default() -> Self {
+        Self {
+            max_backtracks: 12,
+            shrink: 0.5,
+            armijo: 1e-4,
+        }
+    }
+}
+
+impl NewtonStrategy {
+    fn drive<S: NonlinearSystem>(
+        &self,
+        name: &'static str,
+        system: &mut S,
+        opts: &SolveOptions,
+    ) -> Result<ResultOf<S>, NonlinearError> {
+        let rtol = opts.rtol_energy_pct;
+        let mut x = opts.start(system);
+        if opts.max_iter == 0 {
+            // NO ITERATION RUNS NO ASSEMBLY, the contract every strategy keeps.
+            return Ok(IterationResult {
+                x,
+                state: None,
+                iterations: 0,
+                converged: false,
+            });
+        }
+        let mut state = system.assemble(&x)?;
+        let mut r_norm = system.residual_norm(&x, &state)?;
+        let reference = residual_reference(system, &state, r_norm)?;
+        if r_norm == 0.0 || !reference.is_finite() {
+            return Ok(IterationResult {
+                x,
+                state: Some(state),
+                iterations: 1,
+                converged: r_norm == 0.0,
+            });
+        }
+        let mut last_energy = Some(state.total_energy);
+        let mut converged = false;
+        let mut ran = 0;
+        let mut watch = StagnationWatch::new(rtol);
+        for i in 0..opts.max_iter {
+            ran = i + 1;
+            let Some(jac) = system.tangent(&x, &state)? else {
+                return Err(NonlinearError::UnsupportedSystem {
+                    strategy: name,
+                    need: "a tangent (the Jacobian of the residual); select a fixed-point strategy by name instead"
+                        .to_owned(),
+                });
+            };
+            let r = system.residual(&x, &state)?;
+            let dx = system.solve_system(&jac, &neg(&r))?;
+            let x_prev = x.clone();
+            let mut lam = 1.0_f64;
+            let mut accepted: Option<(Vec<f64>, StateOf<S>, f64)> = None;
+            let mut full_norm = f64::NAN;
+            let mut full_trial: Option<Vec<f64>> = None;
+            for _ in 0..=self.max_backtracks {
+                let trial = axpy(&x, lam, &dx);
+                let trial_state = system.assemble(&trial)?;
+                let trial_norm = system.residual_norm(&trial, &trial_state)?;
+                if full_trial.is_none() {
+                    full_trial = Some(trial.clone());
+                    full_norm = trial_norm;
+                }
+                if trial_norm.is_finite() && trial_norm <= (1.0 - self.armijo * lam) * r_norm {
+                    accepted = Some((trial, trial_state, trial_norm));
+                    break;
+                }
+                lam *= self.shrink;
+            }
+            let (next, next_state, next_norm) = if let Some(hit) = accepted {
+                hit
+            } else {
+                // RE-ASSEMBLED at the full step: the last assembly was the smallest trial, and
+                // an equation may keep per-element state from its latest assembly.
+                lam = 1.0;
+                let full = full_trial.expect("the search assembles at least one trial");
+                let full_state = system.assemble(&full)?;
+                (full, full_state, full_norm)
+            };
+            x = next;
+            state = next_state;
+            r_norm = next_norm;
+            let err = energy_error_pct(state.total_energy, last_energy);
+            last_energy = Some(state.total_energy);
+            let increment = increment_ratio(&x_prev, &x);
+            converged = has_converged_residual(&x_prev, &x, rtol, r_norm / reference)
+                || watch.observe(err, increment);
+            if system.is_linear() {
+                converged = true;
+            }
+            system.on_iteration(i, &state, err, lam, increment);
+            if converged {
+                break;
+            }
+        }
+        Ok(IterationResult {
+            x,
+            state: Some(state),
+            iterations: ran,
+            converged,
+        })
+    }
+}
 
 impl<S: NonlinearSystem> IterationStrategy<S> for NewtonStrategy {
     fn name(&self) -> &'static str {
@@ -40,46 +172,7 @@ impl<S: NonlinearSystem> IterationStrategy<S> for NewtonStrategy {
     }
 
     fn solve(&self, system: &mut S, opts: &SolveOptions) -> Result<ResultOf<S>, NonlinearError> {
-        let rtol = opts.rtol_energy_pct;
-        let mut x = opts.start(system);
-        let mut state: Option<StateOf<S>> = None;
-        let mut last_energy: Option<f64> = None;
-        let mut converged = false;
-        let mut ran = 0;
-        let mut watch = StagnationWatch::new(rtol);
-        for i in 0..opts.max_iter {
-            ran = i + 1;
-            let st = system.assemble(&x)?;
-            if converged {
-                state = Some(st);
-                break;
-            }
-            let err = energy_error_pct(st.total_energy, last_energy);
-            last_energy = Some(st.total_energy);
-            let x_prev = x.clone();
-            match system.tangent(&x, &st)? {
-                // No Jacobian available -> Picard substitution.
-                None => x = system.solve_linear(&st)?,
-                Some(jac) => {
-                    let r = system.residual(&x, &st)?;
-                    let dx = system.solve_system(&jac, &neg(&r))?;
-                    x = axpy(&x, 1.0, &dx);
-                }
-            }
-            let increment = increment_ratio(&x_prev, &x);
-            converged = has_converged(err, &x_prev, &x, rtol) || watch.observe(err, increment);
-            if system.is_linear() {
-                converged = true;
-            }
-            system.on_iteration(i, &st, err, 1.0, increment);
-            state = Some(st);
-        }
-        Ok(IterationResult {
-            x,
-            state,
-            iterations: ran,
-            converged,
-        })
+        self.drive("newton", system, opts)
     }
 }
 
@@ -199,26 +292,14 @@ impl<S: NonlinearSystem> IterationStrategy<S> for ModifiedNewtonStrategy {
     }
 }
 
-/// Damped Newton with a backtracking line search on `||residual||`.
+/// The registry name `newton-linesearch` -- and it IS [`NewtonStrategy`], under its own name.
 ///
-/// `newton` takes the full step `x += dx`; deep saturation can make that overshoot and diverge.
-/// This scales the Newton step by `lam` from an Armijo backtracking line search that shrinks `lam`
-/// until `||r(x + lam dx)||` decreases — the robust globaliser. Needs `residual` plus `tangent`
-/// (falls back to a Picard step when `tangent` returns `None`). Converges to the same root as
-/// Newton (at `lam = 1` near the solution it IS Newton).
-#[derive(Debug, Clone, Copy)]
+/// It was a second Newton loop until 2026-09-25 (the same backtracking search on the energy-change
+/// stop, beside a full-step `newton`). The search is now part of `NewtonStrategy`, so this only
+/// reports a different name; mirrors the Python subclass.
+#[derive(Debug, Clone, Copy, Default)]
 pub struct NewtonLineSearchStrategy {
-    pub max_backtracks: usize,
-    pub shrink: f64,
-}
-
-impl Default for NewtonLineSearchStrategy {
-    fn default() -> Self {
-        Self {
-            max_backtracks: 12,
-            shrink: 0.5,
-        }
-    }
+    pub newton: NewtonStrategy,
 }
 
 impl<S: NonlinearSystem> IterationStrategy<S> for NewtonLineSearchStrategy {
@@ -227,62 +308,7 @@ impl<S: NonlinearSystem> IterationStrategy<S> for NewtonLineSearchStrategy {
     }
 
     fn solve(&self, system: &mut S, opts: &SolveOptions) -> Result<ResultOf<S>, NonlinearError> {
-        let rtol = opts.rtol_energy_pct;
-        let mut x = opts.start(system);
-        let mut state: Option<StateOf<S>> = None;
-        let mut last_energy: Option<f64> = None;
-        let mut converged = false;
-        let mut ran = 0;
-        let mut watch = StagnationWatch::new(rtol);
-        for i in 0..opts.max_iter {
-            ran = i + 1;
-            let st = system.assemble(&x)?;
-            if converged {
-                state = Some(st);
-                break;
-            }
-            let err = energy_error_pct(st.total_energy, last_energy);
-            last_energy = Some(st.total_energy);
-            let x_prev = x.clone();
-            match system.tangent(&x, &st)? {
-                None => x = system.solve_linear(&st)?,
-                Some(jac) => {
-                    let r = system.residual(&x, &st)?;
-                    let dx = system.solve_system(&jac, &neg(&r))?;
-                    // Minimise the FREE-DOF residual norm, NOT the raw ||r||: FEA's full residual
-                    // carries a large constant Dirichlet-row term the increment cannot reduce,
-                    // which would make every backtracking step look like an increase and stall the
-                    // line search.
-                    let r0 = system.residual_norm(&x, &st)?;
-                    let mut lam = 1.0_f64;
-                    for _ in 0..self.max_backtracks {
-                        // r(x + lam dx) is assembled implicitly: re-assemble at the trial point
-                        // and read its residual (the equation owns assembly). Accept the first lam
-                        // that reduces it.
-                        let trial = axpy(&x, lam, &dx);
-                        let trial_state = system.assemble(&trial)?;
-                        if system.residual_norm(&trial, &trial_state)? < r0 {
-                            break;
-                        }
-                        lam *= self.shrink;
-                    }
-                    x = axpy(&x, lam, &dx);
-                }
-            }
-            let increment = increment_ratio(&x_prev, &x);
-            converged = has_converged(err, &x_prev, &x, rtol) || watch.observe(err, increment);
-            if system.is_linear() {
-                converged = true;
-            }
-            system.on_iteration(i, &st, err, 1.0, increment);
-            state = Some(st);
-        }
-        Ok(IterationResult {
-            x,
-            state,
-            iterations: ran,
-            converged,
-        })
+        self.newton.drive("newton-linesearch", system, opts)
     }
 }
 

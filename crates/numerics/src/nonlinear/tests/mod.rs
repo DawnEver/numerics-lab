@@ -236,8 +236,8 @@ fn the_registry_resolves_every_declared_name_and_refuses_the_rest() {
         let s = get_strategy::<Synth>(Some(name)).unwrap();
         assert_eq!(s.name(), name, "the registry key and the strategy disagree");
     }
-    // `None` is today's behaviour, and that is the whole contract of the default.
-    assert_eq!(get_strategy::<Synth>(None).unwrap().name(), "picard-damped");
+    // `None` is Newton, the default in every family since 2026-09-25 (mirrors the Python).
+    assert_eq!(get_strategy::<Synth>(None).unwrap().name(), "newton");
     assert!(matches!(
         get_strategy::<Synth>(Some("nonesuch")),
         Err(NonlinearError::UnknownStrategy { .. })
