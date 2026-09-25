@@ -286,7 +286,17 @@ pub trait NonlinearSystem: Sized {
         Ok(norm(&self.residual(x, state)?))
     }
 
-    /// Optional Newton tangent operator; `None` falls back to a Picard step.
+    /// Free-DOF norm of the right-hand side, the scale of Newton's relative residual.
+    ///
+    /// `None` (the default) judges Newton against the seed residual, exact for a zero seed.
+    ///
+    /// # Errors
+    /// As [`Self::assemble`].
+    fn rhs_norm(&mut self, _state: &StateOf<Self>) -> Result<Option<f64>, NonlinearError> {
+        Ok(None)
+    }
+
+    /// Optional Newton tangent operator; `None` makes a Newton strategy refuse the system.
     ///
     /// # Errors
     /// As [`Self::assemble`].
@@ -515,6 +525,22 @@ pub fn energy_error_pct(total_energy: f64, last_energy: Option<f64>) -> f64 {
 #[must_use]
 pub fn has_converged(err: f64, x: &[f64], x_next: &[f64], rtol_energy_pct: f64) -> bool {
     err < rtol_energy_pct && increment_ratio(x, x_next) < rtol_energy_pct / 100.0
+}
+
+/// The residual half of the ONE rule, for a strategy that holds the residual (the Newton family).
+///
+/// `residual_ratio = ||r(x_next)|| / max(||r(x_0)||, ||rhs||)` below `rtol_energy_pct / 100`,
+/// AND the same increment half [`has_converged`] applies. Port of the Python `_has_converged`'s
+/// `residual_ratio=` form (2026-09-25).
+#[must_use]
+pub fn has_converged_residual(
+    x: &[f64],
+    x_next: &[f64],
+    rtol_energy_pct: f64,
+    residual_ratio: f64,
+) -> bool {
+    let rtol = rtol_energy_pct / 100.0;
+    residual_ratio < rtol && increment_ratio(x, x_next) < rtol
 }
 
 /// Energy-AND-flux convergence (fraction of a percent each), both below tolerance to pass.
@@ -761,7 +787,7 @@ pub fn get_strategy<S: NonlinearSystem + 'static>(
         "nu-damped" => Box::new(NuRelaxationDampedPicardStrategy),
         "picard-adaptive" => Box::new(AdaptiveDampedPicardStrategy::default()),
         "picard" => Box::new(PicardStrategy),
-        "newton" => Box::new(NewtonStrategy),
+        "newton" => Box::new(NewtonStrategy::default()),
         "anderson" => Box::new(AndersonStrategy::default()),
         "modified-newton" => Box::new(ModifiedNewtonStrategy::default()),
         "quasi-newton" => Box::new(BroydenStrategy::default()),

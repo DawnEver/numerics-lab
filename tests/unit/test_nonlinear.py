@@ -123,7 +123,7 @@ def test_max_iter_zero_returns_initial_guess_and_no_state():
 
 def test_registry_and_get_strategy():
     assert set(ITERATION_REGISTRY) >= {'picard', 'picard-damped'}
-    assert get_strategy(None).name == 'picard-damped'  # default = today's behaviour
+    assert get_strategy(None).name == 'newton'  # the default in every family since 2026-09-25
     assert get_strategy('picard').name == 'picard'
     with pytest.raises(KeyError):
         get_strategy('nonesuch')

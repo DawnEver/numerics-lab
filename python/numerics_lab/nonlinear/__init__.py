@@ -8,8 +8,9 @@ picks its nonlinear method without the equation code changing.
 
 First principle (``AGENTS.md``): IMPLEMENT every method and characterize it -- never exclude one
 because an experiment showed it inferior. Plain Picard's historical divergence on saturating B-H
-is a labelled datum, not a hidden exclusion. The default is the damped-Picard extracted VERBATIM
-from the MEC/FEA inline loops, so wiring this seam leaves every golden bit-for-bit.
+is a labelled datum, not a hidden exclusion. The default is Newton with a backtracking line search
+(user ruling 2026-09-25, every family); the damped-Picard extracted verbatim from the old MEC/FEA
+inline loops stays selectable by name, as do the others.
 
 This module drives the iterate only; it never assembles physics or touches a mesh.
 """
@@ -25,6 +26,7 @@ from typing import Protocol
 import numpy as np
 
 __all__ = [
+    'DEFAULT_ITERATION_STRATEGY',
     'DEFAULT_SOLVE_BUDGET_S',
     'ITERATION_REGISTRY',
     'AdaptiveDampedPicardStrategy',
@@ -42,6 +44,7 @@ __all__ = [
     'NewtonKrylovStrategy',
     'NewtonLineSearchStrategy',
     'NewtonStrategy',
+    'NewtonTangentUnavailable',
     'NonlinearSystem',
     'NuRelaxationDampedPicardStrategy',
     'PicardStrategy',
@@ -98,7 +101,7 @@ class NonlinearSystem(Protocol):
     ``assemble`` / ``solve_linear`` are the Picard interface (fixed-point substitution
     ``x <- solve_linear(assemble(x))``). ``residual`` / ``tangent`` / ``solve_system`` are the
     Newton interface (``tangent @ dx = -residual``); ``tangent`` may return ``None`` for a combo
-    that cannot supply a Jacobian, and NewtonStrategy falls back to a Picard step.
+    that cannot supply a Jacobian, and NewtonStrategy then RAISES :class:`NewtonTangentUnavailable`.
     """
 
     is_linear: bool
@@ -130,7 +133,7 @@ class NonlinearSystem(Protocol):
         return float(np.linalg.norm(self.residual(x, state)))
 
     def tangent(self, x: np.ndarray, state: AssembledState, /) -> object | None:
-        """Optional Newton tangent operator; return ``None`` to fall back to a Picard step.
+        """Optional Newton tangent operator; ``None`` makes a Newton strategy raise, never step Picard.
 
         The return type is deliberately opaque (``object``, not e.g. a sparse matrix): MEC returns
         a raw ``scipy.sparse`` matrix, FEA a reduced-tangent bundle (``dict``) that only its own
@@ -180,6 +183,26 @@ class NonlinearSystem(Protocol):
         the strategy degrades to solving the full-source problem directly. ``lam=1`` returns the
         original (full-source) system.
         """
+
+
+class NewtonTangentUnavailable(TypeError):
+    """A Newton-family strategy was asked to drive a system that supplies no tangent.
+
+    RAISED, NEVER A SILENT PICARD STEP (``UNSUPPORTED-RAISES``). The Newton strategy used to fall
+    back to ``solve_linear`` whenever ``tangent`` returned ``None``, so a run that asked for Newton
+    on a tangent-less system got a Picard iteration under Newton's name -- iteration counts, rates
+    and a strategy label all describing an algorithm that never ran. Every production system now
+    supplies a tangent (FEA and MEC exact, SDM a Jacobian-free directional derivative, the spline
+    space exact); a system that cannot is asked to run a fixed-point strategy by name instead.
+    """
+
+    def __init__(self, system: object, strategy: str) -> None:
+        inner = getattr(system, 'unwrapped', system)
+        super().__init__(
+            f'{type(inner).__name__} returned no tangent, so {strategy!r} cannot run on it. Newton needs '
+            f'the Jacobian of the residual; supply `tangent` on the system, or select a fixed-point '
+            f"strategy by name (e.g. 'picard-damped', 'anderson')."
+        )
 
 
 class IterationBudgetExceeded(RuntimeError):
@@ -339,8 +362,20 @@ def _has_converged(
     x: np.ndarray,
     x_next: np.ndarray,
     rtol_energy_pct: float,
+    *,
+    residual_ratio: float | None = None,
 ) -> bool:
-    """The ONE convergence rule: the energy has settled AND the iterate has stopped moving.
+    """The ONE convergence rule: the equation is satisfied (or its energy settled) AND the iterate has stopped moving.
+
+    TWO FIRST HALVES, ONE SECOND HALF (2026-09-25, the Newton unification). A strategy that holds
+    the RESIDUAL -- the Newton family, which forms it every step anyway -- passes
+    ``residual_ratio = ||r(x_next)|| / max(||r(x_0)||, ||rhs||)`` and is judged on it: the root of
+    the equation is the thing being sought, so the residual is the direct measure and the energy
+    change is only a proxy for it. The denominator is the right-hand side the solve has to cancel
+    (the seed residual, or the source norm when a warm start makes that smaller), so the ratio is
+    scale-free in every unit and every family. A fixed-point
+    strategy that never forms a residual passes ``None`` and keeps the energy half described below.
+    The increment half is shared, so neither can call a wandering iterate converged.
 
     A FLAT ENERGY IS NOT A FIXED POINT. `total_energy` can sit on a near-flat plateau that is not
     the solution -- measured on a saturating-BH case, which read 0.00% energy change for 20+
@@ -366,7 +401,9 @@ def _has_converged(
     increment is a FRACTION, so the ``/ 100`` is the unit conversion between them, not a second,
     tighter tolerance.
     """
-    return err < rtol_energy_pct and increment_ratio(x, x_next) < rtol_energy_pct / 100.0
+    rtol = rtol_energy_pct / 100.0
+    settled = residual_ratio < rtol if residual_ratio is not None else err < rtol_energy_pct
+    return settled and increment_ratio(x, x_next) < rtol
 
 
 #: Consecutive steps of the stagnation window. MEASURED (lane K, 2026-09-01): on
@@ -675,10 +712,18 @@ def strategy_runs_on(name: str, system: object) -> bool:
     return all(getattr(system, attribute, None) is not None for attribute in strategy_requires(name))
 
 
+#: The strategy ``get_strategy(None)`` resolves to: Newton, in every family (user ruling 2026-09-25,
+#: extended from FEA to MEC and SDM the same day). A FAMILY's default is a config field read in
+#: ``hamilton`` (``core.<family>_iteration_strategy``) -- ``gauss`` reads no configuration -- and
+#: every one of those fields defaults to this name; this constant is what a caller that names no
+#: family (a unit fixture, a study with no field of its own) gets.
+DEFAULT_ITERATION_STRATEGY = 'newton'
+
+
 def get_strategy(name: str | None) -> IterationStrategy:
-    """Resolve an iteration-strategy name; ``None`` -> the default damped-Picard (today's behaviour)."""
+    """Resolve an iteration-strategy name; ``None`` -> :data:`DEFAULT_ITERATION_STRATEGY` (Newton)."""
     if name is None:
-        return ITERATION_REGISTRY['picard-damped']
+        return ITERATION_REGISTRY[DEFAULT_ITERATION_STRATEGY]
     try:
         return ITERATION_REGISTRY[name]
     except KeyError as e:
