@@ -40,17 +40,19 @@ from numpy.typing import NDArray
 
 from motronics.contracts.spec.analysis_formulation import DerivativeWeights, SemiDiscreteProblem
 from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.linear import solve_linear_system
-from motronics.gauss.time_integrators.factor_reuse import FactorCache
+from motronics.gauss.linear import reject_nonfinite_solution, solve_linear_system
+from motronics.gauss.time_integrators.factor_reuse import FactorCache, apply_factor, factor_matrix
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    'HELD_STALL_RATIO',
     'INTEGRATOR_REGISTRY',
     'BDF1Integrator',
     'BDF2Integrator',
     'FactorCache',
     'GeneralizedAlphaIntegrator',
+    'HeldFactor',
     'ITimeIntegrator',
     'IntegratorState',
     'NewmarkIntegrator',
@@ -341,6 +343,52 @@ def _default_solve(matrix: object, rhs: NDArray[np.floating]) -> NDArray[np.floa
 #: separates them; a monotone creep (0.968 per iteration, MANUAL-627 (d)) also trips.
 _STALL_RATIO = 0.9
 
+#: A held (modified-Newton) factor is refreshed when its last step contracted the residual by less
+#: than this -- the same bar the stationary ``newton-held-factor`` uses (``stall_ratio``).
+HELD_STALL_RATIO = 0.5
+
+
+class HeldFactor:
+    """One tangent factorization HELD across Newton iterations AND steps (the modified Newton, 3A).
+
+    Refreshed (re-assembled and re-factored) when it has served ``refactor_every`` solves, when the
+    step form's DERIVATIVE WEIGHTS moved (a new ``dt`` changes ``alpha1`` and so the operator itself,
+    not just its state dependence), and -- by the caller -- when a held step stalled. ``factorizations``
+    and ``solves`` are the counters a benchmark reports. A non-finite back-substitution is refused.
+    """
+
+    def __init__(self, refactor_every: int) -> None:
+        if int(refactor_every) < 1:
+            msg = f'refactor_every must be >= 1, got {refactor_every!r}'
+            raise ValueError(msg)
+        self.refactor_every = int(refactor_every)
+        self.matrix = None
+        self._factor = None
+        self._weights: tuple | None = None
+        self._age = 0
+        self.factorizations = 0
+        self.solves = 0
+
+    @staticmethod
+    def _key(weights: DerivativeWeights) -> tuple:
+        return (complex(weights.alpha0), complex(weights.alpha1), complex(weights.alpha2))
+
+    def needs_refresh(self, weights: DerivativeWeights) -> bool:
+        return self._factor is None or self._age >= self.refactor_every or self._key(weights) != self._weights
+
+    def refresh(self, matrix, weights: DerivativeWeights) -> None:
+        self.matrix = matrix
+        self._factor = factor_matrix(matrix)
+        self._weights = self._key(weights)
+        self._age = 0
+        self.factorizations += 1
+
+    def solve(self, rhs: NDArray[np.floating]) -> NDArray[np.floating]:
+        self._age += 1
+        self.solves += 1
+        x = np.asarray(apply_factor(self._factor, np.asarray(rhs, dtype=float)), dtype=float)
+        return reject_nonfinite_solution(x, 'held-factor')
+
 
 #: The gmin retry stages (the SPICE-standard continuation, the DC-op's own :data:`_GMIN_STAGES`
 #: shape): when a step's plain Newton exhausts, the diagonal gmin is added to the tangent and
@@ -418,6 +466,7 @@ def _solve_step(
     backtrack_cap: int = 8,
     jacobian_tangent: Callable | None = None,
     gmin_stages: tuple[float, ...] | None = None,
+    held: HeldFactor | None = None,
 ) -> NDArray[np.floating]:
     """Advance one step by a Newton loop on ``residual(u_arg, u_dot, u_ddot, t)`` for ``u_{n+1}``.
 
@@ -480,6 +529,7 @@ def _solve_step(
     residual = float('inf')
     residual_0 = float('inf')
     prev_residual = None
+    prev_ratio: float | None = None
     slow = 0
     tangent_active = False
     capped = False
@@ -516,6 +566,7 @@ def _solve_step(
         # tangent drives: its reuse key proves constancy for the default stamps only.
         if prev_residual is not None:
             ratio = residual / prev_residual
+            prev_ratio = ratio
             slow = slow + 1 if (capped or ratio > _STALL_RATIO) else 0
             # A RESIDUAL AT THE FLOOR IS FINISHED: it is already rounding, so the remaining
             # iterations can only reshuffle it (and a rounding residual need not fall
@@ -529,11 +580,20 @@ def _solve_step(
             if slow >= 2 and tangent_helpful:
                 tangent_active = True
         prev_residual = residual
-        capped = False
+        capped_prev, capped = capped, False
         if tangent_active:
             jac = tangent_source(u_arg, u_dot, u_ddot, t, form.weights)
             tangent = jac
             du = np.asarray(solve(jac, -r), dtype=float)
+        elif key_fn is None and held is not None:
+            # THE MODIFIED NEWTON (ruling 3A): back-substitute the held factor; refresh it when it is
+            # ``refactor_every`` solves old, the step form's weights moved (a new dt), or the last
+            # held step contracted the residual by less than HELD_STALL_RATIO / needed backtracking.
+            stalled = prev_ratio is not None and prev_ratio > HELD_STALL_RATIO
+            if held.needs_refresh(form.weights) or stalled or capped_prev:
+                held.refresh(problem.jacobian(u_arg, u_dot, u_ddot, t, form.weights), form.weights)
+            tangent = held.matrix
+            du = held.solve(-r)
         elif key_fn is None:
             jac = problem.jacobian(u_arg, u_dot, u_ddot, t, form.weights)
             tangent = jac
@@ -636,6 +696,7 @@ def integrate_transient(
     atol: float = 1e-6,
     h_min: float | None = None,
     h_max: float | None = None,
+    refactor_every: int | None = None,
 ) -> TransientSolution:
     """March ``problem`` from ``study.t0`` to ``study.t1`` by ``study.dt`` with ``study.integrator``.
 
@@ -650,6 +711,8 @@ def integrate_transient(
     cache when the problem exposes ``factor_reuse_key`` and none otherwise, so a keyed problem
     reuses by default and an unkeyed one is untouched. Pass a cache in to READ the counters.
     """
+    # The MODIFIED Newton (ruling 3A): one held factor across the whole march, or None (full Newton).
+    held = HeldFactor(refactor_every) if refactor_every is not None else None
     if factor_cache is None and callable(getattr(problem, 'factor_reuse_key', None)):
         factor_cache = FactorCache()
     integrator = get_integrator(study.integrator)
@@ -704,6 +767,7 @@ def integrate_transient(
                 backtrack_band=backtrack_band,
                 backtrack_cap=backtrack_cap,
                 gmin_stages=gmin_stages,
+                held=held,
             )
             # The LTE: |u_new - u_extrap| where u_extrap is the linear continuation from the
             # last two states, SCALED by the spacing ratio h/h_prev -- the naive 2u1-u0 form
@@ -758,6 +822,7 @@ def integrate_transient(
             backtrack_band=backtrack_band,
             backtrack_cap=backtrack_cap,
             gmin_stages=gmin_stages,
+            held=held,
         )
         solution.worst_step_residual = max(solution.worst_step_residual, residual)
         if on_floor:
@@ -779,4 +844,6 @@ def integrate_transient(
         state = integrator.advance(state, u_new, dt, t_new)
         solution.times.append(t_new)
         solution.states.append(u_new)
+    if held is not None:
+        logger.info('held-factor march: factorizations=%d solves=%d', held.factorizations, held.solves)
     return solution

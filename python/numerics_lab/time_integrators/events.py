@@ -53,6 +53,7 @@ circuit, no device, no physics.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
@@ -62,6 +63,7 @@ from numpy.typing import NDArray
 from motronics.contracts.spec.study_spec import TransientStudy
 from motronics.gauss.time_integrators import (
     FactorCache,
+    HeldFactor,
     IntegratorState,
     TransientSolution,
     _bdf2_variable_form,
@@ -69,6 +71,8 @@ from motronics.gauss.time_integrators import (
     _solve_step,
     get_integrator,
 )
+
+logger = logging.getLogger(__name__)
 
 __all__ = ['EventfulTransientSolution', 'integrate_transient_with_events']
 
@@ -199,6 +203,7 @@ def integrate_transient_with_events(
     adaptive: bool = False,
     h_min: float | None = None,
     refine: float | None = None,
+    refactor_every: int | None = None,
 ) -> EventfulTransientSolution:
     """March ``problem`` over ``study``, stopping the grid at every zero of ``event_fns``.
 
@@ -265,6 +270,7 @@ def integrate_transient_with_events(
     cache on their own -- a stale factor across an event is impossible unless the key itself
     under-reads the system (the hole the module docstring names).
     """
+    held = HeldFactor(refactor_every) if refactor_every is not None else None
     if factor_cache is None and callable(getattr(problem, 'factor_reuse_key', None)):
         factor_cache = FactorCache()
     integrator = get_integrator(study.integrator)
@@ -330,6 +336,7 @@ def integrate_transient_with_events(
             backtrack_band=backtrack_band,
             backtrack_cap=backtrack_cap,
             gmin_stages=gmin_stages,
+            held=held,
         )
         # The convergence contract rides the eventful march too: an exhausted step is labelled on
         # the solution, never silent. But WHICH list it belongs in is not knowable here -- this
@@ -569,4 +576,6 @@ def integrate_transient_with_events(
             if pending_dt <= bracket_tol:  # the event consumed the rest of the cell
                 break
         # end of one nominal cell
+    if held is not None:
+        logger.info('held-factor march: factorizations=%d solves=%d', held.factorizations, held.solves)
     return solution

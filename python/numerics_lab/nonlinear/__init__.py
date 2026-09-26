@@ -36,6 +36,7 @@ __all__ = [
     'BroydenStrategy',
     'ContinuationStrategy',
     'DampedPicardStrategy',
+    'HeldFactorNewtonStrategy',
     'IterationBudgetExceeded',
     'IterationResult',
     'IterationStrategy',
@@ -52,6 +53,7 @@ __all__ = [
     'increment_ratio',
     'strategy_requires',
     'strategy_runs_on',
+    'strategy_stops_on_residual',
     'with_time_budget',
 ]
 
@@ -659,6 +661,7 @@ from motronics.gauss.nonlinear._strategies_newton import (  # noqa: E402
     BFGSStrategy,
     BroydenStrategy,
     ContinuationStrategy,
+    HeldFactorNewtonStrategy,
     LBFGSStrategy,
     ModifiedNewtonStrategy,
     NewtonKrylovStrategy,
@@ -684,6 +687,7 @@ ITERATION_REGISTRY: dict[str, IterationStrategy] = {
     'bfgs': BFGSStrategy(),
     'l-bfgs': LBFGSStrategy(),
     'newton-linesearch': NewtonLineSearchStrategy(),
+    'newton-held-factor': HeldFactorNewtonStrategy(),
     'newton-krylov': NewtonKrylovStrategy(),
     'continuation': ContinuationStrategy(),
 }
@@ -699,6 +703,16 @@ def strategy_requires(name: str) -> tuple[str, ...]:
     that declares a cell unsupported and one that discovers it as a TypeError.
     """
     return tuple(getattr(ITERATION_REGISTRY[name], 'requires', ()))
+
+
+def strategy_stops_on_residual(name: str) -> bool:
+    """Whether strategy ``name`` judges convergence on the equation's residual (the Newton family).
+
+    Declared on the strategy (``stop_rule = 'residual'``), not listed here, so a Newton variant
+    registered later answers by construction. Every other strategy stops on the energy change, and
+    the two bars are different quantities with different defaults. An unknown name raises.
+    """
+    return getattr(get_strategy(name), 'stop_rule', 'energy') == 'residual'
 
 
 def strategy_runs_on(name: str, system: object) -> bool:

@@ -5,8 +5,11 @@ protocol these implement.
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 
+from motronics.gauss.linear import reject_nonfinite_solution
 from motronics.gauss.nonlinear import (
     _RTOL_ENERGY_PCT,
     AssembledState,
@@ -21,11 +24,15 @@ from motronics.gauss.nonlinear import (
 )
 from motronics.gauss.nonlinear._strategies_picard import DampedPicardStrategy
 
+logger = logging.getLogger(__name__)
+
 __all__ = [
+    'HELD_FACTOR_REFACTOR_EVERY',
     'AndersonStrategy',
     'BFGSStrategy',
     'BroydenStrategy',
     'ContinuationStrategy',
+    'HeldFactorNewtonStrategy',
     'LBFGSStrategy',
     'ModifiedNewtonStrategy',
     'NewtonKrylovStrategy',
@@ -96,15 +103,81 @@ class NewtonStrategy:
     """
 
     name = 'newton'
+    #: How this strategy decides it has converged: on the equation's RESIDUAL (every other
+    #: strategy stops on the energy change). The caller that picks the tolerance reads this, so the
+    #: residual bar and the fixed-point bar cannot be confused (``core.newton_rtol`` against
+    #: ``core.fixed_point_rtol``, user ruling 2026-09-26).
+    stop_rule = 'residual'
 
-    def __init__(self, max_backtracks: int = 12, shrink: float = 0.5, armijo: float = 1e-4) -> None:
+    def __init__(
+        self,
+        max_backtracks: int = 12,
+        shrink: float = 0.5,
+        armijo: float = 1e-4,
+        *,
+        refactor_every: int | None = None,
+        stall_ratio: float = 0.5,
+    ) -> None:
         self.max_backtracks = int(max_backtracks)
         self.shrink = float(shrink)
         self.armijo = float(armijo)
+        #: ``None`` is full Newton: a fresh tangent and factor every iteration. An integer ``k`` is
+        #: the MODIFIED Newton (user ruling 2026-09-26, 3A): the tangent is formed and factored at
+        #: most every ``k`` iterations and its factor back-substituted in between, refreshed early
+        #: when the held step stalls -- see :meth:`_held_solver` and :meth:`solve`.
+        if refactor_every is not None and int(refactor_every) < 1:
+            msg = f'refactor_every must be None (full Newton) or >= 1, got {refactor_every!r}'
+            raise ValueError(msg)
+        self.refactor_every = None if refactor_every is None else int(refactor_every)
+        self.stall_ratio = float(stall_ratio)
+        #: Tangent factorizations the LAST ``solve`` paid for -- the machine-independent record a
+        #: test pins and a benchmark reports (a wall-clock is a fact about a moment).
+        self.factorizations = 0
+
+    def _held_solver(self, system: NonlinearSystem, x: np.ndarray, state: AssembledState):
+        """Form the tangent at ``x`` and return ``rhs -> J^{-1} rhs`` for it.
+
+        Full Newton hands the tangent straight back to ``system.solve_system`` -- the path every
+        family ran before the modified variant existed, bit for bit. The modified Newton FACTORS it
+        once so the held steps only back-substitute: through the system's own ``factorize(jac)``
+        when it has one (FEA's tangent is a reduced bundle only it can fold and recover), else
+        through ``splu`` on a scipy-sparse tangent. A tangent that is neither (the SDM's
+        Jacobian-free operator) cannot be factored, so it is re-solved each time: still correct,
+        only the tangent formation is saved.
+        """
+        jac = system.tangent(x, state)
+        if jac is None:
+            raise NewtonTangentUnavailable(system, self.name)
+        self.factorizations += 1
+        if self.refactor_every is None:
+            return lambda rhs: system.solve_system(jac, rhs)
+        factorize = getattr(system, 'factorize', None)
+        if factorize is not None:
+            return factorize(jac)
+        lu = _lu_factorize(jac)
+        if lu is None:
+            return lambda rhs: system.solve_system(jac, rhs)
+        return lambda rhs: reject_nonfinite_solution(lu.solve(np.asarray(rhs, dtype=float)), self.name)
+
+    def _search(self, system: NonlinearSystem, x: np.ndarray, dx: np.ndarray, r_norm: float):
+        """The Armijo backtracking along ``dx``: ``(lam, accepted, trial, trial_state, trial_norm, full_step)``."""
+        lam = 1.0
+        full_step: tuple[np.ndarray, AssembledState, float] | None = None
+        for _bt in range(self.max_backtracks + 1):
+            trial = x + lam * dx
+            trial_state = system.assemble(trial)
+            trial_norm = _free_residual_norm(system, trial, trial_state)
+            if full_step is None:
+                full_step = (trial, trial_state, trial_norm)
+            if np.isfinite(trial_norm) and trial_norm <= (1.0 - self.armijo * lam) * r_norm:
+                return lam, True, trial, trial_state, trial_norm, full_step
+            lam *= self.shrink
+        return lam, False, trial, trial_state, trial_norm, full_step
 
     def solve(
         self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
     ) -> IterationResult:
+        self.factorizations = 0
         x = system.initial_guess()
         if max_iter <= 0:
             # NO ITERATION RUNS NO ASSEMBLY, the contract every strategy keeps: the caller gets
@@ -121,26 +194,28 @@ class NewtonStrategy:
         converged = False
         ran = 0
         watch = _StagnationWatch(rtol_energy_pct)
+        held = None
+        age = 0
+        stale = False
         for i in range(max_iter):
             ran = i + 1
-            jac = system.tangent(x, state)
-            if jac is None:
-                raise NewtonTangentUnavailable(system, self.name)
-            dx = system.solve_system(jac, -system.residual(x, state))
+            # FULL NEWTON REFRESHES EVERY ITERATION; the modified one when its factor is ``k`` old,
+            # or the last held step contracted the residual by less than ``stall_ratio``.
+            fresh = held is None or self.refactor_every is None or age >= self.refactor_every or stale
+            if fresh:
+                held, age, stale = self._held_solver(system, x, state), 0, False
+            rhs = -system.residual(x, state)
+            dx = held(rhs)
             x_prev = x
-            lam = 1.0
-            accepted = False
-            full_step: tuple[np.ndarray, AssembledState, float] | None = None
-            for _bt in range(self.max_backtracks + 1):
-                trial = x + lam * dx
-                trial_state = system.assemble(trial)
-                trial_norm = _free_residual_norm(system, trial, trial_state)
-                if full_step is None:
-                    full_step = (trial, trial_state, trial_norm)
-                if np.isfinite(trial_norm) and trial_norm <= (1.0 - self.armijo * lam) * r_norm:
-                    accepted = True
-                    break
-                lam *= self.shrink
+            lam, accepted, trial, trial_state, trial_norm, full_step = self._search(system, x, dx, r_norm)
+            if not fresh and not (accepted and lam == 1.0):
+                # A HELD FACTOR THAT NEEDS A LINE SEARCH IS NO LONGER A NEWTON MODEL of this iterate:
+                # refresh here and retake the step, rather than march a stale direction (the failure
+                # the legacy energy-stopped modified variant never guarded against).
+                held, age = self._held_solver(system, x, state), 0
+                dx = held(rhs)
+                lam, accepted, trial, trial_state, trial_norm, full_step = self._search(system, x, dx, r_norm)
+            age += 1
             if not accepted:
                 trial, trial_state, trial_norm = full_step
                 lam = 1.0
@@ -149,6 +224,7 @@ class NewtonStrategy:
                     # equation may keep per-element state from its latest assembly (FEA's blocks do),
                     # so the returned state must be the one assembled at the iterate returned.
                     trial_state = system.assemble(trial)
+            stale = self.refactor_every is not None and not trial_norm <= self.stall_ratio * r_norm
             x, state, r_norm = trial, trial_state, trial_norm
             err = _energy_error_pct(state.total_energy, last_energy)
             last_energy = state.total_energy
@@ -161,6 +237,17 @@ class NewtonStrategy:
             system.on_iteration(i, state, err, lam, increment)
             if converged:
                 break
+        # ONE line per solve, the numbers a tolerance or strategy ruling is judged by: the relative
+        # residual it stopped at and the factorizations it paid (full Newton: one per iteration).
+        logger.info(
+            '%s stopped: iterations=%d converged=%s relres=%.3e factorizations=%d energy=%.12e',
+            self.name,
+            ran,
+            converged,
+            r_norm / reference,
+            self.factorizations,
+            state.total_energy,
+        )
         return IterationResult(x=x, state=state, iterations=ran, converged=converged)
 
 
@@ -571,6 +658,35 @@ class NewtonLineSearchStrategy(NewtonStrategy):
     """
 
     name = 'newton-linesearch'
+
+
+#: How many iterations one held tangent factor serves before it is refreshed regardless. Chosen
+#: against the measured Newton counts it has to beat (10-26 stationary, ~12 per transient step,
+#: 2026-09-25): at 4 a Newton that needed 12 pays at most 3-4 factorizations plus the stall refreshes.
+HELD_FACTOR_REFACTOR_EVERY = 4
+
+
+class HeldFactorNewtonStrategy(NewtonStrategy):
+    """The MODIFIED Newton, ``newton-held-factor`` -- the same class, holding its factor (ruling 3A).
+
+    DECLARED, SELECTABLE, NOT THE DEFAULT (user ruling 2026-09-26). The tangent is formed and
+    factored at most every :data:`HELD_FACTOR_REFACTOR_EVERY` iterations and back-substituted in
+    between; it is refreshed EARLY when a held step needs a line search (retaken at once with the
+    fresh factor) or contracts the residual by less than ``stall_ratio`` (refreshed for the next).
+    Convergence is judged by the SAME residual rule on the SAME ``core.newton_rtol`` as full Newton,
+    so it can only stop where full Newton would have been allowed to: what changes is the path and
+    the price per iteration (a back-substitution against a factorization), never the bar.
+
+    It is a NEW name rather than the older ``modified-newton``, deliberately: that one is a separate
+    energy-stopped loop mirrored by the Rust port's golden, falls back to a Picard substitution when
+    no tangent exists, and was measured diverging on spm_slotted fea (2026-09-25). Reusing its name
+    for a different algorithm would be one name for two algorithms -- the declaration-that-lies shape.
+    """
+
+    name = 'newton-held-factor'
+
+    def __init__(self, refactor_every: int = HELD_FACTOR_REFACTOR_EVERY, stall_ratio: float = 0.5) -> None:
+        super().__init__(refactor_every=refactor_every, stall_ratio=stall_ratio)
 
 
 class NewtonKrylovStrategy:
