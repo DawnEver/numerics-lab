@@ -198,7 +198,12 @@ impl NewtonStrategy {
                 let full_state = system.assemble(&full)?;
                 (full, full_state, full_norm)
             };
-            stale = self.refactor_every.is_some() && !(next_norm <= self.stall_ratio * r_norm);
+            // A NaN norm counts as stale: only a norm that compares <= the bar keeps the factor.
+            stale = self.refactor_every.is_some()
+                && !matches!(
+                    next_norm.partial_cmp(&(self.stall_ratio * r_norm)),
+                    Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+                );
             x = next;
             state = next_state;
             r_norm = next_norm;
