@@ -51,7 +51,7 @@ _PLATEAU_ENERGY = 100.0
 #   `newton` / `newton-linesearch` (the ONE Newton, two names) REFUSE a system with no tangent since
 #     2026-09-25 -- this fixture offers none, so they are held to the same two properties on
 #     `_TangentPlateauSystem` below instead, and their refusal is pinned too.
-_NEWTON = ('newton', 'newton-linesearch')
+_NEWTON = ('newton', 'newton-linesearch', 'newton-held-factor')
 _UNDRIVABLE = {'continuation', 'nu-damped', *_NEWTON}
 _STRATEGIES = sorted(set(ITERATION_REGISTRY) - _UNDRIVABLE)
 
