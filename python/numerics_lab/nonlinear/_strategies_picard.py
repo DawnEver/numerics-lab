@@ -338,6 +338,9 @@ class NuRelaxationDampedPicardStrategy:
         prev_delta_sign = 0
         last_energy: float | None = None
         last_flux: float | None = None
+        alpha_cap = 1.0  # the step size that last misbehaved -- `picard-damped`'s recovery, same rules
+        calm = 0
+        trend = _IncrementTrend()
         prev_s_val = None  # last iteration's MIXED raw stiffness values (None = no prior iterate yet)
         prev_t_mat = None  # last iteration's MIXED raw source vector
         state: AssembledState | None = None
@@ -359,19 +362,38 @@ class NuRelaxationDampedPicardStrategy:
             err, _flux_err, metrics_settled = _energy_flux_convergence(
                 total_energy, total_flux, last_energy, last_flux, rtol_energy_pct, rtol_energy_pct
             )
-            # Frozen alpha adaptation: halve (x0.6, floored) on an energy-delta SIGN FLIP -- verbatim
-            # from the deleted loop, never raised back up.
+            # alpha shrinks (x0.6, floored) on an energy-delta SIGN FLIP above the tolerance and RECOVERS
+            # after calm steps, on `picard-damped`'s rules: a sign flip below rtol is the energy's own
+            # noise floor, and a one-way ratchet left tesla_s_plaid at alpha 0.13 for sixty passes with
+            # the energy error at 0.00 %, crawling to the increment bar past its 500 s budget.
+            alpha_before, disturbed = alpha, False
+            if trend.claim_damping():
+                alpha, disturbed = max(alpha * 0.5, alpha_min), True
             if last_energy is not None:
                 delta = total_energy - last_energy
                 sign = (delta > 0) - (delta < 0)
-                if prev_delta_sign != 0 and sign not in (0, prev_delta_sign):
-                    alpha = max(alpha * 0.6, alpha_min)
+                if err >= rtol_energy_pct and prev_delta_sign != 0 and sign not in (0, prev_delta_sign):
+                    alpha, disturbed = max(alpha * 0.6, alpha_min), True
                 prev_delta_sign = sign
+            if disturbed:
+                if alpha < alpha_before:
+                    alpha_cap = alpha_before
+                calm = 0
+            elif not trend.permits_growth():
+                calm = 0
+            else:
+                calm += 1
+                if calm >= _ALPHA_CALM_STEPS:
+                    if alpha >= alpha_cap:
+                        alpha_cap = min(1.0, alpha_cap * _ALPHA_GROW)
+                    alpha = min(alpha_cap, alpha * _ALPHA_GROW)
+                    calm = 0
             last_energy, last_flux = total_energy, total_flux
             prev_s_val, prev_t_mat = mixed_s_val, mixed_t_mat
             x_prev = x
             x = system.solve_linear(state)
             increment = increment_ratio(x_prev, x)
+            trend.observe(increment)
             # THE ITERATE HAS TO HAVE STOPPED TOO, which is why this decision sits AFTER the solve
             # rather than before it: `increment` does not exist until `x` has been updated.
             if (
