@@ -224,12 +224,23 @@ def test_a_polish_whose_step_the_line_search_cannot_accept_hands_back_to_the_new
     solve = lambda j, r: np.linalg.solve(np.asarray(j), r)  # noqa: E731 -- the seam's solve
     state = IntegratorState(us=[np.zeros(1), np.zeros(1)], t=0.0)
     form = _bdf2_variable_form(state, 0.1, 0.1, 0.1)
-    problem = _SlowFarField()
-    _u, converged, iterations, residual, _on_floor = _solve_step(
-        problem, form, np.array([20.0]), solve=solve, max_newton=100, tol=1e-10
-    )
-    assert problem.alternative_calls > 0, 'the precondition: the slow far field must engage the polish'
-    assert converged, f'the step exhausted at residual {residual:g} after {iterations} iterations'
+    # Both line searches: the strict one, and the march's own tolerant band (`integrate_transient`
+    # accepts a trial up to 1.5x the current residual, so a bad alternative is never CAPPED there --
+    # it is accepted while the residual climbs, which is what ipm_uv's t = 4.44 ms step did).
+    for band, cap in ((None, 8), (1.5, 4)):
+        problem = _SlowFarField()
+        _u, converged, iterations, residual, _on_floor = _solve_step(
+            problem,
+            form,
+            np.array([20.0]),
+            solve=solve,
+            max_newton=100,
+            tol=1e-10,
+            backtrack_band=band,
+            backtrack_cap=cap,
+        )
+        assert problem.alternative_calls > 0, 'the precondition: the slow far field must engage the polish'
+        assert converged, f'band {band}: the step exhausted at residual {residual:g} after {iterations} iterations'
 
 
 def test_a_discarded_bisection_probe_does_not_count_as_a_nonconverged_STEP() -> None:

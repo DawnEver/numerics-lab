@@ -608,26 +608,31 @@ def _solve_step(
             tangent = factor_cache.matrix
         step = du.reshape(u.shape)
         if max_newton > 1 and backtrack_cap > 0:
+            raised = False
             for _ in range(backtrack_cap):
                 u_try = u + step
                 u_arg, u_dot, u_ddot = form.u_arg(u_try), form.u_dot(u_try), form.u_ddot(u_try)
                 r_try = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
                 limit = residual if backtrack_band is None else backtrack_band * residual
-                if float(np.linalg.norm(r_try)) < limit:
+                trial = float(np.linalg.norm(r_try))
+                if trial < limit:
                     u = u_try
+                    raised = trial >= residual
                     break
                 step = 0.5 * step
             else:
                 u = u + step
                 capped = True
-                if tangent_active:
-                    # THE POLISH IS A TRIAL, NOT A ONE-WAY SWITCH: an alternative operator whose step
-                    # the line search cannot accept has done worse than the direction it replaced,
-                    # so the default source takes back over and the polish is spent for this step.
-                    # Measured on `ipm_uv --point rated` (vacuum B-H tail): the exact tangent's early
-                    # overshoot engaged the magnetic secant, which then drove the step 177 -> 469
-                    # over 100 iterations; withheld, the same step converged in 15.
-                    tangent_active, polish_spent, slow = False, True, 0
+            if tangent_active and (capped or raised):
+                # THE POLISH IS A TRIAL, NOT A ONE-WAY SWITCH: an alternative operator whose step
+                # does not LOWER the residual has done no better than the direction it replaced, so
+                # the default source takes back over and the polish is spent for this step. The
+                # test is a strict decrease and not the tolerant band the march accepts a default
+                # step within: under that band a bad alternative is never capped, only accepted
+                # while the residual climbs. Measured on `ipm_uv --point rated` (vacuum B-H tail):
+                # the exact tangent's early overshoot engaged the magnetic secant, which drove the
+                # t = 4.44 ms step 158 -> 445 over 100 iterations; withheld, it converged in 12.
+                tangent_active, polish_spent, slow = False, True, 0
         else:
             u = u + step
     else:
