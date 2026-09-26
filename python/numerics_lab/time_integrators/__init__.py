@@ -532,6 +532,7 @@ def _solve_step(
     prev_ratio: float | None = None
     slow = 0
     tangent_active = False
+    polish_spent = False
     capped = False
     # The last tangent BUILT (never rebuilt for this purpose): the exhaustion check below needs
     # the matrix, not its norm, because the floor is a per-row ``|J| . |u|``. On a factor-cache
@@ -577,7 +578,7 @@ def _solve_step(
                 converged = True
                 on_floor = True
                 break
-            if slow >= 2 and tangent_helpful:
+            if slow >= 2 and tangent_helpful and not polish_spent:
                 tangent_active = True
         prev_residual = residual
         capped_prev, capped = capped, False
@@ -619,6 +620,14 @@ def _solve_step(
             else:
                 u = u + step
                 capped = True
+                if tangent_active:
+                    # THE POLISH IS A TRIAL, NOT A ONE-WAY SWITCH: an alternative operator whose step
+                    # the line search cannot accept has done worse than the direction it replaced,
+                    # so the default source takes back over and the polish is spent for this step.
+                    # Measured on `ipm_uv --point rated` (vacuum B-H tail): the exact tangent's early
+                    # overshoot engaged the magnetic secant, which then drove the step 177 -> 469
+                    # over 100 iterations; withheld, the same step converged in 15.
+                    tangent_active, polish_spent, slow = False, True, 0
         else:
             u = u + step
     else:
