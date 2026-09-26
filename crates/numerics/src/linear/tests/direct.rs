@@ -178,6 +178,37 @@ fn one_factorisation_back_substitutes_several_right_hand_sides() {
 }
 
 #[test]
+fn a_badly_scaled_operator_is_solved_to_its_forward_accuracy_not_only_its_residual() {
+    // The FEA shape: a stiffness block at ~1e7 with Dirichlet rows pinned to the identity. The
+    // residual is small either way; what SuperLU's default equilibration buys is FORWARD accuracy,
+    // and a finite-difference inductance downstream differentiates exactly that.
+    let n = 200;
+    let mut coo = Coo::new(n, n);
+    for i in 0..n {
+        let big = 1.0e7 * (1.0 + (i % 7) as f64);
+        if i % 10 == 0 {
+            coo.push(i as u32, i as u32, 1.0).unwrap();
+        } else {
+            coo.push(i as u32, i as u32, 2.0 * big + 1.0).unwrap();
+            if i + 1 < n {
+                coo.push(i as u32, (i + 1) as u32, -big).unwrap();
+            }
+            coo.push(i as u32, (i - 1) as u32, -big).unwrap();
+        }
+    }
+    let a = coo.to_csr().unwrap();
+    let truth: Vec<f64> = (0..n).map(|i| 1.0 + (i as f64 * 0.37).sin()).collect();
+    let b = a.matvec(&truth).unwrap();
+    let x = solve(&a, &b).unwrap();
+    let err = x
+        .iter()
+        .zip(&truth)
+        .map(|(p, q)| (p - q).abs())
+        .fold(0.0, f64::max);
+    assert!(err < 1e-12, "forward error {err:e}");
+}
+
+#[test]
 fn back_substituting_before_any_factorisation_is_refused() {
     let (a, b) = spd_system(8);
     let f = DirectFactorization::new(&a).unwrap();
