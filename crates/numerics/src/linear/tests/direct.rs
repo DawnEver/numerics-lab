@@ -208,6 +208,63 @@ fn a_badly_scaled_operator_is_solved_to_its_forward_accuracy_not_only_its_residu
     assert!(err < 1e-12, "forward error {err:e}");
 }
 
+/// The field<->circuit shape: a sparse 2D Laplacian bordered by one DENSE row and column (a
+/// winding coupled to every conductor dof) plus a small circuit block.
+fn bordered_system(side: usize, dense_every: usize) -> (contracts::sparse::Csr, Vec<f64>) {
+    let (lap, _) = laplacian_2d(side);
+    let n1 = side * side;
+    let n = n1 + 2;
+    let mut coo = Coo::new(n, n);
+    for r in 0..n1 {
+        for k in lap.indptr()[r] as usize..lap.indptr()[r + 1] as usize {
+            coo.push(r as u32, lap.indices()[k], lap.values()[k])
+                .unwrap();
+        }
+    }
+    let (w, c) = (n1 as u32, (n1 + 1) as u32);
+    for i in (0..n1).step_by(dense_every) {
+        coo.push(i as u32, w, -0.25).unwrap();
+        coo.push(w, i as u32, 0.5).unwrap();
+    }
+    coo.push(w, w, 3.0).unwrap();
+    coo.push(w, c, 1.0).unwrap();
+    coo.push(c, w, -1.0).unwrap();
+    coo.push(c, c, 2.0).unwrap();
+    let b = (0..n).map(|i| 1.0 + (i % 5) as f64).collect();
+    (coo.to_csr().unwrap(), b)
+}
+
+#[test]
+fn a_dense_border_is_eliminated_by_its_schur_complement_not_factorised_as_a_clique() {
+    let (a, b) = bordered_system(60, 2); // 3600 interior dofs, a border row of 1800 entries
+    let mut f = DirectFactorization::new(&a).unwrap();
+    assert_eq!(f.border_size(), 1);
+    f.refactor(&a).unwrap();
+    let mut x = b.clone();
+    f.solve_in_place(&mut x, 1).unwrap();
+    assert!(residual(&a, &x, &b) < 1e-13, "{:e}", residual(&a, &x, &b));
+}
+
+#[test]
+fn an_ordinary_sparse_operator_has_no_border() {
+    let (a, _) = laplacian_2d(30);
+    assert_eq!(DirectFactorization::new(&a).unwrap().border_size(), 0);
+}
+
+#[test]
+fn a_bordered_factor_back_substitutes_several_right_hand_sides() {
+    let (a, b) = bordered_system(40, 3);
+    let mut f = DirectFactorization::new(&a).unwrap();
+    assert_eq!(f.border_size(), 1);
+    f.refactor(&a).unwrap();
+    let n = b.len();
+    let mut two: Vec<f64> = b.iter().copied().chain(b.iter().map(|v| -v)).collect();
+    f.solve_in_place(&mut two, 2).unwrap();
+    assert!(residual(&a, &two[..n], &b) < 1e-13);
+    let neg: Vec<f64> = b.iter().map(|v| -v).collect();
+    assert!(residual(&a, &two[n..], &neg) < 1e-13);
+}
+
 #[test]
 fn back_substituting_before_any_factorisation_is_refused() {
     let (a, b) = spd_system(8);

@@ -52,9 +52,10 @@
 //!
 //! Threading (`Par::rayon`) was measured to HURT at every size here and is not used.
 
-use contracts::sparse::{Csr, SparseError};
+use contracts::sparse::{Coo, Csr, SparseError};
 use faer::dyn_stack::{MemBuffer, MemStack};
 use faer::linalg::cholesky::llt::factor::LltRegularization;
+use faer::linalg::solvers::{PartialPivLu, Solve};
 use faer::sparse::linalg::cholesky::{
     factorize_symbolic_cholesky, CholeskySymbolicParams, LltRef, SymbolicCholesky,
     SymmetricOrdering,
@@ -64,7 +65,7 @@ use faer::sparse::linalg::lu::{
 };
 use faer::sparse::linalg::SupernodalThreshold;
 use faer::sparse::{SparseColMat, SparseColMatRef, SymbolicSparseColMat, Triplet};
-use faer::{Conj, MatMut, Par, Side};
+use faer::{Conj, Mat, MatMut, Par, Side};
 
 /// Why the direct factorisation refused.
 #[derive(Debug, Clone, PartialEq)]
@@ -165,7 +166,7 @@ struct Cholesky {
 /// pattern it was built from and returns [`DirectFailure::PatternChanged`] on any difference.
 /// The comparison is two slice equalities over `nnz` -- `O(nnz)` against an `O(nnz^1.5)`
 /// factorisation.
-pub struct DirectFactorization {
+pub(crate) struct Kernel {
     /// The CSC pattern the symbolic halves are computed from.
     pattern: SymbolicSparseColMat<usize>,
     /// `csc_slot -> csr_value_index`, so a refactorisation is a scatter rather than a re-sort.
@@ -191,7 +192,7 @@ pub struct DirectFactorization {
     current: Option<FactorKind>,
 }
 
-impl DirectFactorization {
+impl Kernel {
     /// Analyse `a`'s pattern once: value permutation and transpose map.
     ///
     /// # Errors
@@ -244,12 +245,6 @@ impl DirectFactorization {
     #[must_use]
     pub fn n(&self) -> usize {
         self.indptr.len().saturating_sub(1)
-    }
-
-    /// What the last successful [`Self::refactor`] produced, if any.
-    #[must_use]
-    pub fn kind(&self) -> Option<FactorKind> {
-        self.current
     }
 
     /// Whether `values` (in the analysed CSR slot order) are EXACTLY symmetric — bitwise equal to
@@ -416,7 +411,8 @@ impl DirectFactorization {
                 let Some(chol) = self.cholesky.as_ref() else {
                     return Err(DirectFailure::NotFactored);
                 };
-                let mut buf = MemBuffer::new(chol.symbolic.solve_in_place_scratch::<f64>(nrhs, Par::Seq));
+                let mut buf =
+                    MemBuffer::new(chol.symbolic.solve_in_place_scratch::<f64>(nrhs, Par::Seq));
                 LltRef::new(&chol.symbolic, &chol.l_values).solve_in_place_with_conj(
                     Conj::No,
                     rhs,
@@ -428,7 +424,8 @@ impl DirectFactorization {
                 let Some(symbolic) = self.lu_symbolic.as_ref() else {
                     return Err(DirectFailure::NotFactored);
                 };
-                let mut buf = MemBuffer::new(symbolic.solve_in_place_scratch::<f64>(nrhs, Par::Seq));
+                let mut buf =
+                    MemBuffer::new(symbolic.solve_in_place_scratch::<f64>(nrhs, Par::Seq));
                 LuRef::new_unchecked(symbolic, &self.lu_numeric).solve_in_place_with_conj(
                     Conj::No,
                     rhs,
@@ -440,9 +437,360 @@ impl DirectFactorization {
         }
         Ok(())
     }
+}
 
-    /// Refactorise against `a` and solve one right-hand side — [`Self::refactor`] then
-    /// [`Self::solve_in_place`].
+/// `csr_slot -> slot of (col, row)` when every stored `(row, col)` has a stored transpose, else
+/// `None`. Columns within a canonical CSR row are ascending, so each lookup is a binary search.
+fn transpose_map(n: usize, indptr: &[u32], indices: &[u32]) -> Option<Vec<usize>> {
+    let mut out = Vec::with_capacity(indices.len());
+    for r in 0..n {
+        for &c in &indices[indptr[r] as usize..indptr[r + 1] as usize] {
+            let (lo, hi) = (indptr[c as usize] as usize, indptr[c as usize + 1] as usize);
+            let row = u32::try_from(r).ok()?;
+            let at = indices[lo..hi].binary_search(&row).ok()?;
+            out.push(lo + at);
+        }
+    }
+    Some(out)
+}
+
+// -- The dense border ---------------------------------------------------------------------------
+
+/// A row/column is DENSE when it stores more than this many entries AND more than
+/// [`DENSE_SQRT_FACTOR`]` * sqrt(n)`.
+const DENSE_FLOOR: usize = 64;
+/// See [`DENSE_FLOOR`].
+const DENSE_SQRT_FACTOR: f64 = 10.0;
+/// More dense indices than this and the Schur block itself stops being small; the plain kernel
+/// takes the whole operator instead.
+const MAX_BORDER: usize = 64;
+
+/// Indices whose row or column is dense, or empty when there are none (or too many).
+fn dense_indices(n: usize, indptr: &[u32], indices: &[u32]) -> Vec<usize> {
+    let mut count = vec![0usize; n];
+    for r in 0..n {
+        count[r] += (indptr[r + 1] - indptr[r]) as usize;
+    }
+    let mut col = vec![0usize; n];
+    for &c in indices {
+        col[c as usize] += 1;
+    }
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
+    let bar = DENSE_FLOOR.max((DENSE_SQRT_FACTOR * (n as f64).sqrt()) as usize);
+    let dense: Vec<usize> = (0..n).filter(|&i| count[i].max(col[i]) > bar).collect();
+    if dense.len() > MAX_BORDER || dense.len() == n {
+        return Vec::new();
+    }
+    dense
+}
+
+/// `A = [[A11, A12], [A21, A22]]` with the dense indices last: `A11` is factorised sparsely and
+/// the border is eliminated through the `k x k` Schur complement `S = A22 - A21 A11^{-1} A12`.
+struct Border {
+    dense: Vec<usize>,
+    interior: Vec<usize>,
+    /// `(original CSR slot, slot in a11)`.
+    to_a11: Vec<(usize, usize)>,
+    /// `(original slot, interior row, border col)`.
+    to_a12: Vec<(usize, usize, usize)>,
+    /// `(original slot, border row, interior col)`.
+    to_a21: Vec<(usize, usize, usize)>,
+    /// `(original slot, border row, border col)`.
+    to_a22: Vec<(usize, usize, usize)>,
+    a11: Csr,
+    kernel: Kernel,
+    /// `A11^{-1} A12`, `n1 x k` column-major.
+    y: Vec<f64>,
+    /// `A21`, `k x n1` row-major.
+    a21: Vec<f64>,
+    s_lu: Option<PartialPivLu<f64>>,
+}
+
+impl Border {
+    fn new(a: &Csr, dense: Vec<usize>) -> Result<Self, DirectFailure> {
+        let n = a.shape().0;
+        let mut where_ = vec![(false, 0usize); n]; // (is_dense, position within its block)
+        for (p, &d) in dense.iter().enumerate() {
+            where_[d] = (true, p);
+        }
+        let interior: Vec<usize> = (0..n).filter(|&i| !where_[i].0).collect();
+        for (p, &i) in interior.iter().enumerate() {
+            where_[i] = (false, p);
+        }
+        let (indptr, indices) = (a.indptr(), a.indices());
+        let n1 = interior.len();
+        let mut coo = Coo::new(n1, n1);
+        let (mut to_a11, mut to_a12, mut to_a21, mut to_a22) = (vec![], vec![], vec![], vec![]);
+        for r in 0..n {
+            let (rd, rp) = where_[r];
+            for slot in indptr[r] as usize..indptr[r + 1] as usize {
+                let (cd, cp) = where_[indices[slot] as usize];
+                match (rd, cd) {
+                    (false, false) => {
+                        to_a11.push((slot, to_a11.len()));
+                        #[allow(clippy::cast_possible_truncation)]
+                        coo.push(rp as u32, cp as u32, 0.0)?;
+                    }
+                    (false, true) => to_a12.push((slot, rp, cp)),
+                    (true, false) => to_a21.push((slot, rp, cp)),
+                    (true, true) => to_a22.push((slot, rp, cp)),
+                }
+            }
+        }
+        // Rows are visited in interior order and columns ascend within each row, so the COO is
+        // already canonical and `to_a11`'s running count IS the CSR slot.
+        let a11 = coo.to_csr()?;
+        if a11.nnz() != to_a11.len() {
+            return Err(DirectFailure::PatternChanged);
+        }
+        let kernel = Kernel::new(&a11)?;
+        let k = dense.len();
+        Ok(Self {
+            y: vec![0.0; n1 * k],
+            a21: vec![0.0; k * n1],
+            dense,
+            interior,
+            to_a11,
+            to_a12,
+            to_a21,
+            to_a22,
+            a11,
+            kernel,
+            s_lu: None,
+        })
+    }
+
+    fn refactor(&mut self, values: &[f64]) -> Result<FactorKind, DirectFailure> {
+        let (n1, k) = (self.interior.len(), self.dense.len());
+        self.s_lu = None;
+        {
+            let slot = self.a11.values_mut();
+            for &(o, t) in &self.to_a11 {
+                slot[t] = values[o];
+            }
+        }
+        let kind = self.kernel.refactor(&self.a11)?;
+        self.y.iter_mut().for_each(|v| *v = 0.0);
+        for &(o, r, c) in &self.to_a12 {
+            self.y[c * n1 + r] = values[o];
+        }
+        self.kernel.solve_in_place(&mut self.y, k)?;
+        self.a21.iter_mut().for_each(|v| *v = 0.0);
+        for &(o, r, c) in &self.to_a21 {
+            self.a21[r * n1 + c] = values[o];
+        }
+        let mut s = Mat::<f64>::zeros(k, k);
+        for &(o, r, c) in &self.to_a22 {
+            s[(r, c)] += values[o];
+        }
+        for i in 0..k {
+            let row = &self.a21[i * n1..(i + 1) * n1];
+            for j in 0..k {
+                let col = &self.y[j * n1..(j + 1) * n1];
+                s[(i, j)] -= row.iter().zip(col).map(|(p, q)| p * q).sum::<f64>();
+            }
+        }
+        self.s_lu = Some(s.partial_piv_lu());
+        Ok(kind)
+    }
+
+    /// One bordered solve of `nrhs` column-major columns of length `n`, in place.
+    fn solve(&self, b: &mut [f64], nrhs: usize) -> Result<(), DirectFailure> {
+        let Some(s_lu) = self.s_lu.as_ref() else {
+            return Err(DirectFailure::NotFactored);
+        };
+        let (n1, k) = (self.interior.len(), self.dense.len());
+        let n = n1 + k;
+        let mut b1 = vec![0.0; n1 * nrhs];
+        let mut t = Mat::<f64>::zeros(k, nrhs);
+        for c in 0..nrhs {
+            let col = &b[c * n..(c + 1) * n];
+            for (p, &i) in self.interior.iter().enumerate() {
+                b1[c * n1 + p] = col[i];
+            }
+            for (p, &d) in self.dense.iter().enumerate() {
+                t[(p, c)] = col[d];
+            }
+        }
+        self.kernel.solve_in_place(&mut b1, nrhs)?;
+        for c in 0..nrhs {
+            let y1 = &b1[c * n1..(c + 1) * n1];
+            for i in 0..k {
+                let row = &self.a21[i * n1..(i + 1) * n1];
+                t[(i, c)] -= row.iter().zip(y1).map(|(p, q)| p * q).sum::<f64>();
+            }
+        }
+        let x2 = s_lu.solve(&t);
+        for c in 0..nrhs {
+            let col = &mut b[c * n..(c + 1) * n];
+            for (p, &i) in self.interior.iter().enumerate() {
+                let mut v = b1[c * n1 + p];
+                for j in 0..k {
+                    v -= self.y[j * n1 + p] * x2[(j, c)];
+                }
+                col[i] = v;
+            }
+            for (p, &d) in self.dense.iter().enumerate() {
+                col[d] = x2[(p, c)];
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A sparse direct factorisation: the supernodal [`Kernel`], behind a Schur-complement border
+/// when the operator carries DENSE rows/columns.
+///
+/// # Why the border, measured (2026-09-26)
+///
+/// faer's LU symbolic bounds fill by the column-intersection structure, so ONE dense row of length
+/// `m` becomes an `m`-clique. The `ipm_uv` chopper's bordered field<->circuit system (n=36158) has
+/// a single winding row/column of 6583 entries beside rows of <= 35: faer factorised it in 4.1 s
+/// at a residual of 4.5e-9, SuperLU (dynamic fill) in 0.15 s, and the march ran 7.4x slower than on
+/// SuperLU. Eliminating the dense indices through their `k x k` Schur complement leaves the kernel
+/// the purely sparse field block it is fast on, for `k` extra back-substitutions per refactor.
+///
+/// Every public method keeps the [`Kernel`] contract: the pattern is checked on refactor, a
+/// solve before a factor is refused, and a solve is refined once against the FULL operator.
+pub struct DirectFactorization {
+    /// The full operator, values updated per refactor (the outer refinement's residual).
+    full: Csr,
+    border: Option<Border>,
+    /// The un-bordered kernel: always when there is no border, else built on a border refusal.
+    plain: Option<Kernel>,
+    current: Option<FactorKind>,
+}
+
+impl DirectFactorization {
+    /// Analyse `a`'s pattern once.
+    ///
+    /// # Errors
+    /// [`DirectFailure::Shape`] when `a` is not square, [`DirectFailure::Singular`] when `faer`
+    /// refuses the pattern.
+    pub fn new(a: &Csr) -> Result<Self, DirectFailure> {
+        let (n_rows, n_cols) = a.shape();
+        if n_rows != n_cols {
+            return Err(DirectFailure::Shape(SparseError::NotSquare {
+                n_rows,
+                n_cols,
+            }));
+        }
+        let dense = dense_indices(n_rows, a.indptr(), a.indices());
+        let border = if dense.is_empty() {
+            None
+        } else {
+            Some(Border::new(a, dense)?)
+        };
+        let plain = if border.is_none() {
+            Some(Kernel::new(a)?)
+        } else {
+            None
+        };
+        Ok(Self {
+            full: a.clone(),
+            border,
+            plain,
+            current: None,
+        })
+    }
+
+    /// The order of the analysed system.
+    #[must_use]
+    pub fn n(&self) -> usize {
+        self.full.shape().0
+    }
+
+    /// How many dense indices the Schur border eliminates (0: none).
+    #[must_use]
+    pub fn border_size(&self) -> usize {
+        self.border.as_ref().map_or(0, |b| b.dense.len())
+    }
+
+    /// What the last successful [`Self::refactor`] produced (of the sparse kernel), if any.
+    #[must_use]
+    pub fn kind(&self) -> Option<FactorKind> {
+        self.current
+    }
+
+    /// Numerically factorise `a` (which must carry the analysed pattern).
+    ///
+    /// # Errors
+    /// [`DirectFailure::PatternChanged`] when `a`'s pattern differs from the analysed one,
+    /// [`DirectFailure::Singular`] when the factorisation refuses.
+    pub fn refactor(&mut self, a: &Csr) -> Result<FactorKind, DirectFailure> {
+        if a.indptr() != self.full.indptr() || a.indices() != self.full.indices() {
+            return Err(DirectFailure::PatternChanged);
+        }
+        self.current = None;
+        self.full.values_mut().copy_from_slice(a.values());
+        if let Some(border) = self.border.as_mut() {
+            match border.refactor(a.values()) {
+                Ok(kind) => {
+                    self.current = Some(kind);
+                    return Ok(kind);
+                }
+                // A singular INTERIOR (the border was what made the operator regular): drop the
+                // border for good and factorise the whole operator.
+                Err(DirectFailure::Singular { .. }) => self.border = None,
+                Err(e) => return Err(e),
+            }
+        }
+        if self.plain.is_none() {
+            self.plain = Some(Kernel::new(&self.full)?);
+        }
+        let Some(plain) = self.plain.as_mut() else {
+            return Err(DirectFailure::NotFactored);
+        };
+        let kind = plain.refactor(&self.full)?;
+        self.current = Some(kind);
+        Ok(kind)
+    }
+
+    /// Back-substitute `nrhs` right-hand sides stored COLUMN-MAJOR in `b` (overwritten).
+    ///
+    /// # Errors
+    /// [`DirectFailure::NotFactored`] when no factor is held, [`DirectFailure::Shape`] when
+    /// `b.len() != n * nrhs`.
+    pub fn solve_in_place(&self, b: &mut [f64], nrhs: usize) -> Result<(), DirectFailure> {
+        let n = self.n();
+        if b.len() != n * nrhs {
+            return Err(DirectFailure::Shape(SparseError::ShapeMismatch {
+                expected: n * nrhs,
+                got: b.len(),
+            }));
+        }
+        if self.current.is_none() {
+            return Err(DirectFailure::NotFactored);
+        }
+        match (self.border.as_ref(), self.plain.as_ref()) {
+            (Some(border), _) => {
+                // The kernel refines the interior; the border's own solve is refined once more
+                // against the FULL operator, the same one-step contract as the plain path.
+                let b0 = b.to_vec();
+                border.solve(b, nrhs)?;
+                let mut r = b0;
+                for c in 0..nrhs {
+                    let ax = self.full.matvec(&b[c * n..(c + 1) * n])?;
+                    for (ri, v) in r[c * n..(c + 1) * n].iter_mut().zip(ax) {
+                        *ri -= v;
+                    }
+                }
+                border.solve(&mut r, nrhs)?;
+                for (x, d) in b.iter_mut().zip(&r) {
+                    *x += d;
+                }
+                Ok(())
+            }
+            (None, Some(plain)) => plain.solve_in_place(b, nrhs),
+            (None, None) => Err(DirectFailure::NotFactored),
+        }
+    }
+
+    /// Refactorise against `a` and solve one right-hand side.
     ///
     /// # Errors
     /// As [`Self::refactor`], plus [`DirectFailure::Shape`] when `b` is the wrong length (checked
@@ -459,20 +807,4 @@ impl DirectFactorization {
         self.solve_in_place(&mut x, 1)?;
         Ok(x)
     }
-}
-
-
-/// `csr_slot -> slot of (col, row)` when every stored `(row, col)` has a stored transpose, else
-/// `None`. Columns within a canonical CSR row are ascending, so each lookup is a binary search.
-fn transpose_map(n: usize, indptr: &[u32], indices: &[u32]) -> Option<Vec<usize>> {
-    let mut out = Vec::with_capacity(indices.len());
-    for r in 0..n {
-        for &c in &indices[indptr[r] as usize..indptr[r + 1] as usize] {
-            let (lo, hi) = (indptr[c as usize] as usize, indptr[c as usize + 1] as usize);
-            let row = u32::try_from(r).ok()?;
-            let at = indices[lo..hi].binary_search(&row).ok()?;
-            out.push(lo + at);
-        }
-    }
-    Some(out)
 }

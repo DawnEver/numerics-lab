@@ -259,7 +259,10 @@ fn the_newton_family_declares_the_residual_stop_and_every_other_strategy_the_ene
         .copied()
         .filter(|name| strategy_stops_on_residual(name).unwrap())
         .collect();
-    assert_eq!(residual, ["newton", "newton-held-factor", "newton-linesearch"]);
+    assert_eq!(
+        residual,
+        ["newton", "newton-held-factor", "newton-linesearch"]
+    );
 }
 
 #[test]
@@ -280,7 +283,11 @@ fn the_default_bar_is_newton_rtol_for_a_residual_stop_and_the_fixed_point_one_ot
         } else {
             RTOL_ENERGY_PCT
         };
-        assert_eq!(default_rtol_energy_pct(name).unwrap().to_bits(), want.to_bits(), "{name}");
+        assert_eq!(
+            default_rtol_energy_pct(name).unwrap().to_bits(),
+            want.to_bits(),
+            "{name}"
+        );
         let opts = SolveOptions::for_strategy(name, 7).unwrap();
         assert_eq!(opts.rtol_energy_pct.to_bits(), want.to_bits(), "{name}");
         assert_eq!(opts.max_iter, 7);
