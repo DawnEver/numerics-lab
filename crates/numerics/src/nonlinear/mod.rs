@@ -47,8 +47,29 @@ pub use quasi::{AndersonStrategy, BfgsStrategy, BroydenStrategy, LbfgsStrategy};
 pub const ALPHA_MIN: f64 = 0.1;
 /// Adaptive-Picard recovery factor: grow `alpha` back toward 1 on a progressing step.
 pub const ALPHA_GROW: f64 = 1.5;
-/// Convergence: total-energy change below this fraction of a percent.
+/// Convergence: total-energy change below this fraction of a percent -- the FIXED-POINT bar
+/// (`1e-4` relative), the default of every strategy whose [`StopRule`] is [`StopRule::Energy`].
+/// The Python's `core.fixed_point_rtol`.
 pub const RTOL_ENERGY_PCT: f64 = 0.01;
+
+/// The RESIDUAL-stopped (Newton-family) bar, in the same percent unit: `1e-6` relative.
+///
+/// The Python's `core.newton_rtol` (its own config field since the 2026-09-26 user ruling): at the
+/// fixed-point `1e-4` Newton left `dA ~ 6e-5` on `spm_slotted`, and a quadratic iteration or two
+/// buys `1e-6`. [`default_rtol_energy_pct`] routes each strategy to one of the two by its declared
+/// [`StopRule`], exactly as `hamilton.nonlinear_defaults.stop_rtol_energy_pct` does.
+pub const NEWTON_RTOL_PCT: f64 = 1e-4;
+
+/// What a strategy judges convergence on -- DECLARED by the strategy
+/// ([`IterationStrategy::stop_rule`]), never listed beside it, so a Newton variant registered later
+/// answers by construction. Mirrors the Python's `stop_rule` attribute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopRule {
+    /// The total-energy change (plus the increment floor): every fixed-point / quasi-Newton method.
+    Energy,
+    /// The equation's residual against `max(seed residual, rhs)` (plus the increment): Newton.
+    Residual,
+}
 
 /// Consecutive UNDISTURBED steps (no energy-error growth, no energy-delta sign flip) before the
 /// damped Picard loop grows `alpha` back.
@@ -442,6 +463,18 @@ impl SolveOptions {
         }
     }
 
+    /// `max_iter` iterations at the default bar of strategy `name` ([`default_rtol_energy_pct`]).
+    ///
+    /// # Errors
+    /// [`NonlinearError::UnknownStrategy`].
+    pub fn for_strategy(name: &str, max_iter: usize) -> Result<Self, NonlinearError> {
+        Ok(Self {
+            max_iter,
+            rtol_energy_pct: default_rtol_energy_pct(name)?,
+            ..Self::default()
+        })
+    }
+
     /// The iterate a solve starts from.
     pub(crate) fn start<S: NonlinearSystem>(&self, system: &S) -> Vec<f64> {
         self.seed.clone().unwrap_or_else(|| system.initial_guess())
@@ -456,6 +489,11 @@ pub trait IterationStrategy<S: NonlinearSystem> {
     /// The system capabilities this strategy needs, or `&[]` when it needs nothing special.
     fn requires(&self) -> &'static [&'static str] {
         &[]
+    }
+
+    /// What this strategy stops on. The energy change unless the strategy declares otherwise.
+    fn stop_rule(&self) -> StopRule {
+        StopRule::Energy
     }
 
     /// Drive `system` to its fixed point.
@@ -773,6 +811,58 @@ pub fn strategy_runs_on<S: NonlinearSystem>(
     system: &S,
 ) -> Result<bool, NonlinearError> {
     Ok(strategy_requires(name)?.is_empty() || system.supports_raw_mixing())
+}
+
+/// A system with no equation behind it: only a strategy's DECLARATIONS are ever read through it.
+struct Declarations;
+
+impl NonlinearSystem for Declarations {
+    type Matrix = ();
+    type Payload = ();
+
+    fn initial_guess(&self) -> Vec<f64> {
+        Vec::new()
+    }
+
+    fn assemble(&mut self, _x: &[f64]) -> Result<StateOf<Self>, NonlinearError> {
+        Err(NonlinearError::Equation("declarations only".to_owned()))
+    }
+
+    fn solve_linear(&mut self, _state: &StateOf<Self>) -> Result<Vec<f64>, NonlinearError> {
+        Err(NonlinearError::Equation("declarations only".to_owned()))
+    }
+
+    fn residual(&mut self, _x: &[f64], _state: &StateOf<Self>) -> Result<Vec<f64>, NonlinearError> {
+        Err(NonlinearError::Equation("declarations only".to_owned()))
+    }
+
+    fn solve_system(&mut self, _matrix: &(), _rhs: &[f64]) -> Result<Vec<f64>, NonlinearError> {
+        Err(NonlinearError::Equation("declarations only".to_owned()))
+    }
+}
+
+/// Whether strategy `name` judges convergence on the equation's residual (the Newton family).
+///
+/// Read off the strategy's own [`IterationStrategy::stop_rule`]; the port of the Python
+/// `strategy_stops_on_residual`.
+///
+/// # Errors
+/// [`NonlinearError::UnknownStrategy`].
+pub fn strategy_stops_on_residual(name: &str) -> Result<bool, NonlinearError> {
+    Ok(get_strategy::<Declarations>(Some(name))?.stop_rule() == StopRule::Residual)
+}
+
+/// The default stop bar of strategy `name`, in percent: [`NEWTON_RTOL_PCT`] for a residual stop,
+/// [`RTOL_ENERGY_PCT`] otherwise. A caller with its own bar (a golden above all) states it.
+///
+/// # Errors
+/// [`NonlinearError::UnknownStrategy`].
+pub fn default_rtol_energy_pct(name: &str) -> Result<f64, NonlinearError> {
+    Ok(if strategy_stops_on_residual(name)? {
+        NEWTON_RTOL_PCT
+    } else {
+        RTOL_ENERGY_PCT
+    })
 }
 
 /// Resolve an iteration-strategy name; `None` -> the default damped Picard (today's behaviour).

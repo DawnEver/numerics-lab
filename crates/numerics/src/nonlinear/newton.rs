@@ -3,7 +3,7 @@
 use super::{
     energy_error_pct, has_converged, has_converged_residual, increment_ratio, norm,
     DampedPicardStrategy, IterationResult, IterationStrategy, NonlinearError, NonlinearSystem,
-    ResultOf, SolveOptions, StagnationWatch, StateOf,
+    ResultOf, SolveOptions, StagnationWatch, StateOf, StopRule,
 };
 
 /// `a + s * b`, elementwise.
@@ -234,6 +234,10 @@ impl<S: NonlinearSystem> IterationStrategy<S> for NewtonStrategy {
         "newton"
     }
 
+    fn stop_rule(&self) -> StopRule {
+        StopRule::Residual
+    }
+
     fn solve(&self, system: &mut S, opts: &SolveOptions) -> Result<ResultOf<S>, NonlinearError> {
         self.drive("newton", system, opts)
     }
@@ -370,6 +374,10 @@ impl<S: NonlinearSystem> IterationStrategy<S> for NewtonLineSearchStrategy {
         "newton-linesearch"
     }
 
+    fn stop_rule(&self) -> StopRule {
+        StopRule::Residual
+    }
+
     fn solve(&self, system: &mut S, opts: &SolveOptions) -> Result<ResultOf<S>, NonlinearError> {
         self.newton.drive("newton-linesearch", system, opts)
     }
@@ -400,6 +408,10 @@ impl Default for HeldFactorNewtonStrategy {
 impl<S: NonlinearSystem> IterationStrategy<S> for HeldFactorNewtonStrategy {
     fn name(&self) -> &'static str {
         "newton-held-factor"
+    }
+
+    fn stop_rule(&self) -> StopRule {
+        StopRule::Residual
     }
 
     fn solve(&self, system: &mut S, opts: &SolveOptions) -> Result<ResultOf<S>, NonlinearError> {
