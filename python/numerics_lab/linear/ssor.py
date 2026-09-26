@@ -12,7 +12,7 @@ operator ``curl(nu curl A)`` discretized with **edge (Nedelec) elements** (an H(
 whose huge gradient near-null-space stalls plain CG/ILU/AMG). This codebase has NO such
 system -- the FEA solve is the SPD 2D scalar nodal Poisson ``-div(nu grad A) = J`` (scalar
 node potential, 3x3 nodal Laplacian element matrix), so AMS has nothing to precondition and
-the assessment (`src/motronics/gauss/.claude/memory/2026/07/10/finding-hiptmair-xu-assessment.md`) DEFERS it
+the assessment (`git show d212b178f^:src/motronics/gauss/.claude/memory/2026/07/10/finding-hiptmair-xu-assessment.md`) DEFERS it
 until a curl-curl / eddy-current / 3D formulation exists.
 
 What DOES help the nodal Krylov path is a stronger *symmetric* auxiliary preconditioner than

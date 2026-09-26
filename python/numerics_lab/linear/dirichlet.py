@@ -1,7 +1,7 @@
 """Dirichlet pinning on COO triplets -- pure algebra, no physics, no mesh.
 
 Moved out of ``hamilton.discretizations.fem._solve`` (V2 step 2b,
-``.claude/memory/2026/07/25/plan-axis-decoupling.md``). The function never referenced an element,
+``git show d212b178f^:.claude/memory/2026/07/25/plan-axis-decoupling.md``). The function never referenced an element,
 a material or a chart: it zeroes the rows of pinned indices, appends unit diagonal entries, and
 pins the corresponding rhs entries. That makes it a ``gauss`` citizen by the dependency arrow --
 and the reason it MATTERS which package it lives in is that ``studies/harmonic`` needed it and
