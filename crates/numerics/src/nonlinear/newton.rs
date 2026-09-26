@@ -56,6 +56,12 @@ pub struct NewtonStrategy {
     pub max_backtracks: usize,
     pub shrink: f64,
     pub armijo: f64,
+    /// `None` is full Newton; `Some(k)` HOLDS the tangent for at most `k` iterations (the
+    /// modified Newton, `newton-held-factor`, user ruling 2026-09-26). Mirrors the Python field.
+    pub refactor_every: Option<usize>,
+    /// A held tangent is refreshed for the next iteration when a step contracts the residual by
+    /// less than this.
+    pub stall_ratio: f64,
 }
 
 impl Default for NewtonStrategy {
@@ -64,11 +70,65 @@ impl Default for NewtonStrategy {
             max_backtracks: 12,
             shrink: 0.5,
             armijo: 1e-4,
+            refactor_every: None,
+            stall_ratio: 0.5,
         }
     }
 }
 
+/// One Armijo search: `(lam, accepted, full-step trial, full-step norm)`.
+type Search<S> = (
+    f64,
+    Option<(Vec<f64>, StateOf<S>, f64)>,
+    Option<Vec<f64>>,
+    f64,
+);
+
 impl NewtonStrategy {
+    fn tangent_of<S: NonlinearSystem>(
+        name: &'static str,
+        system: &mut S,
+        x: &[f64],
+        state: &StateOf<S>,
+    ) -> Result<S::Matrix, NonlinearError> {
+        system.tangent(x, state)?.ok_or_else(|| NonlinearError::UnsupportedSystem {
+            strategy: name,
+            need: "a tangent (the Jacobian of the residual); select a fixed-point strategy by name instead"
+                .to_owned(),
+        })
+    }
+
+    fn search<S: NonlinearSystem>(
+        &self,
+        system: &mut S,
+        x: &[f64],
+        dx: &[f64],
+        r_norm: f64,
+    ) -> Result<Search<S>, NonlinearError> {
+        let mut lam = 1.0_f64;
+        let mut full_norm = f64::NAN;
+        let mut full_trial: Option<Vec<f64>> = None;
+        for _ in 0..=self.max_backtracks {
+            let trial = axpy(x, lam, dx);
+            let trial_state = system.assemble(&trial)?;
+            let trial_norm = system.residual_norm(&trial, &trial_state)?;
+            if full_trial.is_none() {
+                full_trial = Some(trial.clone());
+                full_norm = trial_norm;
+            }
+            if trial_norm.is_finite() && trial_norm <= (1.0 - self.armijo * lam) * r_norm {
+                return Ok((
+                    lam,
+                    Some((trial, trial_state, trial_norm)),
+                    full_trial,
+                    full_norm,
+                ));
+            }
+            lam *= self.shrink;
+        }
+        Ok((lam, None, full_trial, full_norm))
+    }
+
     fn drive<S: NonlinearSystem>(
         &self,
         name: &'static str,
@@ -101,36 +161,33 @@ impl NewtonStrategy {
         let mut converged = false;
         let mut ran = 0;
         let mut watch = StagnationWatch::new(rtol);
+        let mut held: Option<S::Matrix> = None;
+        let mut age = 0_usize;
+        let mut stale = false;
         for i in 0..opts.max_iter {
             ran = i + 1;
-            let Some(jac) = system.tangent(&x, &state)? else {
-                return Err(NonlinearError::UnsupportedSystem {
-                    strategy: name,
-                    need: "a tangent (the Jacobian of the residual); select a fixed-point strategy by name instead"
-                        .to_owned(),
-                });
-            };
-            let r = system.residual(&x, &state)?;
-            let dx = system.solve_system(&jac, &neg(&r))?;
-            let x_prev = x.clone();
-            let mut lam = 1.0_f64;
-            let mut accepted: Option<(Vec<f64>, StateOf<S>, f64)> = None;
-            let mut full_norm = f64::NAN;
-            let mut full_trial: Option<Vec<f64>> = None;
-            for _ in 0..=self.max_backtracks {
-                let trial = axpy(&x, lam, &dx);
-                let trial_state = system.assemble(&trial)?;
-                let trial_norm = system.residual_norm(&trial, &trial_state)?;
-                if full_trial.is_none() {
-                    full_trial = Some(trial.clone());
-                    full_norm = trial_norm;
-                }
-                if trial_norm.is_finite() && trial_norm <= (1.0 - self.armijo * lam) * r_norm {
-                    accepted = Some((trial, trial_state, trial_norm));
-                    break;
-                }
-                lam *= self.shrink;
+            // FULL NEWTON refreshes every iteration; the held (modified) one when its tangent is
+            // `k` old or the last step stalled -- the Python `NewtonStrategy.solve`, rule for rule.
+            let fresh = held.is_none() || self.refactor_every.is_none_or(|k| age >= k) || stale;
+            if fresh {
+                held = Some(Self::tangent_of(name, system, &x, &state)?);
+                age = 0;
             }
+            let r = system.residual(&x, &state)?;
+            let rhs = neg(&r);
+            let dx = system.solve_system(held.as_ref().expect("refreshed above"), &rhs)?;
+            let x_prev = x.clone();
+            let (mut lam, mut accepted, mut full_trial, mut full_norm) =
+                self.search(system, &x, &dx, r_norm)?;
+            if !fresh && !(accepted.is_some() && lam == 1.0) {
+                // A held tangent that needs a line search is no longer a Newton model here:
+                // refresh and retake the step.
+                held = Some(Self::tangent_of(name, system, &x, &state)?);
+                age = 0;
+                let dx = system.solve_system(held.as_ref().expect("refreshed above"), &rhs)?;
+                (lam, accepted, full_trial, full_norm) = self.search(system, &x, &dx, r_norm)?;
+            }
+            age += 1;
             let (next, next_state, next_norm) = if let Some(hit) = accepted {
                 hit
             } else {
@@ -141,6 +198,7 @@ impl NewtonStrategy {
                 let full_state = system.assemble(&full)?;
                 (full, full_state, full_norm)
             };
+            stale = self.refactor_every.is_some() && !(next_norm <= self.stall_ratio * r_norm);
             x = next;
             state = next_state;
             r_norm = next_norm;
@@ -309,6 +367,38 @@ impl<S: NonlinearSystem> IterationStrategy<S> for NewtonLineSearchStrategy {
 
     fn solve(&self, system: &mut S, opts: &SolveOptions) -> Result<ResultOf<S>, NonlinearError> {
         self.newton.drive("newton-linesearch", system, opts)
+    }
+}
+
+/// The registry name `newton-held-factor`: [`NewtonStrategy`] holding its tangent for 4
+/// iterations (the modified Newton, user ruling 2026-09-26). Mirrors the Python
+/// `HeldFactorNewtonStrategy`. The Python side additionally FACTORS a sparse tangent once (`splu`
+/// or the system's `factorize`); this crate's opaque `Matrix` has no factor seam, so a held tangent
+/// is re-solved through `solve_system` -- exactly what the Python does on the golden's plain-array
+/// tangent, so the trajectories are the same.
+#[derive(Debug, Clone, Copy)]
+pub struct HeldFactorNewtonStrategy {
+    pub newton: NewtonStrategy,
+}
+
+impl Default for HeldFactorNewtonStrategy {
+    fn default() -> Self {
+        Self {
+            newton: NewtonStrategy {
+                refactor_every: Some(4),
+                ..NewtonStrategy::default()
+            },
+        }
+    }
+}
+
+impl<S: NonlinearSystem> IterationStrategy<S> for HeldFactorNewtonStrategy {
+    fn name(&self) -> &'static str {
+        "newton-held-factor"
+    }
+
+    fn solve(&self, system: &mut S, opts: &SolveOptions) -> Result<ResultOf<S>, NonlinearError> {
+        self.newton.drive("newton-held-factor", system, opts)
     }
 }
 

@@ -32,8 +32,8 @@ mod quasi;
 
 pub use budget::{with_time_budget, TimeBudgetedSystem, BUDGETED_CALLS};
 pub use newton::{
-    ContinuationStrategy, ModifiedNewtonStrategy, NewtonKrylovStrategy, NewtonLineSearchStrategy,
-    NewtonStrategy,
+    ContinuationStrategy, HeldFactorNewtonStrategy, ModifiedNewtonStrategy, NewtonKrylovStrategy,
+    NewtonLineSearchStrategy, NewtonStrategy,
 };
 pub use picard::{
     AdaptiveDampedPicardStrategy, DampedPicardStrategy, NuRelaxationDampedPicardStrategy,
@@ -97,13 +97,14 @@ pub const STAGNATION_MAX_MIN_RATIO: f64 = 2.0;
 pub const DEFAULT_SOLVE_BUDGET_S: f64 = 500.0;
 
 /// The registry's spellings, in one place so the resolver and its error cannot drift.
-pub const KNOWN_STRATEGIES: [&str; 13] = [
+pub const KNOWN_STRATEGIES: [&str; 14] = [
     "anderson",
     "bfgs",
     "continuation",
     "l-bfgs",
     "modified-newton",
     "newton",
+    "newton-held-factor",
     "newton-krylov",
     "newton-linesearch",
     "nu-damped",
@@ -795,6 +796,7 @@ pub fn get_strategy<S: NonlinearSystem + 'static>(
         "bfgs" => Box::new(BfgsStrategy::default()),
         "l-bfgs" => Box::new(LbfgsStrategy::default()),
         "newton-linesearch" => Box::new(NewtonLineSearchStrategy::default()),
+        "newton-held-factor" => Box::new(HeldFactorNewtonStrategy::default()),
         "newton-krylov" => Box::new(NewtonKrylovStrategy::default()),
         "continuation" => Box::new(ContinuationStrategy::<S>::default()),
         _ => {

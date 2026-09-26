@@ -174,7 +174,7 @@ const PLATEAU_DRIVABLE: [&str; 9] = [
 ];
 
 /// The two registry names of the ONE Newton, which judges the RESIDUAL and needs a tangent.
-const NEWTON_NAMES: [&str; 2] = ["newton", "newton-linesearch"];
+const NEWTON_NAMES: [&str; 3] = ["newton", "newton-linesearch", "newton-held-factor"];
 
 #[test]
 fn newton_refuses_a_system_with_no_tangent() {
