@@ -15,6 +15,7 @@ accounting, dense/sparse/scalar storage, and that a problem WITHOUT the seam mar
 from __future__ import annotations
 
 import numpy as np
+import pytest
 from numpy.typing import NDArray
 from scipy.sparse import csr_matrix
 
@@ -150,8 +151,12 @@ def test_the_event_march_refactors_on_the_toggle_and_stays_bit_identical() -> No
     )
 
 
-def test_the_sparse_path_back_substitutes_like_spsolve() -> None:
-    """Splu and spsolve are the same SuperLU call underneath (measured bit-equal 2026-07-22)."""
+@pytest.mark.parametrize('native', ['0', '1'])
+def test_the_sparse_path_back_substitutes_like_spsolve(native, monkeypatch) -> None:
+    """With the native factor switched off, splu and spsolve are the same SuperLU call (bit-equal,
+    measured 2026-07-22); with it on, the held factor is faer's and agrees to round-off.
+    """
+    monkeypatch.setenv('MOTRONICS_DIRECT_NATIVE', native)
     m = csr_matrix(np.array([[4.0, 1.0, 0.0], [1.0, 3.0, 0.0], [0.0, 0.0, 2.0]]))
     b = np.array([1.0, 2.0, 3.0])
     cache = FactorCache()
@@ -162,7 +167,11 @@ def test_the_sparse_path_back_substitutes_like_spsolve() -> None:
     assert np.allclose(x2, 2.0 * x1, atol=0.0)
     from scipy.sparse.linalg import spsolve
 
-    assert np.array_equal(x1, np.asarray(spsolve(m.tocsc(), b)))
+    ref = np.asarray(spsolve(m.tocsc(), b))
+    if native == '0':
+        assert np.array_equal(x1, ref)
+    else:
+        assert np.abs(x1 - ref).max() <= 1e-14 * np.abs(ref).max()
 
 
 def test_a_none_key_never_caches() -> None:

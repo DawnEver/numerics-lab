@@ -44,8 +44,9 @@ def _nonsymmetric_system(n=60, seed=1):
     return A.tocsr(), b
 
 
-def test_direct_is_bit_for_bit_spsolve():
-    """The ``direct`` backend and the default (None) route reproduce raw ``spsolve`` byte-for-byte."""
+def test_direct_is_bit_for_bit_spsolve(monkeypatch):
+    """With the native factor switched off, ``direct`` and the default route ARE raw ``spsolve``."""
+    monkeypatch.setenv('MOTRONICS_DIRECT_NATIVE', '0')
     A, b = _spd_system()
     ref = spsolve(A, b)
     np.testing.assert_array_equal(get_linear_solver('direct')(A, b), ref)

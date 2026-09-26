@@ -335,9 +335,12 @@ def _lu_factorize(matrix):
     import scipy.sparse as sp  # noqa: PLC0415
     from scipy.sparse.linalg import splu  # noqa: PLC0415
 
+    from motronics.gauss.linear.native_direct import native_factor  # noqa: PLC0415
+
     if not sp.issparse(matrix):
         return None
-    return splu(sp.csc_matrix(matrix))
+    native = native_factor(matrix)
+    return native if native is not None else splu(sp.csc_matrix(matrix))
 
 
 class ModifiedNewtonStrategy:
