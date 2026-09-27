@@ -521,9 +521,15 @@ class NewtonLineSearchStrategy:
             jac = system.tangent(x, state)
             if jac is None:
                 x = system.solve_linear(state)  # no Jacobian -> Picard substitution
+                x_full = x
             else:
                 r = system.residual(x, state)
                 dx = system.solve_system(jac, -r)
+                # THE RULE IS ASKED ABOUT THE FULL CORRECTION `dx`, not the damped `lam dx`: a line
+                # search that exhausted its backtracks takes a 0.5**12-scaled step, and read as an
+                # iterate that stopped moving that is a `converged=True` far from the root -- measured
+                # 2026-09-27 on ipm_v_e45h fea,tri (two identical 1.45e-5 increments, then "converged").
+                x_full = x + dx
                 # Minimise the FREE-DOF residual norm (residual_norm), NOT the raw ||r||: FEA's full
                 # residual carries a large constant Dirichlet-row term the increment can't reduce, which
                 # would make every backtracking step look like an increase and stall the line search.
@@ -537,9 +543,9 @@ class NewtonLineSearchStrategy:
                         break
                     lam *= self.shrink
                 x = x + lam * dx
-            increment = increment_ratio(x_prev, x)
+            increment = increment_ratio(x_prev, x_full)
             converged = _has_converged(
-                err, x_prev, x, rtol_energy_pct, material_change=state.material_change
+                err, x_prev, x_full, rtol_energy_pct, material_change=state.material_change
             ) or watch.observe(err, increment, state.material_change)
             if system.is_linear:
                 converged = True
