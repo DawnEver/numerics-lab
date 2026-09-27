@@ -208,6 +208,9 @@ def test_a_polish_whose_step_the_line_search_cannot_accept_hands_back_to_the_new
     from motronics.gauss.time_integrators.events import _bdf2_variable_form
 
     class _SlowFarField:
+        #: The declared capability `AlternativeJacobianProblem` reads, so the polish can engage.
+        has_tangent_jacobian = True
+
         def __init__(self) -> None:
             self.alternative_calls = 0
 
