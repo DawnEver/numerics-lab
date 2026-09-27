@@ -236,8 +236,8 @@ fn the_registry_resolves_every_declared_name_and_refuses_the_rest() {
         let s = get_strategy::<Synth>(Some(name)).unwrap();
         assert_eq!(s.name(), name, "the registry key and the strategy disagree");
     }
-    // `None` is today's behaviour, and that is the whole contract of the default.
-    assert_eq!(get_strategy::<Synth>(None).unwrap().name(), "picard-damped");
+    // `None` is Newton, the default in every family since 2026-09-25 (mirrors the Python).
+    assert_eq!(get_strategy::<Synth>(None).unwrap().name(), "newton");
     assert!(matches!(
         get_strategy::<Synth>(Some("nonesuch")),
         Err(NonlinearError::UnknownStrategy { .. })
@@ -248,6 +248,50 @@ fn the_registry_resolves_every_declared_name_and_refuses_the_rest() {
     let sys = linear_system(vec![1.0]);
     assert!(!strategy_runs_on("nu-damped", &sys).unwrap());
     assert!(strategy_runs_on("picard", &sys).unwrap());
+}
+
+// -- The declared stop rule and the per-rule default bar (the Python split, 2026-09-26) --------
+
+#[test]
+fn the_newton_family_declares_the_residual_stop_and_every_other_strategy_the_energy_one() {
+    let residual: Vec<&str> = KNOWN_STRATEGIES
+        .iter()
+        .copied()
+        .filter(|name| strategy_stops_on_residual(name).unwrap())
+        .collect();
+    assert_eq!(
+        residual,
+        ["newton", "newton-held-factor", "newton-linesearch"]
+    );
+}
+
+#[test]
+fn an_unknown_strategy_has_no_stop_rule_to_answer_with() {
+    assert!(matches!(
+        strategy_stops_on_residual("no-such-strategy"),
+        Err(NonlinearError::UnknownStrategy { .. })
+    ));
+}
+
+#[test]
+fn the_default_bar_is_newton_rtol_for_a_residual_stop_and_the_fixed_point_one_otherwise() {
+    assert!((NEWTON_RTOL_PCT - 1e-4).abs() < f64::EPSILON); // 1e-6 relative
+    assert!((RTOL_ENERGY_PCT - 0.01).abs() < f64::EPSILON); // 1e-4 relative
+    for name in KNOWN_STRATEGIES {
+        let want = if strategy_stops_on_residual(name).unwrap() {
+            NEWTON_RTOL_PCT
+        } else {
+            RTOL_ENERGY_PCT
+        };
+        assert_eq!(
+            default_rtol_energy_pct(name).unwrap().to_bits(),
+            want.to_bits(),
+            "{name}"
+        );
+        let opts = SolveOptions::for_strategy(name, 7).unwrap();
+        assert_eq!(opts.rtol_energy_pct.to_bits(), want.to_bits(), "{name}");
+        assert_eq!(opts.max_iter, 7);
+    }
 }
 
 mod regressions;

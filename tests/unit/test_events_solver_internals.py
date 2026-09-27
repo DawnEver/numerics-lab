@@ -192,6 +192,58 @@ def test_the_stall_polish_switches_to_the_tangent_and_converges() -> None:
     assert problem.tangent_calls > 0, "the stall-polish must engage the problem's jacobian_tangent"
 
 
+def test_a_polish_whose_step_the_line_search_cannot_accept_hands_back_to_the_newton() -> None:
+    """The polish is a TRIAL, not a one-way switch: its first capped step returns the default.
+
+    MEASURED 2026-09-26 on `ipm_uv --point rated` under the vacuum B-H tail: the exact Newton
+    tangent's first iterations overshoot deep saturation (ratios > 0.9 while it backtracks), the
+    stall-polish engaged the magnetic SECANT operator, and the step then exhausted 100 iterations
+    at residual 469 against a 177 start; with the polish withheld the same step converged in 15.
+    Here the default jacobian is the exact tangent of a residual whose Newton contracts by only
+    ~0.96 per iteration far from the root, so the polish engages; the offered alternative can
+    never be accepted by the line search. Held to it, the step exhausts; handed back, the Newton
+    that was already on its way finishes.
+    """
+    from motronics.gauss.time_integrators import IntegratorState, _solve_step
+    from motronics.gauss.time_integrators.events import _bdf2_variable_form
+
+    class _SlowFarField:
+        def __init__(self) -> None:
+            self.alternative_calls = 0
+
+        def residual(self, u_arg, u_dot, u_ddot, t):
+            return u_arg / (1.0 + u_arg * u_arg) ** 0.24
+
+        def jacobian(self, u_arg, u_dot, u_ddot, t, weights):
+            q = 1.0 + u_arg * u_arg
+            return np.diag(q**-0.24 - 0.48 * u_arg * u_arg * q**-1.24)
+
+        def jacobian_tangent(self, u_arg, u_dot, u_ddot, t, weights):
+            self.alternative_calls += 1
+            return -self.jacobian(u_arg, u_dot, u_ddot, t, weights)
+
+    solve = lambda j, r: np.linalg.solve(np.asarray(j), r)  # noqa: E731 -- the seam's solve
+    state = IntegratorState(us=[np.zeros(1), np.zeros(1)], t=0.0)
+    form = _bdf2_variable_form(state, 0.1, 0.1, 0.1)
+    # Both line searches: the strict one, and the march's own tolerant band (`integrate_transient`
+    # accepts a trial up to 1.5x the current residual, so a bad alternative is never CAPPED there --
+    # it is accepted while the residual climbs, which is what ipm_uv's t = 4.44 ms step did).
+    for band, cap in ((None, 8), (1.5, 4)):
+        problem = _SlowFarField()
+        _u, converged, iterations, residual, _on_floor = _solve_step(
+            problem,
+            form,
+            np.array([20.0]),
+            solve=solve,
+            max_newton=100,
+            tol=1e-10,
+            backtrack_band=band,
+            backtrack_cap=cap,
+        )
+        assert problem.alternative_calls > 0, 'the precondition: the slow far field must engage the polish'
+        assert converged, f'band {band}: the step exhausted at residual {residual:g} after {iterations} iterations'
+
+
 def test_a_discarded_bisection_probe_does_not_count_as_a_nonconverged_STEP() -> None:
     """``converged`` must mean what it says: every step OF THE SOLUTION met the tolerance.
 

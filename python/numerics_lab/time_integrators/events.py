@@ -53,6 +53,7 @@ circuit, no device, no physics.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
@@ -63,6 +64,7 @@ from motronics.contracts.spec.analysis_formulation import FactorReusableProblem
 from motronics.contracts.spec.study_spec import TransientStudy
 from motronics.gauss.time_integrators import (
     FactorCache,
+    HeldFactor,
     IntegratorState,
     TransientSolution,
     _bdf2_variable_form,
@@ -70,6 +72,8 @@ from motronics.gauss.time_integrators import (
     _solve_step,
     get_integrator,
 )
+
+logger = logging.getLogger(__name__)
 
 __all__ = ['EventfulTransientSolution', 'integrate_transient_with_events']
 
@@ -135,6 +139,49 @@ def _sign(value: float) -> bool:
     return value >= 0.0
 
 
+def _locate_bracket(
+    lo_t: float, g_lo: float, hi_t: float, g_hi: float, probe: Callable[[float], float], tol: float
+) -> tuple[float, float]:
+    """Shrink a sign-change bracket to ``tol`` wide; every ``probe`` is a whole re-step.
+
+    ILLINOIS regula falsi, safeguarded: the secant point is probed, and the end that survives twice
+    has its ``g`` halved so neither end stalls. A probe is aimed half a tolerance
+    bracket past the secant root, so a secant that has converged straddles the root and closes the
+    bracket in one more probe. Two probes that do not together halve the bracket earn a bisection
+    (Brent's guard), so a pathological ``g`` still terminates. Same sign convention, same final width, same midpoint
+    rule as the plain bisection this replaced (which spent ~21 re-steps per crossing, measured).
+    """
+    lo_sign = _sign(g_lo)
+    side = 0  # which end moved on the last probe: -1 lo, +1 hi
+    widths = [hi_t - lo_t]
+    while hi_t - lo_t > tol:
+        width = hi_t - lo_t
+        # Brent's guard: two probes that did not together halve the bracket earn a bisection.
+        if len(widths) >= 3 and width > 0.5 * widths[-3]:
+            mid_t = 0.5 * (lo_t + hi_t)
+            widths.clear()
+        elif g_hi == g_lo or not (np.isfinite(g_lo) and np.isfinite(g_hi)):
+            mid_t = 0.5 * (lo_t + hi_t)
+        else:
+            # Aim half a tolerance PAST the secant root, toward the end that did not move: once the
+            # secant has converged this probe straddles the root and the bracket closes.
+            mid_t = hi_t - g_hi * width / (g_hi - g_lo) + (0.5 * tol if side <= 0 else -0.5 * tol)
+            mid_t = min(max(mid_t, lo_t + 0.25 * tol), hi_t - 0.25 * tol)
+        g_mid = probe(mid_t)
+        if _sign(g_mid) == lo_sign:
+            lo_t, g_lo = mid_t, g_mid
+            if side == -1:
+                g_hi *= 0.5
+            side = -1
+        else:
+            hi_t, g_hi = mid_t, g_mid
+            if side == 1:
+                g_lo *= 0.5
+            side = 1
+        widths.append(hi_t - lo_t)
+    return lo_t, hi_t
+
+
 def integrate_transient_with_events(
     problem,
     study: TransientStudy,
@@ -157,6 +204,7 @@ def integrate_transient_with_events(
     adaptive: bool = False,
     h_min: float | None = None,
     refine: float | None = None,
+    refactor_every: int | None = None,
 ) -> EventfulTransientSolution:
     """March ``problem`` over ``study``, stopping the grid at every zero of ``event_fns``.
 
@@ -223,6 +271,7 @@ def integrate_transient_with_events(
     cache on their own -- a stale factor across an event is impossible unless the key itself
     under-reads the system (the hole the module docstring names).
     """
+    held = HeldFactor(refactor_every) if refactor_every is not None else None
     if factor_cache is None and isinstance(problem, FactorReusableProblem):
         factor_cache = FactorCache()
     integrator = get_integrator(study.integrator)
@@ -260,6 +309,9 @@ def integrate_transient_with_events(
     # suppressed with the spurious one -- physically indistinguishable from chatter, which
     # _MAX_EVENTS_PER_CELL already refuses.
     last_fired: dict[int, float] = {}
+    # Whether the MOST RECENT step to each instant failed. A rejected attempt and the shortened steps
+    # that later reach the same instant share its time, so the time alone cannot say which one landed.
+    latest_failed: dict[float, bool] = {}
 
     def step_from(
         from_state: IntegratorState, from_prev_dt: float | None, dt_step: float, t_new: float
@@ -285,6 +337,7 @@ def integrate_transient_with_events(
             backtrack_band=backtrack_band,
             backtrack_cap=backtrack_cap,
             gmin_stages=gmin_stages,
+            held=held,
         )
         # The convergence contract rides the eventful march too: an exhausted step is labelled on
         # the solution, never silent. But WHICH list it belongs in is not knowable here -- this
@@ -301,6 +354,7 @@ def integrate_transient_with_events(
             solution.floor_converged_times.append(t_new)
         if not converged:
             solution.nonconverged_probe_times.append(t_new)
+        latest_failed[t_new] = not converged
         return integrator.advance(from_state, u_new, dt_step, t_new), u_new, converged
 
     def _commit(t_new: float, u_new: NDArray) -> None:
@@ -309,7 +363,10 @@ def integrate_transient_with_events(
         solution.states.append(u_new)
         # The step that produced this point recorded any failure against t_new; it landed, so it
         # is a real non-converged STEP. Only the most recent such record is promoted -- an earlier
-        # discarded probe at the same instant stays a probe.
+        # discarded probe at the same instant stays a probe, and so does every record when the step
+        # that actually reached this instant converged (a retry's halves re-land a rejected target).
+        if not latest_failed.get(t_new, False):
+            return
         for j in range(len(solution.nonconverged_probe_times) - 1, -1, -1):
             if solution.nonconverged_probe_times[j] == t_new:
                 del solution.nonconverged_probe_times[j]
@@ -456,17 +513,13 @@ def integrate_transient_with_events(
                 elif t_step - t_from <= bracket_tol:
                     candidates.append((t_from, i, np.array(checkpoint.state.last_u, dtype=float, copy=True)))
                 else:
-                    lo_t, lo_sign = t_from, _sign(g_prev[i])
-                    hi_t = t_step
-                    u_mid = u_probe
-                    while hi_t - lo_t > bracket_tol:
-                        mid_t = 0.5 * (lo_t + hi_t)
+
+                    def _probe(mid_t: float, i: int = i, t_from: float = t_from, checkpoint=checkpoint) -> float:
                         trial_state, trial_prev_dt = _rollback(checkpoint, solution)
                         _ps, u_mid, _ok = step_from(trial_state, trial_prev_dt, mid_t - t_from, mid_t)
-                        if _sign(float(event_fns[i](u_mid, mid_t))) == lo_sign:
-                            lo_t = mid_t
-                        else:
-                            hi_t = mid_t
+                        return float(event_fns[i](u_mid, mid_t))
+
+                    lo_t, hi_t = _locate_bracket(t_from, float(g_prev[i]), t_step, float(g_new[i]), _probe, bracket_tol)
                     t_star_i = 0.5 * (lo_t + hi_t)
                     trial_state, trial_prev_dt = _rollback(checkpoint, solution)
                     _ps, u_star_i, _ok = step_from(trial_state, trial_prev_dt, t_star_i - t_from, t_star_i)
@@ -524,4 +577,6 @@ def integrate_transient_with_events(
             if pending_dt <= bracket_tol:  # the event consumed the rest of the cell
                 break
         # end of one nominal cell
+    if held is not None:
+        logger.info('held-factor march: factorizations=%d solves=%d', held.factorizations, held.solves)
     return solution

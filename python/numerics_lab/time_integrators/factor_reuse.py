@@ -71,6 +71,7 @@ from scipy.linalg import lu_factor, lu_solve
 from scipy.sparse.linalg import splu
 
 from motronics.gauss.linear import reject_nonfinite_solution, reject_unsolved_direct_system
+from motronics.gauss.linear.native_direct import native_factor
 
 __all__ = ['FactorCache', 'apply_factor', 'factor_matrix']
 
@@ -93,7 +94,10 @@ def factor_matrix(matrix: object) -> object:
     is exactly the branch below.
     """
     if sp.issparse(matrix):
-        return splu(sp.csc_matrix(matrix))
+        # The native factor first, with ``splu``'s ``solve(b)`` shape; ``None`` (logged and
+        # counted by ``native_direct``) when the extension cannot serve this operator.
+        native = native_factor(matrix)
+        return native if native is not None else splu(sp.csc_matrix(matrix))
     m = np.asarray(matrix, dtype=float)
     if m.ndim == 0:  # scalar jacobian (1-DOF problem written as a plain number)
         return float(m)
@@ -110,7 +114,7 @@ def apply_factor(factor: object, b: NDArray[np.floating]) -> NDArray[np.floating
         return b / factor
     if isinstance(factor, tuple):  # dense (lu, piv)
         return lu_solve(factor, b)
-    return factor.solve(b)  # sparse SuperLU factor
+    return factor.solve(b)  # sparse factor: native (faer) or SuperLU, both `solve(b)`-shaped
 
 
 class FactorCache:
