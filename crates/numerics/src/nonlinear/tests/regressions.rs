@@ -155,22 +155,68 @@ fn plateau_system(x0: f64) -> Synth {
     s
 }
 
-/// Every registered strategy except two, EXCLUDED BY NAME with their reasons rather than by a
-/// silent filter: `continuation` wraps another strategy and is driven through `scale_source`, and
+/// Every registered strategy except five, EXCLUDED BY NAME with their reasons rather than by a
+/// silent filter: `continuation` wraps another strategy and is driven through `scale_source`,
 /// `nu-damped` needs the raw pre-fold pair and refuses a system without it (it runs the same loop
-/// and the same `has_converged` as `picard-damped`).
-const PLATEAU_DRIVABLE: [&str; 10] = [
+/// and the same `has_converged` as `picard-damped`), and `newton` / `newton-linesearch` /
+/// `newton-held-factor` REFUSE a system with no tangent (2026-09-25) -- they are held to the
+/// plateau on a tangent-bearing fixture below.
+const PLATEAU_DRIVABLE: [&str; 8] = [
     "anderson",
     "bfgs",
     "l-bfgs",
     "modified-newton",
-    "newton",
     "newton-krylov",
-    "newton-linesearch",
     "picard",
     "picard-damped",
     "quasi-newton",
 ];
+
+/// The three registry names of the ONE Newton, which judges the RESIDUAL and needs a tangent.
+const NEWTON_NAMES: [&str; 3] = ["newton", "newton-linesearch", "newton-held-factor"];
+
+#[test]
+fn newton_refuses_a_system_with_no_tangent() {
+    // UNSUPPORTED-RAISES: the Picard step Newton used to take here ran another algorithm under
+    // Newton's name.
+    for name in NEWTON_NAMES {
+        let mut sys = plateau_system(0.0);
+        let res = get_strategy::<Synth>(Some(name))
+            .unwrap()
+            .solve(&mut sys, &opts(3));
+        assert!(
+            matches!(res, Err(NonlinearError::UnsupportedSystem { .. })),
+            "{name} ran on a system with no tangent"
+        );
+    }
+}
+
+#[test]
+fn newton_is_not_fooled_by_a_flat_energy_and_still_converges_at_the_root() {
+    // The plateau map with its tangent (r = x - g(x) = 0.5 (x - 10), so J = 0.5): the residual,
+    // not the flat energy, decides, so a capped solve short of 10 cannot report convergence and a
+    // solve allowed to run lands on it.
+    for name in NEWTON_NAMES {
+        let mut sys = plateau_system(0.0);
+        sys.tangent_diag = Some(vec![0.5]);
+        let res = get_strategy::<Synth>(Some(name))
+            .unwrap()
+            .solve(&mut sys, &opts(1))
+            .unwrap();
+        assert!(!(res.converged && (res.x[0] - 10.0).abs() > 1e-3), "{name}");
+        let mut sys = plateau_system(0.0);
+        sys.tangent_diag = Some(vec![0.5]);
+        let res = get_strategy::<Synth>(Some(name))
+            .unwrap()
+            .solve(&mut sys, &opts(10))
+            .unwrap();
+        assert!(
+            res.converged,
+            "{name} did not converge on a linear residual"
+        );
+        assert!((res.x[0] - 10.0).abs() < 1e-9, "{name}: {}", res.x[0]);
+    }
+}
 
 #[test]
 fn a_constant_energy_is_not_reported_as_convergence() {
@@ -217,8 +263,9 @@ fn creeping_system(steps: Vec<f64>) -> Synth {
 }
 
 /// The strategies whose step IS the Picard map's, so a synthetic map can pin their increment.
-/// Anderson and the quasi-Newton family mix their own steps from history.
-const CREEP_DRIVABLE: [&str; 3] = ["picard", "picard-damped", "newton"];
+/// Anderson and the quasi-Newton family mix their own steps from history, and `newton` left this
+/// set on 2026-09-25: it no longer steps the Picard map of a tangent-less system, it refuses it.
+const CREEP_DRIVABLE: [&str; 2] = ["picard", "picard-damped"];
 
 #[test]
 fn a_stationary_increment_under_a_passing_energy_converges_before_the_cap() {

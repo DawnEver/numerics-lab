@@ -32,8 +32,8 @@ mod quasi;
 
 pub use budget::{with_time_budget, TimeBudgetedSystem, BUDGETED_CALLS};
 pub use newton::{
-    ContinuationStrategy, ModifiedNewtonStrategy, NewtonKrylovStrategy, NewtonLineSearchStrategy,
-    NewtonStrategy,
+    ContinuationStrategy, HeldFactorNewtonStrategy, ModifiedNewtonStrategy, NewtonKrylovStrategy,
+    NewtonLineSearchStrategy, NewtonStrategy,
 };
 pub use picard::{DampedPicardStrategy, NuRelaxationDampedPicardStrategy, PicardStrategy};
 pub use quasi::{AndersonStrategy, BfgsStrategy, BroydenStrategy, LbfgsStrategy};
@@ -44,8 +44,29 @@ pub use quasi::{AndersonStrategy, BfgsStrategy, BroydenStrategy, LbfgsStrategy};
 pub const ALPHA_MIN: f64 = 0.1;
 /// Damped-Picard recovery factor after a calm window.
 pub const ALPHA_GROW: f64 = 1.5;
-/// Convergence: total-energy change below this fraction of a percent.
+/// Convergence: total-energy change below this fraction of a percent -- the FIXED-POINT bar
+/// (`1e-4` relative), the default of every strategy whose [`StopRule`] is [`StopRule::Energy`].
+/// The Python's `core.fixed_point_rtol`.
 pub const RTOL_ENERGY_PCT: f64 = 0.01;
+
+/// The RESIDUAL-stopped (Newton-family) bar, in the same percent unit: `1e-6` relative.
+///
+/// The Python's `core.newton_rtol` (its own config field since the 2026-09-26 user ruling): at the
+/// fixed-point `1e-4` Newton left `dA ~ 6e-5` on `spm_slotted`, and a quadratic iteration or two
+/// buys `1e-6`. [`default_rtol_energy_pct`] routes each strategy to one of the two by its declared
+/// [`StopRule`], exactly as `hamilton.nonlinear_defaults.stop_rtol_energy_pct` does.
+pub const NEWTON_RTOL_PCT: f64 = 1e-4;
+
+/// What a strategy judges convergence on -- DECLARED by the strategy
+/// ([`IterationStrategy::stop_rule`]), never listed beside it, so a Newton variant registered later
+/// answers by construction. Mirrors the Python's `stop_rule` attribute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopRule {
+    /// The total-energy change (plus the increment floor): every fixed-point / quasi-Newton method.
+    Energy,
+    /// The equation's residual against `max(seed residual, rhs)` (plus the increment): Newton.
+    Residual,
+}
 
 /// Consecutive UNDISTURBED steps (no energy-error growth, no energy-delta sign flip) before the
 /// damped Picard loop grows `alpha` back.
@@ -94,13 +115,14 @@ pub const STAGNATION_MAX_MIN_RATIO: f64 = 2.0;
 pub const DEFAULT_SOLVE_BUDGET_S: f64 = 500.0;
 
 /// The registry's spellings, in one place so the resolver and its error cannot drift.
-pub const KNOWN_STRATEGIES: [&str; 12] = [
+pub const KNOWN_STRATEGIES: [&str; 13] = [
     "anderson",
     "bfgs",
     "continuation",
     "l-bfgs",
     "modified-newton",
     "newton",
+    "newton-held-factor",
     "newton-krylov",
     "newton-linesearch",
     "nu-damped",
@@ -282,7 +304,17 @@ pub trait NonlinearSystem: Sized {
         Ok(norm(&self.residual(x, state)?))
     }
 
-    /// Optional Newton tangent operator; `None` falls back to a Picard step.
+    /// Free-DOF norm of the right-hand side, the scale of Newton's relative residual.
+    ///
+    /// `None` (the default) judges Newton against the seed residual, exact for a zero seed.
+    ///
+    /// # Errors
+    /// As [`Self::assemble`].
+    fn rhs_norm(&mut self, _state: &StateOf<Self>) -> Result<Option<f64>, NonlinearError> {
+        Ok(None)
+    }
+
+    /// Optional Newton tangent operator; `None` makes a Newton strategy refuse the system.
     ///
     /// # Errors
     /// As [`Self::assemble`].
@@ -427,6 +459,18 @@ impl SolveOptions {
         }
     }
 
+    /// `max_iter` iterations at the default bar of strategy `name` ([`default_rtol_energy_pct`]).
+    ///
+    /// # Errors
+    /// [`NonlinearError::UnknownStrategy`].
+    pub fn for_strategy(name: &str, max_iter: usize) -> Result<Self, NonlinearError> {
+        Ok(Self {
+            max_iter,
+            rtol_energy_pct: default_rtol_energy_pct(name)?,
+            ..Self::default()
+        })
+    }
+
     /// The iterate a solve starts from.
     pub(crate) fn start<S: NonlinearSystem>(&self, system: &S) -> Vec<f64> {
         self.seed.clone().unwrap_or_else(|| system.initial_guess())
@@ -441,6 +485,11 @@ pub trait IterationStrategy<S: NonlinearSystem> {
     /// The system capabilities this strategy needs, or `&[]` when it needs nothing special.
     fn requires(&self) -> &'static [&'static str] {
         &[]
+    }
+
+    /// What this strategy stops on. The energy change unless the strategy declares otherwise.
+    fn stop_rule(&self) -> StopRule {
+        StopRule::Energy
     }
 
     /// Drive `system` to its fixed point.
@@ -511,6 +560,22 @@ pub fn energy_error_pct(total_energy: f64, last_energy: Option<f64>) -> f64 {
 #[must_use]
 pub fn has_converged(err: f64, x: &[f64], x_next: &[f64], rtol_energy_pct: f64) -> bool {
     err < rtol_energy_pct && increment_ratio(x, x_next) < rtol_energy_pct / 100.0
+}
+
+/// The residual half of the ONE rule, for a strategy that holds the residual (the Newton family).
+///
+/// `residual_ratio = ||r(x_next)|| / max(||r(x_0)||, ||rhs||)` below `rtol_energy_pct / 100`,
+/// AND the same increment half [`has_converged`] applies. Port of the Python `_has_converged`'s
+/// `residual_ratio=` form (2026-09-25).
+#[must_use]
+pub fn has_converged_residual(
+    x: &[f64],
+    x_next: &[f64],
+    rtol_energy_pct: f64,
+    residual_ratio: f64,
+) -> bool {
+    let rtol = rtol_energy_pct / 100.0;
+    residual_ratio < rtol && increment_ratio(x, x_next) < rtol
 }
 
 /// The stagnation break, consulted NEXT TO [`has_converged`] — never instead of it.
@@ -718,6 +783,58 @@ pub fn strategy_runs_on<S: NonlinearSystem>(
     Ok(strategy_requires(name)?.is_empty() || system.supports_raw_mixing())
 }
 
+/// A system with no equation behind it: only a strategy's DECLARATIONS are ever read through it.
+struct Declarations;
+
+impl NonlinearSystem for Declarations {
+    type Matrix = ();
+    type Payload = ();
+
+    fn initial_guess(&self) -> Vec<f64> {
+        Vec::new()
+    }
+
+    fn assemble(&mut self, _x: &[f64]) -> Result<StateOf<Self>, NonlinearError> {
+        Err(NonlinearError::Equation("declarations only".to_owned()))
+    }
+
+    fn solve_linear(&mut self, _state: &StateOf<Self>) -> Result<Vec<f64>, NonlinearError> {
+        Err(NonlinearError::Equation("declarations only".to_owned()))
+    }
+
+    fn residual(&mut self, _x: &[f64], _state: &StateOf<Self>) -> Result<Vec<f64>, NonlinearError> {
+        Err(NonlinearError::Equation("declarations only".to_owned()))
+    }
+
+    fn solve_system(&mut self, _matrix: &(), _rhs: &[f64]) -> Result<Vec<f64>, NonlinearError> {
+        Err(NonlinearError::Equation("declarations only".to_owned()))
+    }
+}
+
+/// Whether strategy `name` judges convergence on the equation's residual (the Newton family).
+///
+/// Read off the strategy's own [`IterationStrategy::stop_rule`]; the port of the Python
+/// `strategy_stops_on_residual`.
+///
+/// # Errors
+/// [`NonlinearError::UnknownStrategy`].
+pub fn strategy_stops_on_residual(name: &str) -> Result<bool, NonlinearError> {
+    Ok(get_strategy::<Declarations>(Some(name))?.stop_rule() == StopRule::Residual)
+}
+
+/// The default stop bar of strategy `name`, in percent: [`NEWTON_RTOL_PCT`] for a residual stop,
+/// [`RTOL_ENERGY_PCT`] otherwise. A caller with its own bar (a golden above all) states it.
+///
+/// # Errors
+/// [`NonlinearError::UnknownStrategy`].
+pub fn default_rtol_energy_pct(name: &str) -> Result<f64, NonlinearError> {
+    Ok(if strategy_stops_on_residual(name)? {
+        NEWTON_RTOL_PCT
+    } else {
+        RTOL_ENERGY_PCT
+    })
+}
+
 /// Resolve an iteration-strategy name; `None` -> the default damped Picard (today's behaviour).
 ///
 /// # Errors
@@ -725,18 +842,20 @@ pub fn strategy_runs_on<S: NonlinearSystem>(
 pub fn get_strategy<S: NonlinearSystem + 'static>(
     name: Option<&str>,
 ) -> Result<Box<dyn IterationStrategy<S>>, NonlinearError> {
-    let name = name.unwrap_or("picard-damped");
+    // `None` is Newton, mirroring the Python `DEFAULT_ITERATION_STRATEGY` (2026-09-25).
+    let name = name.unwrap_or("newton");
     let s: Box<dyn IterationStrategy<S>> = match name {
         "picard-damped" => Box::new(DampedPicardStrategy),
         "nu-damped" => Box::new(NuRelaxationDampedPicardStrategy),
         "picard" => Box::new(PicardStrategy),
-        "newton" => Box::new(NewtonStrategy),
+        "newton" => Box::new(NewtonStrategy::default()),
         "anderson" => Box::new(AndersonStrategy::default()),
         "modified-newton" => Box::new(ModifiedNewtonStrategy::default()),
         "quasi-newton" => Box::new(BroydenStrategy::default()),
         "bfgs" => Box::new(BfgsStrategy::default()),
         "l-bfgs" => Box::new(LbfgsStrategy::default()),
         "newton-linesearch" => Box::new(NewtonLineSearchStrategy::default()),
+        "newton-held-factor" => Box::new(HeldFactorNewtonStrategy::default()),
         "newton-krylov" => Box::new(NewtonKrylovStrategy::default()),
         "continuation" => Box::new(ContinuationStrategy::<S>::default()),
         _ => {

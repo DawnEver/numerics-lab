@@ -31,7 +31,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from motronics.gauss.nonlinear import ITERATION_REGISTRY, AssembledState, get_strategy
+from motronics.gauss.nonlinear import ITERATION_REGISTRY, AssembledState, NewtonTangentUnavailable, get_strategy
 
 _X_STAR = 10.0
 _PLATEAU_ENERGY = 100.0
@@ -48,7 +48,11 @@ _PLATEAU_ENERGY = 100.0
 # `nu-damped` therefore still carries its own two-metric energy-AND-flux rule, NOT `_has_converged`.
 # That is a NAMED hole in this file's scope, not a claim that it is covered: its flux metric is
 # `max|x|`, iterate-derived and so not vulnerable in the same way, but nothing here proves that.
-_UNDRIVABLE = {'continuation', 'nu-damped'}
+#   `newton` / `newton-linesearch` (the ONE Newton, two names) REFUSE a system with no tangent since
+#     2026-09-25 -- this fixture offers none, so they are held to the same two properties on
+#     `_TangentPlateauSystem` below instead, and their refusal is pinned too.
+_NEWTON = ('newton', 'newton-linesearch', 'newton-held-factor')
+_UNDRIVABLE = {'continuation', 'nu-damped', *_NEWTON}
 _STRATEGIES = sorted(set(ITERATION_REGISTRY) - _UNDRIVABLE)
 
 
@@ -91,10 +95,9 @@ class _PlateauSystem:
         return None
 
     def solve_system(self, matrix, rhs, /):
-        # No tangent is offered (`tangent` returns None), so the Newton family falls back to the
-        # Picard substitution and never calls this. The quasi-Newton family solves the SECANT
-        # system instead, below.
-        raise NotImplementedError
+        # No tangent is offered (`tangent` returns None): Newton refuses the system, modified-newton
+        # takes the Picard substitution, and the quasi-Newton family solves the SECANT system below.
+        return np.asarray(rhs, dtype=float) / float(matrix)
 
     def solve_secant(self, state, rhs, /):
         # H0 = I: the secant operator for this scalar map. Enough for Broyden / BFGS / L-BFGS to
@@ -137,3 +140,41 @@ def test_a_genuine_fixed_point_is_still_reported_as_converged(name: str):
         f'above proves nothing -- it would pass on a strategy that never converges at all'
     )
     assert abs(float(result.x[0]) - _X_STAR) < 1e-9
+
+
+class _TangentPlateauSystem(_PlateauSystem):
+    """The same flat-energy plateau WITH the Jacobian of its residual (``r = x - x*``, ``J = 1``).
+
+    What Newton needs to run at all. Its convergence is judged on the RESIDUAL, so the flat energy
+    cannot fool it by construction -- and this file is where that is shown rather than assumed.
+    """
+
+    def __init__(self, x0: float = 0.0) -> None:
+        super().__init__()
+        self._x0 = x0
+
+    def initial_guess(self) -> np.ndarray:
+        return np.array([self._x0])
+
+    def tangent(self, x, state, /):
+        return 1.0
+
+
+@pytest.mark.parametrize('name', _NEWTON)
+def test_newton_refuses_a_system_with_no_tangent(name: str):
+    """UNSUPPORTED-RAISES: the Picard step it used to take ran another algorithm under its name."""
+    with pytest.raises(NewtonTangentUnavailable, match='_PlateauSystem'):
+        get_strategy(name).solve(_PlateauSystem(), max_iter=3)
+
+
+@pytest.mark.parametrize('name', _NEWTON)
+def test_newton_on_the_plateau_lands_on_the_root_and_says_so(name: str):
+    """Both properties at once: no converged=True short of x*, and converged at it."""
+    result = get_strategy(name).solve(_TangentPlateauSystem(), max_iter=3)
+    x = float(result.x[0])
+    assert not (result.converged and abs(x - _X_STAR) > 1e-3), f'{name} converged at {x}'
+    assert result.converged, f'{name} did not converge on a linear residual'
+    assert abs(x - _X_STAR) < 1e-9
+    at_root = get_strategy(name).solve(_TangentPlateauSystem(_X_STAR), max_iter=10)
+    assert at_root.converged
+    assert abs(float(at_root.x[0]) - _X_STAR) < 1e-9

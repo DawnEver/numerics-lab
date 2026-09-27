@@ -209,6 +209,54 @@ impl PyDirectFactorization {
         Ok(x.into_pyarray(py))
     }
 
+    /// `refactor(values) -> "lu" | "cholesky"` — numerically factorise a new value vector on the
+    /// SAME pattern into the held storage, and name the factorisation it took.
+    ///
+    /// The split from [`Self::back_substitute`] is what lets one factor answer several
+    /// right-hand sides (the held-factor Newton, the bordered field<->circuit tangent). No
+    /// residual guard runs here, because there is no right-hand side yet: the caller owes it,
+    /// exactly as it owes it to SciPy's `splu`.
+    fn refactor<'py>(&mut self, values: PyReadonlyArray1<'py, f64>) -> PyResult<&'static str> {
+        let new_values = values.as_array();
+        let slot = self.csr.values_mut();
+        if new_values.len() != slot.len() {
+            return Err(PyValueError::new_err(
+                "values must carry the analysed pattern's nnz",
+            ));
+        }
+        for (dst, &src) in slot.iter_mut().zip(new_values.iter()) {
+            *dst = src;
+        }
+        let kind = self
+            .factorization
+            .refactor(&self.csr)
+            .map_err(|e| PyValueError::new_err(format!("{e:?}")))?;
+        Ok(kind.as_str())
+    }
+
+    /// `back_substitute(rhs, nrhs)` — solve against the factor [`Self::refactor`] produced.
+    ///
+    /// `rhs` is `nrhs` right-hand sides flattened COLUMN-MAJOR (`b.ravel(order="F")`); the result
+    /// has the same layout. Refused when no factor is held.
+    fn back_substitute<'py>(
+        &self,
+        py: Python<'py>,
+        rhs: PyReadonlyArray1<'py, f64>,
+        nrhs: usize,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let mut x = rhs.as_array().to_vec();
+        self.factorization
+            .solve_in_place(&mut x, nrhs)
+            .map_err(|e| PyValueError::new_err(format!("{e:?}")))?;
+        Ok(x.into_pyarray(py))
+    }
+
+    /// The factorisation the last refactor took (`"lu"` / `"cholesky"`), or `None`.
+    #[getter]
+    fn kind(&self) -> Option<&'static str> {
+        self.factorization.kind().map(|k| k.as_str())
+    }
+
     /// The order of the analysed system.
     #[getter]
     fn n(&self) -> usize {

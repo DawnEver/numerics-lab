@@ -27,10 +27,13 @@
 //! 2.3e-10 was inside it by two orders the whole time. The user accepted the departure on
 //! 2026-09-05 ("accept for now"), which removes it as an objection and leaves the constant untouched.
 //!
-//! It does NOT reopen the wiring decision. `gauss::linear::direct` is unwired because there is no
-//! size crossover to defend -- 31,901 -> 0.81x, 32,572 -> 1.70x, 35,430 -> 0.78x, reproduced at 9
-//! repeats with non-overlapping ranges -- and a tolerance ruling says nothing about a speed one.
-//! See `scripts/gate/seam_profile.py` for that verdict and its numbers.
+//! The wiring decision it did not reopen was reopened on 2026-09-26 by a SPEED finding: the old
+//! crossover (31,901 -> 0.81x, 32,572 -> 1.70x, 35,430 -> 0.78x) was `SupernodalThreshold::AUTO`
+//! picking the simplicial kernel. With supernodal forced, one reused numeric factor, Cholesky on an
+//! exactly symmetric operator, one refinement step and a Schur border for dense rows,
+//! `gauss::linear::direct::DirectFactorization` is the Python `direct` backend's default through
+//! `gauss.linear.native_direct` (SciPy stays the logged fallback). The refinement step makes this
+//! side agree with the Python BETTER than before, so the bars below are unchanged.
 
 use contracts::sparse::{Coo, Csr};
 use gauss::linear::{

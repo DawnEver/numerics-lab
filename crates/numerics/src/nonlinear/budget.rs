@@ -124,6 +124,10 @@ impl<S: NonlinearSystem, C: Fn() -> f64> NonlinearSystem for TimeBudgetedSystem<
         self.inner.residual_norm(x, state)
     }
 
+    fn rhs_norm(&mut self, state: &StateOf<Self>) -> Result<Option<f64>, NonlinearError> {
+        self.inner.rhs_norm(state)
+    }
+
     fn tangent(
         &mut self,
         x: &[f64],
