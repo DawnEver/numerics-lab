@@ -140,7 +140,7 @@ def _sign(value: float) -> bool:
 
 
 def _locate_bracket(
-    lo_t: float, g_lo: float, hi_t: float, g_hi: float, probe: Callable[[float], float], tol: float
+    lo_t: float, g_lo: float, hi_t: float, g_hi: float, probe: Callable[[float], float], *, tol: float
 ) -> tuple[float, float]:
     """Shrink a sign-change bracket to ``tol`` wide; every ``probe`` is a whole re-step.
 
@@ -519,7 +519,9 @@ def integrate_transient_with_events(
                         _ps, u_mid, _ok = step_from(trial_state, trial_prev_dt, mid_t - t_from, mid_t)
                         return float(event_fns[i](u_mid, mid_t))
 
-                    lo_t, hi_t = _locate_bracket(t_from, float(g_prev[i]), t_step, float(g_new[i]), _probe, bracket_tol)
+                    lo_t, hi_t = _locate_bracket(
+                        t_from, float(g_prev[i]), t_step, float(g_new[i]), _probe, tol=bracket_tol
+                    )
                     t_star_i = 0.5 * (lo_t + hi_t)
                     trial_state, trial_prev_dt = _rollback(checkpoint, solution)
                     _ps, u_star_i, _ok = step_from(trial_state, trial_prev_dt, t_star_i - t_from, t_star_i)
