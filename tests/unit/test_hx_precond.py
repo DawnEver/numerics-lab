@@ -3,7 +3,7 @@
 Hiptmair-Xu / AMS is NOT applicable here -- it preconditions the curl-curl (edge-element,
 H(curl)) operator, which this codebase does not have (the FEA solve is the SPD 2D scalar
 nodal Poisson ``-div(nu grad A) = J``). See
-``git show d212b178f^:src/motronics/gauss/.claude/memory/2026/07/10/finding-hiptmair-xu-assessment.md`` and the module docstring of
+``src/motronics/gauss/.claude/memory/2026/07/10/finding-hiptmair-xu-assessment.md`` and the module docstring of
 ``gauss/linear/ssor.py`` (SSOR relocated there as a physics-blind algebraic primitive).
 
 These tests characterize the honest in-scope increment instead: an additive SSOR

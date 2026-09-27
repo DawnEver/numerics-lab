@@ -1,6 +1,6 @@
 """The nonlinear-strategy port's golden ITERATION TRAJECTORIES — one file, read by BOTH languages.
 
-`git show d212b178f^:.claude/memory/2026/09/03/plan-rust-migration-execution.md` ports
+`.claude/memory/2026/09/03/plan-rust-migration-execution.md` ports
 `src/motronics/gauss/nonlinear/` to `rust/crates/gauss/src/nonlinear/`. Two implementations of
 one iteration scheme need a way to be compared, and the obvious one — call the Rust from Python
 across the FFI — is not available on this workstation: a second native extension cannot be

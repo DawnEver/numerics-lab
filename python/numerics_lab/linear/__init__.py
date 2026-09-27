@@ -1,6 +1,6 @@
 """Pluggable INNER linear-solve seam -- one registry of ``solve(matrix, rhs) -> x`` backends.
 
-Roadmap ``git show d212b178f^:src/motronics/hamilton/.claude/memory/2026/07/09/roadmap-solver-methods.md`` sec 2: today every solve is a direct
+Roadmap ``src/motronics/hamilton/.claude/memory/2026/07/09/roadmap-solver-methods.md`` sec 2: today every solve is a direct
 sparse factorization (MEC ``_ReluctanceSystem.solve_system`` and FEA ``fea/_solve.py::_solve`` both
 call :func:`scipy.sparse.linalg.spsolve`). This module extracts that one call behind a
 :data:`LINEAR_SOLVER_REGISTRY` so a solve can pick a KRYLOV iterative solver (needed by JFNK /

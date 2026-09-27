@@ -1,6 +1,6 @@
 """Pluggable nonlinear-iteration strategies, decoupled from the governing equation.
 
-Design ``git show d212b178f^:src/motronics/gauss/.claude/memory/2026/07/09/design-solver-iteration-decoupling.md`` (a179884): the
+Design ``src/motronics/gauss/.claude/memory/2026/07/09/design-solver-iteration-decoupling.md`` (a179884): the
 governing equation knows how to ASSEMBLE (given the current iterate, produce the system matrix,
 the energy, and whatever payload the caller returns); the STRATEGY knows how to ITERATE (Picard,
 damped-Picard, Newton). They meet at the small :class:`NonlinearSystem` protocol, so a solver
