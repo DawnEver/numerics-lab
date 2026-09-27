@@ -199,6 +199,7 @@ struct NuMix {
     k_seq: Vec<f64>,
     calls: usize,
     folded: Vec<(f64, f64)>,
+    trace: Vec<(f64, f64, f64)>,
 }
 
 impl NonlinearSystem for NuMix {
@@ -245,6 +246,16 @@ impl NonlinearSystem for NuMix {
             total_energy: raw.total_energy,
             payload: None,
         }))
+    }
+    fn on_iteration(
+        &mut self,
+        _i: usize,
+        _state: &StateOf<Self>,
+        err: f64,
+        alpha: f64,
+        increment: f64,
+    ) {
+        self.trace.push((alpha, err, increment));
     }
 }
 
@@ -328,6 +339,7 @@ fn nu_damped_mixes_the_raw_arrays_the_way_the_python_does() {
         k_seq: floats(&nu["k_seq"]),
         calls: 0,
         folded: Vec::new(),
+        trace: Vec::new(),
     };
     let opts = SolveOptions {
         max_iter: nu["max_iter"].as_u64().expect("max_iter") as usize,
@@ -342,6 +354,17 @@ fn nu_damped_mixes_the_raw_arrays_the_way_the_python_does() {
     for (k, ((vals, source), w)) in sys.folded.iter().zip(want).enumerate() {
         close_opt(*vals, &w[0], &format!("nu_damped.folded[{k}].vals"));
         close_opt(*source, &w[1], &format!("nu_damped.folded[{k}].source"));
+    }
+    let want_trace = nu["trace"].as_array().expect("trace is an array");
+    assert_eq!(sys.trace.len(), want_trace.len(), "nu_damped: trace length");
+    for (k, ((alpha, err, inc), w)) in sys.trace.iter().zip(want_trace).enumerate() {
+        close_opt(*alpha, &w["alpha"], &format!("nu_damped.trace[{k}].alpha"));
+        close_opt(*err, &w["err"], &format!("nu_damped.trace[{k}].err"));
+        close_opt(
+            *inc,
+            &w["increment"],
+            &format!("nu_damped.trace[{k}].increment"),
+        );
     }
     assert_eq!(
         res.iterations,

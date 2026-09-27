@@ -27,7 +27,6 @@ import numpy as np
 __all__ = [
     'DEFAULT_SOLVE_BUDGET_S',
     'ITERATION_REGISTRY',
-    'AdaptiveDampedPicardStrategy',
     'AndersonStrategy',
     'AssembledState',
     'BFGSStrategy',
@@ -45,6 +44,7 @@ __all__ = [
     'NonlinearSystem',
     'NuRelaxationDampedPicardStrategy',
     'PicardStrategy',
+    'ResidualMarchStrategy',
     'get_strategy',
     'increment_ratio',
     'strategy_requires',
@@ -53,8 +53,8 @@ __all__ = [
 ]
 
 # Damped-Picard parameters (moved verbatim from mec/_sparse.py so the extracted loop is identical).
-_ALPHA_MIN = 0.1  # floor for the adaptive under-relaxation factor
-_ALPHA_GROW = 1.5  # adaptive-Picard recovery factor: grow alpha back toward 1 on a progressing step
+_ALPHA_MIN = 0.1  # floor for the damped under-relaxation factor
+_ALPHA_GROW = 1.5  # damped-Picard recovery factor after a calm window
 _RTOL_ENERGY_PCT = 0.01  # convergence: total-energy change below this fraction of a percent
 #: Consecutive UNDISTURBED steps (no energy-error growth, no energy-delta sign flip) before the
 #: damped Picard loop grows ``alpha`` back. The ratchet used to be one-way, so a single early
@@ -74,12 +74,16 @@ class AssembledState:
         total_energy: the scalar the convergence test tracks.
         payload: equation-specific extras the CALLER reads back off the final state (e.g. the
             per-branch energy/flux/B for MEC); the strategy never inspects it.
+        material_change: relative change of the IRREVERSIBLE material state this assembly's trial
+            implies (`gauss.nonlinear.material_state`); ``0`` for a system whose materials are all
+            reversible. The material term of :func:`_has_converged`.
 
     """
 
     system_matrix: object
     total_energy: float
     payload: object = None
+    material_change: float = 0.0
 
 
 @dataclass
@@ -376,8 +380,18 @@ def _has_converged(
     x: np.ndarray,
     x_next: np.ndarray,
     rtol_energy_pct: float,
+    *,
+    material_change: float,
 ) -> bool:
-    """The ONE convergence rule: the energy has settled AND the iterate has stopped moving.
+    """The ONE convergence rule: the energy has settled, the iterate has stopped moving, AND the
+    irreversible material state has stopped changing.
+
+    THE MATERIAL TERM (D4, 2026-09-25). A reversible law (steel B-H) is a function of the iterate,
+    so the iterate test already sees it settle and its change is ``0``. A one-way remanence clamp
+    is NOT: its state is history, and an iterate can sit still for a step while the clamp is still
+    walking down the recoil line. ``material_change`` is that state's relative change on this
+    step, held to the same bar as the increment. It is REQUIRED (keyword, no default) so a strategy
+    cannot consult the rule without deciding what it passes.
 
     A FLAT ENERGY IS NOT A FIXED POINT. `total_energy` can sit on a near-flat plateau that is not
     the solution -- measured on a saturating-BH case, which read 0.00% energy change for 20+
@@ -403,7 +417,8 @@ def _has_converged(
     increment is a FRACTION, so the ``/ 100`` is the unit conversion between them, not a second,
     tighter tolerance.
     """
-    return err < rtol_energy_pct and increment_ratio(x, x_next) < rtol_energy_pct / 100.0
+    bar = rtol_energy_pct / 100.0
+    return err < rtol_energy_pct and increment_ratio(x, x_next) < bar and float(material_change) < bar
 
 
 #: Consecutive steps of the stagnation window. MEASURED (lane K, 2026-09-01): on
@@ -452,8 +467,16 @@ class _StagnationWatch:
         self._errs: deque[float] = deque(maxlen=self._window)
         self._increments: deque[float] = deque(maxlen=self._window)
 
-    def observe(self, err: float, increment: float, /) -> bool:
-        """Record one iteration's pair; True iff the full window is settled AND stationary."""
+    def observe(self, err: float, increment: float, material_change: float, /) -> bool:
+        """Record one iteration's pair; True iff the full window is settled AND stationary.
+
+        A stationary INCREMENT is no escape while the irreversible material state is still moving:
+        ``material_change`` must be under the same bar :func:`_has_converged` holds it to.
+        """
+        if float(material_change) >= self._rtol / 100.0:
+            self._errs.clear()
+            self._increments.clear()
+            return False
         self._errs.append(float(err))
         self._increments.append(float(increment))
         if len(self._errs) < self._window:
@@ -630,38 +653,6 @@ def increment_ratio(x: np.ndarray, x_next: np.ndarray, /) -> float:
     return dx_norm / x_scale
 
 
-def _energy_flux_convergence(
-    total_energy: float,
-    total_flux: float,
-    last_energy: float | None,
-    last_flux: float | None,
-    rtol_energy_pct: float,
-    rtol_flux_pct: float,
-) -> tuple[float, float, bool]:
-    """Energy-AND-flux convergence test (fraction of a percent each), both below tolerance to pass.
-
-    THE ONLY COPY, since 2026-09-06. It began as a copy of
-    ``hamilton.discretizations.fem._post._check_convergence`` -- NOT an import of it, because
-    ``gauss`` sits BELOW ``hamilton`` in the dependency arrow (``hamilton -> ... -> gauss -> core
-    -> contracts``) and cannot import upward. That original had zero callers and was deleted in the
-    commit that fixed the rule below it: two copies of a convergence test, one of them dead, is the
-    drift this docstring used to only warn about, and it became concrete the moment the live one
-    gained an iterate test the dead one would never have received.
-
-    :class:`NuRelaxationDampedPicardStrategy` needs this two-metric check (not the single-metric
-    :func:`_energy_error_pct` the other strategies use) to reproduce the removed FEA frozen loop's
-    exact test. It is a NECESSARY condition there, not a sufficient one: neither metric can see a
-    redistribution that leaves ``max|x|`` alone, so the strategy ANDs it with :func:`_has_converged`.
-    """
-    if last_energy is None or last_flux is None:
-        return np.inf, np.inf, False
-    energy_denom = max(abs(total_energy), abs(last_energy), 1e-12)
-    flux_denom = max(abs(total_flux), abs(last_flux), 1e-12)
-    energy_error_pct = abs(total_energy - last_energy) / energy_denom * 100.0
-    flux_error_pct = abs(total_flux - last_flux) / flux_denom * 100.0
-    return energy_error_pct, flux_error_pct, energy_error_pct < rtol_energy_pct and flux_error_pct < rtol_flux_pct
-
-
 #: THE STRATEGY CLASSES LIVE IN TWO SIBLING MODULES, split 2026-08-22 because this file crossed
 #: the 800-line band: `_strategies_picard.py` (Picard family) and `_strategies_newton.py`
 #: (Newton family + continuation). Each imports the protocols and helpers above FROM THIS MODULE
@@ -677,9 +668,9 @@ from motronics.gauss.nonlinear._strategies_newton import (  # noqa: E402
     NewtonKrylovStrategy,
     NewtonLineSearchStrategy,
     NewtonStrategy,
+    ResidualMarchStrategy,
 )
 from motronics.gauss.nonlinear._strategies_picard import (  # noqa: E402
-    AdaptiveDampedPicardStrategy,
     DampedPicardStrategy,
     NuRelaxationDampedPicardStrategy,
     PicardStrategy,
@@ -688,7 +679,6 @@ from motronics.gauss.nonlinear._strategies_picard import (  # noqa: E402
 ITERATION_REGISTRY: dict[str, IterationStrategy] = {
     'picard-damped': DampedPicardStrategy(),
     'nu-damped': NuRelaxationDampedPicardStrategy(),
-    'picard-adaptive': AdaptiveDampedPicardStrategy(),
     'picard': PicardStrategy(),
     'newton': NewtonStrategy(),
     'anderson': AndersonStrategy(),
