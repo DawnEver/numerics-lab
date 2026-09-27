@@ -27,7 +27,6 @@ import numpy as np
 __all__ = [
     'DEFAULT_SOLVE_BUDGET_S',
     'ITERATION_REGISTRY',
-    'AdaptiveDampedPicardStrategy',
     'AndersonStrategy',
     'AssembledState',
     'BFGSStrategy',
@@ -54,8 +53,8 @@ __all__ = [
 ]
 
 # Damped-Picard parameters (moved verbatim from mec/_sparse.py so the extracted loop is identical).
-_ALPHA_MIN = 0.1  # floor for the adaptive under-relaxation factor
-_ALPHA_GROW = 1.5  # adaptive-Picard recovery factor: grow alpha back toward 1 on a progressing step
+_ALPHA_MIN = 0.1  # floor for the damped under-relaxation factor
+_ALPHA_GROW = 1.5  # damped-Picard recovery factor after a calm window
 _RTOL_ENERGY_PCT = 0.01  # convergence: total-energy change below this fraction of a percent
 #: Consecutive UNDISTURBED steps (no energy-error growth, no energy-delta sign flip) before the
 #: damped Picard loop grows ``alpha`` back. The ratchet used to be one-way, so a single early
@@ -654,38 +653,6 @@ def increment_ratio(x: np.ndarray, x_next: np.ndarray, /) -> float:
     return dx_norm / x_scale
 
 
-def _energy_flux_convergence(
-    total_energy: float,
-    total_flux: float,
-    last_energy: float | None,
-    last_flux: float | None,
-    rtol_energy_pct: float,
-    rtol_flux_pct: float,
-) -> tuple[float, float, bool]:
-    """Energy-AND-flux convergence test (fraction of a percent each), both below tolerance to pass.
-
-    THE ONLY COPY, since 2026-09-06. It began as a copy of
-    ``hamilton.discretizations.fem._post._check_convergence`` -- NOT an import of it, because
-    ``gauss`` sits BELOW ``hamilton`` in the dependency arrow (``hamilton -> ... -> gauss -> core
-    -> contracts``) and cannot import upward. That original had zero callers and was deleted in the
-    commit that fixed the rule below it: two copies of a convergence test, one of them dead, is the
-    drift this docstring used to only warn about, and it became concrete the moment the live one
-    gained an iterate test the dead one would never have received.
-
-    :class:`NuRelaxationDampedPicardStrategy` needs this two-metric check (not the single-metric
-    :func:`_energy_error_pct` the other strategies use) to reproduce the removed FEA frozen loop's
-    exact test. It is a NECESSARY condition there, not a sufficient one: neither metric can see a
-    redistribution that leaves ``max|x|`` alone, so the strategy ANDs it with :func:`_has_converged`.
-    """
-    if last_energy is None or last_flux is None:
-        return np.inf, np.inf, False
-    energy_denom = max(abs(total_energy), abs(last_energy), 1e-12)
-    flux_denom = max(abs(total_flux), abs(last_flux), 1e-12)
-    energy_error_pct = abs(total_energy - last_energy) / energy_denom * 100.0
-    flux_error_pct = abs(total_flux - last_flux) / flux_denom * 100.0
-    return energy_error_pct, flux_error_pct, energy_error_pct < rtol_energy_pct and flux_error_pct < rtol_flux_pct
-
-
 #: THE STRATEGY CLASSES LIVE IN TWO SIBLING MODULES, split 2026-08-22 because this file crossed
 #: the 800-line band: `_strategies_picard.py` (Picard family) and `_strategies_newton.py`
 #: (Newton family + continuation). Each imports the protocols and helpers above FROM THIS MODULE
@@ -704,7 +671,6 @@ from motronics.gauss.nonlinear._strategies_newton import (  # noqa: E402
     ResidualMarchStrategy,
 )
 from motronics.gauss.nonlinear._strategies_picard import (  # noqa: E402
-    AdaptiveDampedPicardStrategy,
     DampedPicardStrategy,
     NuRelaxationDampedPicardStrategy,
     PicardStrategy,
@@ -713,7 +679,6 @@ from motronics.gauss.nonlinear._strategies_picard import (  # noqa: E402
 ITERATION_REGISTRY: dict[str, IterationStrategy] = {
     'picard-damped': DampedPicardStrategy(),
     'nu-damped': NuRelaxationDampedPicardStrategy(),
-    'picard-adaptive': AdaptiveDampedPicardStrategy(),
     'picard': PicardStrategy(),
     'newton': NewtonStrategy(),
     'anderson': AndersonStrategy(),

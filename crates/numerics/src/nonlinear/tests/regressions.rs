@@ -157,10 +157,9 @@ fn plateau_system(x0: f64) -> Synth {
 
 /// Every registered strategy except two, EXCLUDED BY NAME with their reasons rather than by a
 /// silent filter: `continuation` wraps another strategy and is driven through `scale_source`, and
-/// `nu-damped` needs the raw pre-fold pair and refuses a system without it. `nu-damped` therefore
-/// still carries its own two-metric energy-AND-flux rule -- a NAMED hole in this test's scope, not
-/// a claim that it is covered.
-const PLATEAU_DRIVABLE: [&str; 11] = [
+/// `nu-damped` needs the raw pre-fold pair and refuses a system without it (it runs the same loop
+/// and the same `has_converged` as `picard-damped`).
+const PLATEAU_DRIVABLE: [&str; 10] = [
     "anderson",
     "bfgs",
     "l-bfgs",
@@ -169,7 +168,6 @@ const PLATEAU_DRIVABLE: [&str; 11] = [
     "newton-krylov",
     "newton-linesearch",
     "picard",
-    "picard-adaptive",
     "picard-damped",
     "quasi-newton",
 ];

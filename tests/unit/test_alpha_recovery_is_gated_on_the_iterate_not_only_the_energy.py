@@ -65,12 +65,9 @@ pytestmark = pytest.mark.unit
 _ENERGIES = (100.0, 200.0, 500.0)
 _PLATEAU = 500.0
 
-#: The plateau is not EXACTLY flat, and that matters: a bit-constant energy makes
-#: `picard-adaptive`'s growth leg (`err < prev_err`, strict) inert, so a flat fixture would pass
-#: that strategy vacuously. A geometrically decaying jitter reproduces the measured reading --
-#: `0.00%` at two decimals, well under rtol, hence `meaningful` is False for `picard-damped` --
-#: while still falling strictly each step, which is what licenses `picard-adaptive`'s growth.
-#: Both variants are therefore genuinely asking to grow when the fixture refuses them.
+#: The plateau is not EXACTLY flat: a geometrically decaying jitter reproduces the measured
+#: reading -- `0.00%` at two decimals, well under rtol, hence `meaningful` is False -- while the
+#: energy still falls strictly each step, so nothing on the energy side refuses a recovery.
 _PLATEAU_JITTER = 1e-6
 
 
@@ -172,15 +169,9 @@ def _alphas(system: _ScriptedIncrement, strategy: str) -> list[float]:
     return system.alphas
 
 
-@pytest.mark.parametrize('strategy', ['picard-damped', 'picard-adaptive'])
-def test_a_growing_increment_refuses_the_alpha_recovery_on_an_energy_plateau(strategy: str) -> None:
-    """The measured defect: the energy says nothing, the iterate says it is getting WORSE, alpha grows.
-
-    Both Picard variants are asserted because both grow alpha off an energy-only reading --
-    `picard-damped` through its `calm` counter, `picard-adaptive` through `err < prev_err`. One
-    decision spelled twice is one defect at two sites.
-    """
-    alphas = _alphas(_Plateau(), strategy)
+def test_a_growing_increment_refuses_the_alpha_recovery_on_an_energy_plateau() -> None:
+    """The measured defect: the energy says nothing, the iterate says it is getting WORSE, alpha grows."""
+    alphas = _alphas(_Plateau(), 'picard-damped')
     assert min(alphas) < 1.0, f'the fixture never armed the recovery leg: {alphas}'
     # The script's increment starts rising at index 3, so index 4 is the first step that could act
     # on it. From there alpha may only fall: never a recovery, and -- once the rise has run for
@@ -190,9 +181,8 @@ def test_a_growing_increment_refuses_the_alpha_recovery_on_an_energy_plateau(str
     assert tail[-1] < tail[0], f'a sustained rise in the increment never damped alpha: {alphas}'
 
 
-@pytest.mark.parametrize('strategy', ['picard-damped', 'picard-adaptive'])
-def test_a_contracting_increment_still_recovers_alpha(strategy: str) -> None:
+def test_a_contracting_increment_still_recovers_alpha() -> None:
     """THE FLOOR. Identical plateau energy; a gate that refused this would re-introduce the crawl."""
-    alphas = _alphas(_Contracting(), strategy)
+    alphas = _alphas(_Contracting(), 'picard-damped')
     tail = alphas[3:]
     assert max(tail) > min(tail), f'alpha never recovered on a contracting march: {alphas}'

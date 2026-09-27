@@ -41,23 +41,16 @@ import pytest
 import motronics
 from motronics.gauss.contract import contract
 
-#: The module GLOBS this scan reads. A GLOB AND NOT A HAND-WRITTEN LIST, and that is the whole
-#: repair (2026-09-22). The list that stood here named four files -- the quadrature module plus
-#: the isogeometric compile, interface and nonlinear modules -- and all four still EXISTED, so the
-#: `path.is_file()` guard below stayed green while the code walked out from under it: the compile
-#: was split into one module per concern (estimate, stabilise, structural, thermal, trim
-#: interface, air gap, electrostatic; now the `iga_*` family, see `workflow/retired.py`), and
-#: `gauss/quadrature.py`'s contractions moved to `gauss/spline_basis.py`.
-#: The four named files were left holding 7 contractions against a floor of 12 -- which is the
-#: floor doing exactly its job, and the reason this was found at all.
-#:
-#: A SPLIT CANNOT EMPTY A GLOB. That is the property being bought: the failure mode here was never
-#: "someone deleted a module", it was "someone moved the code and the list still resolved".
-_ASSEMBLY_MODULE_GLOBS = (
-    'gauss/quadrature.py',
-    'gauss/spline_basis.py',
-    'hamilton/discretizations/iga*.py',
-)
+#: Every module that assembles an operator by contracting basis values against a measure: DERIVED
+#: from the two trees that hold assembly, never listed -- a hand list went stale the day a new
+#: assembler (the coupled SDM subdomain) landed outside it.
+_ASSEMBLY_TREES = ('gauss', 'hamilton/discretizations')
+
+
+def _assembly_modules() -> list[str]:
+    root = _source_root()
+    return sorted(path.relative_to(root).as_posix() for tree in _ASSEMBLY_TREES for path in (root / tree).rglob('*.py'))
+
 
 #: Below this, the scan is not looking at the code that was measured. A scan that finds NOTHING is
 #: vacuous rather than green, so it carries a floor as well as a verdict.
@@ -82,20 +75,12 @@ _MINIMUM_CONTRACTIONS_SCANNED = 30
 #: equality below reds on both -- which is what makes it a ratchet rather than an allowlist.
 _NAIVE_EINSUM_DEBT: frozenset[str] = frozenset()
 
-#: NOT COVERED BY THE GLOBS ABOVE, BY NAME, so that "the scan is green" cannot be read as "the tree
-#: is converted". The ELEMENT (FEM) assembly path carries multi-operand contractions of the same
-#: class, and converting them is a separate decision rather than an oversight: those kernels are
-#: pinned by BIT-FOR-BIT port goldens (`test_solve_port_golden`, `test_newton_port_golden`), and
-#: reassociating a floating-point sum is precisely what a bit-for-bit golden refuses. The
-#: measurement that would justify converting them has to be taken on that path, against those
-#: goldens. Recorded here because the globs are ISOGEOMETRIC-only and nothing else says so.
-_NOT_SCANNED_BY_DESIGN = (
-    'hamilton/discretizations/fem/_assemble_quad.py',
-    'hamilton/discretizations/fem/_kernels.py',
-    'hamilton/discretizations/fem/_newton.py',
-    'hamilton/discretizations/hcurl/_nonlinear.py',
-    'hamilton/physics/structural/backend.py',
-)
+#: NOT COVERED BY THE TREE SCAN ABOVE, BY NAME, so that "the scan is green" cannot be read as "the
+#: tree is converted". The element (FEM) path inside `hamilton/discretizations` IS scanned now --
+#: `feat/sdm` converted it (`fix(fem): every assembly contraction takes the BLAS path`) and the
+#: port goldens were re-measured with it -- so what remains outside is the structural backend,
+#: which assembles in `hamilton/physics` and still carries naive multi-operand contractions.
+_NOT_SCANNED_BY_DESIGN = ('hamilton/physics/structural/backend.py',)
 
 
 def _source_root() -> Path:
@@ -170,8 +155,7 @@ def test_THE_UNCOVERED_ELEMENT_PATH_IS_NAMED_AND_STILL_UNCOVERED() -> None:
     for relative in _NOT_SCANNED_BY_DESIGN:
         path = root / relative
         assert path.is_file(), f'{relative} is named as an uncovered module but is not in the tree'
-        matched = {q.relative_to(root).as_posix() for g in _ASSEMBLY_MODULE_GLOBS for q in root.glob(g)}
-        assert relative not in matched, f'{relative} is declared uncovered but a glob scans it'
+        assert relative not in _assembly_modules(), f'{relative} is declared uncovered but the tree scan reads it'
         tree = ast.parse(path.read_text(encoding='utf-8'))
         naive = [
             node
@@ -184,7 +168,7 @@ def test_THE_UNCOVERED_ELEMENT_PATH_IS_NAMED_AND_STILL_UNCOVERED() -> None:
         ]
         assert naive, (
             f'{relative} is named as an uncovered element-path module but carries no naive '
-            'multi-operand einsum any more -- the gap is closed, so move it into _ASSEMBLY_MODULES.'
+            'multi-operand einsum any more -- the gap is closed, so widen _ASSEMBLY_TREES to cover it.'
         )
 
 
@@ -198,10 +182,9 @@ def test_NO_ASSEMBLY_SITE_TAKES_THE_NAIVE_MULTI_OPERAND_EINSUM() -> None:
     root = _source_root()
     scanned = 0
     offenders: list[str] = []
-    paths = sorted({q for pattern in _ASSEMBLY_MODULE_GLOBS for q in root.glob(pattern)})
-    assert paths, 'the globs matched no module at all, so this scan reads nothing'
-    for path in paths:
-        relative = path.relative_to(root).as_posix()
+    modules = _assembly_modules()
+    for relative in modules:
+        path = root / relative
         tree = ast.parse(path.read_text(encoding='utf-8'))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
@@ -220,7 +203,7 @@ def test_NO_ASSEMBLY_SITE_TAKES_THE_NAIVE_MULTI_OPERAND_EINSUM() -> None:
             if name == 'einsum' and not any(keyword.arg == 'optimize' for keyword in node.keywords):
                 offenders.append(f'{relative}:{node.lineno}')
     assert scanned >= _MINIMUM_CONTRACTIONS_SCANNED, (
-        f'the scan found only {scanned} multi-operand contractions across {len(paths)} '
+        f'the scan found only {scanned} multi-operand contractions across {len(modules)} '
         f'modules, below the floor {_MINIMUM_CONTRACTIONS_SCANNED} -- it is no longer reading the '
         'code that was measured, so finding no offender proves nothing'
     )
