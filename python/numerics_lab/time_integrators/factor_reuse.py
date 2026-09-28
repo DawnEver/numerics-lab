@@ -26,7 +26,7 @@ The counters ARE the verification surface: ``factorizations`` and ``solves`` are
 calls (measured bit-equal on 200 random 5x5 systems), and ``splu`` is the SuperLU call ``spsolve``
 makes -- so a hit returns the same bits the uncached solve would have.
 
-WHAT A HIT *IS* JUDGED BY, added 2026-09-06: FINITENESS, via
+WHAT A HEALTHY HIT *IS* JUDGED BY, added 2026-09-06: FINITENESS, via
 :func:`~motronics.gauss.linear.reject_nonfinite_solution`. A hit used to return back-substitution
 output entirely unchecked, so an inf/NaN answer from a reused factor left this class silently --
 the exact shape ``invariant.md`` forbids ("never silently wrong"). The reason it was missing is
@@ -35,10 +35,12 @@ and reached from one line. THE PRICE IS A RATIO, not a value: ``O(n)`` against a
 already paid at ``O(n^2)`` dense / ``O(nnz)`` sparse, which is why this one is affordable on a hit
 where the residual guard below is not.
 
-WHAT A HIT IS STILL NOT JUDGED BY, AND WHAT THAT COSTS. A MISS holds the matrix it just built, so it
-judges the answer against it: :func:`~motronics.gauss.linear.reject_unsolved_direct_system`, the
-same two-stage guard ``gauss.linear``'s ``direct`` uses, on the same bars. A HIT does not, and
-that is the whole point of a hit -- so it is NOT judged, deliberately and at a measured price.
+WHAT A HEALTHY HIT IS STILL NOT JUDGED BY, AND WHAT THAT COSTS. A MISS holds the matrix it just
+built, so it repairs and judges the answer against it exactly as ``gauss.linear``'s ``direct`` does.
+If that first answer NEEDS repair, later hits through that factor are repaired and judged too;
+only a factor whose miss passed unchanged takes the cheap finiteness-only hit path. A healthy HIT
+does not rebuild the matrix, and that is the whole point of a hit -- so it is NOT residual-judged,
+deliberately and at a measured price.
 MEASURED 2026-09-06 through the production CLI over seven ``cases/network/circuit`` nodes:
 595,898 solves, of which 211,388 (35%) were hits, and 123,208 of ``class_e``'s 129,749 (95%).
 Judging a hit means calling ``build_matrix()`` for it, i.e. reinstating on a third of every
@@ -70,7 +72,11 @@ from numpy.typing import NDArray
 from scipy.linalg import lu_factor, lu_solve
 from scipy.sparse.linalg import splu
 
-from motronics.gauss.linear import reject_nonfinite_solution, reject_unsolved_direct_system
+from motronics.gauss.linear import (
+    reject_nonfinite_solution,
+    reject_unsolved_direct_system,
+    repair_direct_solution,
+)
 from motronics.gauss.linear.native_direct import native_factor
 
 __all__ = ['FactorCache', 'apply_factor', 'factor_matrix']
@@ -146,6 +152,7 @@ class FactorCache:
         self.matrix: object = None
         self._key: Hashable | object = _EMPTY
         self._factor: object = None
+        self._repair_hits = False
 
     @property
     def reuses(self) -> int:
@@ -172,10 +179,17 @@ class FactorCache:
             # O(n) against a back-substitution already paid at O(n^2)/O(nnz). A stale-but-FINITE
             # factor is still the key's problem (the NAMED HOLE above) -- this closes the inf/NaN
             # disguise, which was returning silently, and claims nothing about the other one.
-            return reject_nonfinite_solution(np.asarray(apply_factor(self._factor, b), dtype=float), _BACKEND)
+            x = reject_nonfinite_solution(np.asarray(apply_factor(self._factor, b), dtype=float), _BACKEND)
+            if self._repair_hits:
+                # This factor's first answer needed refinement. Every RHS through the
+                # same held factor needs that protection; the matrix is already held.
+                x, moves = repair_direct_solution(self.matrix, b, x)
+                reject_unsolved_direct_system(self.matrix, b, x, _BACKEND, refinement=moves[-1] if moves else None)
+            return x
         matrix = build_matrix()
         self.matrix = matrix
         self._factor = factor_matrix(matrix)
+        self._repair_hits = False
         if key is not None:
             self._key = key
         self.factorizations += 1
@@ -194,5 +208,12 @@ class FactorCache:
         shape = np.shape(matrix)
         if len(shape) == 2 and shape[0] == shape[1]:
             self.judged += 1
-            reject_unsolved_direct_system(matrix, b, x, _BACKEND)
+            # The plain direct path repairs an ill-conditioned but solvable answer
+            # before applying this same guard. A cache miss owns the matrix too, so
+            # refusing its first back-substitution without that repair is a different
+            # numerical policy solely because the marcher requested reuse.
+            original = x
+            x, moves = repair_direct_solution(matrix, b, x)
+            self._repair_hits = not np.array_equal(x, original)
+            reject_unsolved_direct_system(matrix, b, x, _BACKEND, refinement=moves[-1] if moves else None)
         return x
