@@ -97,9 +97,11 @@ def test_the_backtracking_line_search_halves_an_overshooting_step() -> None:
 
     state = IntegratorState(us=[np.array([1.0]), np.array([1.0])], t=0.0)
     form = _bdf2_variable_form(state, 0.1, 0.1, 0.1)
+
     # The seam hands the solve the NEGATED residual, so 10 * (-r) = -10r: the right
     # direction at 10x the honest Newton step (the sharp channel's overshoot).
-    overshoot_solve = lambda _j, r: 10.0 * r  # noqa: E731 -- the seam's 10x overstep
+    def overshoot_solve(_j, r):  # the seam's 10x overstep
+        return 10.0 * r
 
     problem_bt = _Quadratic()
     u_bt, _converged, _it, _residual, _on_floor = _solve_step(
@@ -173,7 +175,9 @@ def test_the_stall_polish_switches_to_the_tangent_and_converges() -> None:
     class _ChordOnly(_CouplingChordBase):
         """No alternative-Jacobian capability: the pure chord Newton's pre-polish behavior."""
 
-    solve = lambda j, r: np.linalg.solve(np.asarray(j), r)  # noqa: E731 -- the seam's solve
+    def solve(j, r):  # the seam's solve
+        return np.linalg.solve(np.asarray(j), r)
+
     state = IntegratorState(us=[np.array([0.5, 0.5]), np.array([0.5, 0.5])], t=0.0)
     form = _bdf2_variable_form(state, 0.1, 0.1, 0.1)
     guess = np.array([0.5, 0.5])
@@ -225,7 +229,9 @@ def test_a_polish_whose_step_the_line_search_cannot_accept_hands_back_to_the_new
             self.alternative_calls += 1
             return -self.jacobian(u_arg, u_dot, u_ddot, t, weights)
 
-    solve = lambda j, r: np.linalg.solve(np.asarray(j), r)  # noqa: E731 -- the seam's solve
+    def solve(j, r):  # the seam's solve
+        return np.linalg.solve(np.asarray(j), r)
+
     state = IntegratorState(us=[np.zeros(1), np.zeros(1)], t=0.0)
     form = _bdf2_variable_form(state, 0.1, 0.1, 0.1)
     # Both line searches: the strict one, and the march's own tolerant band (`integrate_transient`
