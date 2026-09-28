@@ -170,7 +170,7 @@ def reject_nonfinite_solution(x: np.ndarray, backend: str) -> np.ndarray:
     return x
 
 
-def _direct(matrix, rhs, *, x0=None, M=None):  # noqa: ARG001 -- direct ignores x0/M by contract
+def _direct(matrix, rhs, **_iterative_only):
     """Sparse direct factorization -- faer through :mod:`~motronics.gauss.linear.native_direct`, else ``spsolve``.
 
     THE NATIVE PATH FIRST (2026-09-26): a real sparse operator goes to the pattern-cached faer
@@ -206,7 +206,7 @@ def _direct(matrix, rhs, *, x0=None, M=None):  # noqa: ARG001 -- direct ignores 
             raise LinearSolveError(msg) from exc
 
 
-def _direct_symmetric(matrix, rhs, *, x0=None, M=None):  # noqa: ARG001 -- direct ignores x0/M by contract
+def _direct_symmetric(matrix, rhs, **_iterative_only):
     """SuperLU in SYMMETRIC mode: a minimum-degree ordering of ``A' + A`` and diagonal pivots.
 
     For a caller whose operator is SPD BY CONSTRUCTION -- a Galerkin stiffness with no convection,
@@ -275,7 +275,7 @@ def requires_symmetric(name: str) -> bool:
     return name in _SYMMETRIC_SOLVERS
 
 
-def _pardiso(matrix, rhs, *, x0=None, M=None):  # noqa: ARG001 -- the direct-shaped signature
+def _pardiso(matrix, rhs, **_iterative_only):
     """Intel MKL PARDISO sparse LU -- the multi-threaded direct solver (MATLAB-parity).
 
     The direct counterpart of scipy's single-threaded SuperLU: PARDISO threads the
