@@ -12,7 +12,7 @@ from numpy.typing import NDArray
 
 from motronics.contracts.spec.analysis_formulation import NEWMARK_BETA, NEWMARK_GAMMA, DerivativeWeights
 from motronics.contracts.spec.study_spec import IntegratorKind
-from motronics.gauss.time_integrators import IntegratorState, ITimeIntegrator, StepForm
+from motronics.gauss.time_integrators._forms import IntegratorState, ITimeIntegrator, StepForm
 
 __all__ = [
     'INTEGRATOR_REGISTRY',

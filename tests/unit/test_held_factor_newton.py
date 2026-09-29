@@ -27,7 +27,8 @@ from motronics.gauss.nonlinear import (
     get_strategy,
     strategy_stops_on_residual,
 )
-from motronics.gauss.time_integrators import HeldFactor, integrate_transient
+from motronics.gauss.time_integrators import integrate_transient
+from motronics.gauss.time_integrators._step import HeldFactor
 from motronics.hamilton.discretizations.constitutive import binding_from_group_materials
 from motronics.hamilton.solve import solve
 

@@ -27,7 +27,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from motronics.gauss.nonlinear import IterationBudgetExceeded, _TimeBudgetedSystem, with_time_budget
+from motronics.gauss.nonlinear import IterationBudgetExceeded, with_time_budget
+from motronics.gauss.nonlinear._seam import _TimeBudgetedSystem
 
 pytestmark = pytest.mark.unit
 
