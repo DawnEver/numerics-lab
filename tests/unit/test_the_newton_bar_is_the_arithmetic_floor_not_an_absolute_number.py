@@ -30,7 +30,8 @@ import numpy as np
 import pytest
 
 from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
-from motronics.gauss.time_integrators import integrate_transient, residual_floor
+from motronics.gauss.time_integrators import integrate_transient
+from motronics.gauss.time_integrators._forms import residual_floor
 from motronics.laplace.circuit.core.build import CircuitBuilder
 from motronics.laplace.circuit.core.mna import assemble_mna
 from motronics.laplace.circuit.core.mna_solves import _roundoff_floor as _op_roundoff_floor

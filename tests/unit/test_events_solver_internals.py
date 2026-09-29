@@ -28,7 +28,8 @@ def test_the_relative_tolerance_labels_a_scale_stalled_step_converged() -> None:
     at 1e-1 from a 1e3-scale start is a 1e-4-relative residual -- converged with
     tol_rel = 1e-4, exhausted without it.
     """
-    from motronics.gauss.time_integrators import IntegratorState, _solve_step
+    from motronics.gauss.time_integrators._forms import IntegratorState
+    from motronics.gauss.time_integrators._step import _solve_step
     from motronics.gauss.time_integrators.events import _bdf2_variable_form
 
     class _Stalled:
@@ -73,7 +74,8 @@ def test_the_backtracking_line_search_halves_an_overshooting_step() -> None:
     converged trajectory. The bare Newton (``backtrack_cap = 0``) takes the full step and
     the divergence runs away.
     """
-    from motronics.gauss.time_integrators import IntegratorState, _solve_step
+    from motronics.gauss.time_integrators._forms import IntegratorState
+    from motronics.gauss.time_integrators._step import _solve_step
     from motronics.gauss.time_integrators.events import _bdf2_variable_form
 
     class _Quadratic:
@@ -135,7 +137,8 @@ def test_the_stall_polish_switches_to_the_tangent_and_converges() -> None:
     finishes the convergence the chord cannot (the bridge's toggle step: 60-exhausted
     at the ~1e-3-relative floor vs 16 iterations to 4e-5).
     """
-    from motronics.gauss.time_integrators import IntegratorState, _solve_step
+    from motronics.gauss.time_integrators._forms import IntegratorState
+    from motronics.gauss.time_integrators._step import _solve_step
     from motronics.gauss.time_integrators.events import _bdf2_variable_form
 
     class _CouplingChordBase:
@@ -208,7 +211,8 @@ def test_a_polish_whose_step_the_line_search_cannot_accept_hands_back_to_the_new
     never be accepted by the line search. Held to it, the step exhausts; handed back, the Newton
     that was already on its way finishes.
     """
-    from motronics.gauss.time_integrators import IntegratorState, _solve_step
+    from motronics.gauss.time_integrators._forms import IntegratorState
+    from motronics.gauss.time_integrators._step import _solve_step
     from motronics.gauss.time_integrators.events import _bdf2_variable_form
 
     class _SlowFarField:
