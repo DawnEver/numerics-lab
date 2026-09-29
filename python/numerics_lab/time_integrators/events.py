@@ -508,12 +508,12 @@ def integrate_transient_with_events(
             # side) matches its post-event sign and the re-detection never sees it. Measured
             # on hbridge_deadtime 2026-08-07: the S4's OFF edge at 37.4 us was lost and the
             # switch stayed ON through the whole dead-time, changing the circuit.
-            candidates: list[tuple[float, int, NDArray[np.floating]]] = []
+            candidates: list[tuple[float, int]] = []
             for i in crossed:
                 if g_new[i] == 0.0:
-                    candidates.append((t_step, i, u_probe))
+                    candidates.append((t_step, i))
                 elif t_step - t_from <= bracket_tol:
-                    candidates.append((t_from, i, np.array(checkpoint.state.last_u, dtype=float, copy=True)))
+                    candidates.append((t_from, i))
                 else:
 
                     def _probe(mid_t: float, i: int = i, t_from: float = t_from, checkpoint=checkpoint) -> float:
@@ -529,9 +529,7 @@ def integrate_transient_with_events(
 
                     lo_t, hi_t = _locate_bracket(t_from, float(g_prev[i]), t_step, float(g_new[i]), _probe, bracket_tol)
                     t_star_i = 0.5 * (lo_t + hi_t)
-                    trial_state, trial_prev_dt = _rollback(checkpoint, solution)
-                    _ps, u_star_i, _ok = step_from(trial_state, trial_prev_dt, t_star_i - t_from, t_star_i)
-                    candidates.append((t_star_i, i, u_star_i))
+                    candidates.append((t_star_i, i))
 
             # The suppression's SECOND half, where the landing INSTANT is known: a crossing
             # located within the tolerance of the function's last firing is the same instant's
@@ -555,11 +553,17 @@ def integrate_transient_with_events(
             simultaneous = [c for c in candidates if c[0] - t_star <= bracket_tol]
             state, prev_dt = _rollback(checkpoint, solution)
             if t_star > t_from:  # land the march exactly on the event
-                state, u_star, _ok = step_from(state, prev_dt, t_star - t_from, t_star)
+                state, u_star, landed = step_from(state, prev_dt, t_star - t_from, t_star)
+                if adaptive and not landed:
+                    msg = (
+                        f'event landing at t={t_star:g} did not converge; its state cannot '
+                        'trigger a physical switch. Reduce the step or repair the nonlinear solve.'
+                    )
+                    raise RuntimeError(msg)
                 _commit(t_star, u_star)
             else:
                 u_star = np.array(state.last_u, dtype=float, copy=True)
-            for _root, i, _u in simultaneous:
+            for _root, i in simultaneous:
                 solution.events.append((i, t_star))
                 if on_event is not None:
                     on_event(i, t_star, u_star)
