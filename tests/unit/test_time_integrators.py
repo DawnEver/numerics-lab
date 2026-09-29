@@ -71,12 +71,22 @@ def test_fake_problem_satisfies_protocol() -> None:
     assert isinstance(OscillatorProblem(1.0), SemiDiscreteProblem)
 
 
-def test_fixed_grid_lands_a_partial_final_step_at_the_declared_end() -> None:
-    """The observation window is a bound, not an approximate step count."""
-    study = TransientStudy(t0=0.0, t1=1.0, dt=0.3, integrator=IntegratorKind.BDF2)
-    solution = integrate_transient(DecayProblem(1.0), study, np.array([1.0]))
+@pytest.mark.parametrize('kind', [IntegratorKind.BDF1, IntegratorKind.BDF2, IntegratorKind.NEWMARK])
+def test_fixed_grid_lands_a_partial_final_step_at_the_declared_end(kind: IntegratorKind) -> None:
+    """Every fixed-grid scheme must use the true partial cell, not an approximate step count."""
+    study = TransientStudy(t0=0.0, t1=1.0, dt=0.3, integrator=kind)
+    problem = OscillatorProblem(1.0) if kind == IntegratorKind.NEWMARK else DecayProblem(1.0)
+    solution = integrate_transient(problem, study, np.array([1.0]))
     assert solution.times == pytest.approx([0.0, 0.3, 0.6, 0.9, 1.0])
     assert np.all(np.isfinite(solution.states))
+    if kind == IntegratorKind.BDF2:
+        # Unequal final and previous spacings require the nonuniform BDF2
+        # derivative, not the uniform weights evaluated at 0.1 s.
+        h, previous = 0.1, 0.3
+        a = (2 * h + previous) / (h * (h + previous))
+        history = -(h + previous) / (h * previous) * solution.states[-2][0]
+        history += h / (previous * (h + previous)) * solution.states[-3][0]
+        assert solution.states[-1][0] == pytest.approx(-history / (a + 1.0))
 
 
 # ---- DerivativeWeights: each integrator emits the textbook alpha triple -------------------
