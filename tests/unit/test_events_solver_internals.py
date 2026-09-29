@@ -11,6 +11,8 @@ adaptive-step/refine accuracy tests in ``test_events_step_control.py``.
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import numpy as np
 import pytest
 from tests.unit.gauss._helpers import _RampWithToggle
@@ -309,3 +311,80 @@ def test_a_discarded_bisection_probe_does_not_count_as_a_nonconverged_STEP() -> 
         f'nonconverged_times must contain only times that LANDED in the solution; '
         f'{len(stray)} of {len(sol.nonconverged_times)} are discarded bisection probes: {stray[:5]}'
     )
+
+
+def test_an_adaptive_march_does_not_locate_a_switch_from_an_unsolved_probe() -> None:
+    """A rejected Newton iterate has no physical event sign for a field-circuit switch."""
+
+    class _UnsolvableBetweenGridPoints(_RampWithToggle):
+        def residual(self, u, u_dot, u_ddot, t):
+            if abs(t / 0.3 - round(t / 0.3)) > 1e-8:
+                return np.array([1.0])
+            return super().residual(u, u_dot, u_ddot, t)
+
+    problem = _UnsolvableBetweenGridPoints(level=1.0)
+    study = TransientStudy(t0=0.0, t1=1.5, dt=0.3, integrator=IntegratorKind.BDF2)
+    with pytest.raises(RuntimeError, match='event probe.*converge'):
+        integrate_transient_with_events(
+            problem,
+            study,
+            np.array([0.0]),
+            event_fns=(problem.event_fn,),
+            on_event=lambda _i, _t, _u: problem.toggle(),
+            adaptive=True,
+            max_newton=2,
+        )
+
+
+def test_an_adaptive_march_does_not_fire_a_switch_from_an_unsolved_landing() -> None:
+    """Even an exact root time cannot authorize a switch if its state did not solve."""
+
+    class _UnsolvableAtCrossing(_RampWithToggle):
+        def residual(self, u, u_dot, u_ddot, t):
+            if abs(t - 1.0) < 1e-8:
+                return np.array([1.0])
+            return super().residual(u, u_dot, u_ddot, t)
+
+    problem = _UnsolvableAtCrossing(level=1.0)
+    study = TransientStudy(t0=0.0, t1=1.5, dt=0.3, integrator=IntegratorKind.BDF2)
+    with (
+        patch('motronics.gauss.time_integrators.events._locate_bracket', return_value=(1.0, 1.0)),
+        pytest.raises(RuntimeError, match='event landing.*converge'),
+    ):
+        integrate_transient_with_events(
+            problem,
+            study,
+            np.array([0.0]),
+            event_fns=(problem.event_fn,),
+            on_event=lambda _i, _t, _u: problem.toggle(),
+            adaptive=True,
+            max_newton=2,
+        )
+    assert problem.toggles == 0
+
+
+def test_the_event_root_is_solved_once_not_once_for_ranking_and_again_for_landing() -> None:
+    """The ranked candidates need times only; a second root solve changes no decision."""
+
+    class _CountRoot(_RampWithToggle):
+        def __init__(self) -> None:
+            super().__init__(level=1.0)
+            self.root_residuals = 0
+
+        def residual(self, u, u_dot, u_ddot, t):
+            if abs(t - 1.0) < 1e-8:
+                self.root_residuals += 1
+            return super().residual(u, u_dot, u_ddot, t)
+
+    problem = _CountRoot()
+    study = TransientStudy(t0=0.0, t1=1.5, dt=0.3, integrator=IntegratorKind.BDF2)
+    with patch('motronics.gauss.time_integrators.events._locate_bracket', return_value=(1.0, 1.0)):
+        solution = integrate_transient_with_events(
+            problem,
+            study,
+            np.array([0.0]),
+            event_fns=(problem.event_fn,),
+            on_event=lambda _i, _t, _u: problem.toggle(),
+        )
+    assert len(solution.events) == 1
+    assert problem.root_residuals == 2, 'a redundant candidate solve reassembled the field at the same event root'

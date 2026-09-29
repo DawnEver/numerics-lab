@@ -62,7 +62,13 @@ from numpy.typing import NDArray
 
 from motronics.contracts.spec.analysis_formulation import FactorReusableProblem
 from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.time_integrators import FactorCache, _bdf2_variable_form, _default_solve, get_integrator
+from motronics.gauss.time_integrators import (
+    FactorCache,
+    _bdf2_variable_form,
+    _default_solve,
+    _full_fixed_steps,
+    get_integrator,
+)
 from motronics.gauss.time_integrators._forms import IntegratorState, TransientSolution
 from motronics.gauss.time_integrators._step import HeldFactor, _solve_step
 
@@ -271,6 +277,9 @@ def integrate_transient_with_events(
     u0 = np.asarray(u0, dtype=float)
     state = integrator.start(u0, study.t0, v0, a0)
     dt = study.dt
+    if time_tol is not None and (not np.isfinite(time_tol) or time_tol <= 0.0):
+        msg = f'time_tol must be finite and positive, got {time_tol!r}'
+        raise ValueError(msg)
     bracket_tol = dt * 1.0e-6 if time_tol is None else time_tol
     solution = EventfulTransientSolution(times=[study.t0], states=[u0])
     g_prev = [float(g(u0, study.t0)) for g in event_fns]
@@ -366,9 +375,8 @@ def integrate_transient_with_events(
                 solution.nonconverged_times.append(t_new)
                 break
 
-    # The plain march's fixed step count -- integrate_transient's own n_steps; the eventful
-    # march without breakpoints must take exactly these (SR-038), so the count lives here.
-    n_steps = round((study.t1 - study.t0) / dt)
+    # The plain march's full-cell count; the final cell is partial when needed.
+    n_steps = _full_fixed_steps(study)
     resume_from: float | None = None
     k = 0
     # A clipped cell RE-ANCHORS the nominal grid at the breakpoint (resume_from keeps the
@@ -378,7 +386,10 @@ def integrate_transient_with_events(
     # [0, 0.05, 0.2, ...] carried states [0, 0.05, 0.15, ...], max |u - t| = 0.08 (SR-022,
     # the W1b march-corruption repro). A while loop (not a fixed step count) because
     # clipping inserts grid points: the march ends at t1, not at a fixed step count.
-    while state.t < study.t1 - bracket_tol:
+    # The event locator's tolerance is not a licence to erase the observation
+    # window. Only roundoff at the declared end may terminate this march.
+    end_tol = 1e-12 * max(abs(study.t0), abs(study.t1), study.t1 - study.t0)
+    while state.t < study.t1 - end_tol:
         if resume_from is not None:
             # The re-anchored grid continues from the last breakpoint; the t1 clamp makes the
             # FINAL re-anchored cell a PARTIAL step, so its dt is the true remainder -- a full
@@ -387,18 +398,9 @@ def integrate_transient_with_events(
             t_target = min(resume_from, study.t1)
             resume_from = t_target + dt
             pending_dt = t_target - state.t
-        # Without breakpoints the grid is the plain nominal one, and it must be BIT-
-        # IDENTICAL to integrate_transient's: that march stops after its fixed step count
-        # n_steps = round((t1-t0)/dt) -- which TRUNCATES at the last nominal step before
-        # t1 (plain [0, .3, .6, .9] for t1=1.0, dt=0.3) -- never a full step past t1
-        # (SR-038: the round-2 adjudication wrongly claimed integrate_transient lands
-        # past t1; the eventful march did, and the bit-identity promise broke).
+        # Without breakpoints this grid must be bit-identical to the plain march:
+        # full nominal cells followed by the exact partial cell to t1, never past it.
         elif k >= n_steps:
-            # Preserve the plain march's truncated grid only when there is nothing left
-            # to consume.  A breakpoint in the final partial interval makes that interval
-            # part of the eventful march, including the remainder from the edge to t1.
-            if bp_index >= len(breakpoints):
-                break
             t_target = study.t1
             pending_dt = t_target - state.t
         else:
@@ -499,26 +501,30 @@ def integrate_transient_with_events(
             # side) matches its post-event sign and the re-detection never sees it. Measured
             # on hbridge_deadtime 2026-08-07: the S4's OFF edge at 37.4 us was lost and the
             # switch stayed ON through the whole dead-time, changing the circuit.
-            candidates: list[tuple[float, int, NDArray[np.floating]]] = []
+            candidates: list[tuple[float, int]] = []
             for i in crossed:
                 if g_new[i] == 0.0:
-                    candidates.append((t_step, i, u_probe))
+                    candidates.append((t_step, i))
                 elif t_step - t_from <= bracket_tol:
-                    candidates.append((t_from, i, np.array(checkpoint.state.last_u, dtype=float, copy=True)))
+                    candidates.append((t_from, i))
                 else:
 
                     def _probe(mid_t: float, i: int = i, t_from: float = t_from, checkpoint=checkpoint) -> float:
                         trial_state, trial_prev_dt = _rollback(checkpoint, solution)
-                        _ps, u_mid, _ok = step_from(trial_state, trial_prev_dt, mid_t - t_from, mid_t)
+                        _ps, u_mid, ok = step_from(trial_state, trial_prev_dt, mid_t - t_from, mid_t)
+                        if adaptive and not ok:
+                            msg = (
+                                f'event probe at t={mid_t:g} did not converge; its event sign cannot '
+                                'locate a physical switch. Reduce the step or repair the nonlinear solve.'
+                            )
+                            raise RuntimeError(msg)
                         return float(event_fns[i](u_mid, mid_t))
 
                     lo_t, hi_t = _locate_bracket(
                         t_from, float(g_prev[i]), t_step, float(g_new[i]), _probe, tol=bracket_tol
                     )
                     t_star_i = 0.5 * (lo_t + hi_t)
-                    trial_state, trial_prev_dt = _rollback(checkpoint, solution)
-                    _ps, u_star_i, _ok = step_from(trial_state, trial_prev_dt, t_star_i - t_from, t_star_i)
-                    candidates.append((t_star_i, i, u_star_i))
+                    candidates.append((t_star_i, i))
 
             # The suppression's SECOND half, where the landing INSTANT is known: a crossing
             # located within the tolerance of the function's last firing is the same instant's
@@ -542,11 +548,17 @@ def integrate_transient_with_events(
             simultaneous = [c for c in candidates if c[0] - t_star <= bracket_tol]
             state, prev_dt = _rollback(checkpoint, solution)
             if t_star > t_from:  # land the march exactly on the event
-                state, u_star, _ok = step_from(state, prev_dt, t_star - t_from, t_star)
+                state, u_star, landed = step_from(state, prev_dt, t_star - t_from, t_star)
+                if adaptive and not landed:
+                    msg = (
+                        f'event landing at t={t_star:g} did not converge; its state cannot '
+                        'trigger a physical switch. Reduce the step or repair the nonlinear solve.'
+                    )
+                    raise RuntimeError(msg)
                 _commit(t_star, u_star)
             else:
                 u_star = np.array(state.last_u, dtype=float, copy=True)
-            for _root, i, _u in simultaneous:
+            for _root, i in simultaneous:
                 solution.events.append((i, t_star))
                 if on_event is not None:
                     on_event(i, t_star, u_star)
