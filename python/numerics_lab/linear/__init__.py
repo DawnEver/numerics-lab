@@ -7,7 +7,9 @@ call :func:`scipy.sparse.linalg.spsolve`). This module extracts that one call be
 newton-krylov and by large 3D / eddy-current systems) without the equation code changing.
 
 First principle (``AGENTS.md``): IMPLEMENT every method and characterize it. The ``direct`` backend is
-today's ``spsolve`` VERBATIM (bit-for-bit default, so every golden is unchanged); the iterative
+faer's pattern-cached factorisation when the native wheel provides it and ``spsolve`` VERBATIM when it
+does not (see :mod:`~motronics.gauss.linear.native_direct` -- the two agree to round-off, not
+bit-for-bit, and the SciPy fallback is logged, never silent); the iterative
 backends are additive peers, each of which must reach the SAME solution as ``direct`` within its
 tolerance (the linear analogue of the nonlinear "converge-to-reference" contract).
 
@@ -59,6 +61,7 @@ from motronics.gauss.linear.gauge import (
     gauge_pin_orphan_rows,
     orphan_rows,
 )
+from motronics.gauss.linear.native_direct import native_solve
 from motronics.gauss.linear.pin_rows import pin_rows
 
 #: ``refinement`` (2026-09-17) -- THE DIRECT-SOLVE GUARD: the residual TRIGGER, the refinement
@@ -167,13 +170,19 @@ def reject_nonfinite_solution(x: np.ndarray, backend: str) -> np.ndarray:
     return x
 
 
-def _direct(matrix, rhs, *, x0=None, M=None):  # noqa: ARG001 -- direct ignores x0/M by contract
-    """Sparse direct factorization -- today's ``spsolve`` (the bit-for-bit default), singular-guarded.
+def _direct(matrix, rhs, **_iterative_only):
+    """Sparse direct factorization -- faer through :mod:`~motronics.gauss.linear.native_direct`, else ``spsolve``.
 
-    Kept byte-identical to the inline ``spsolve`` the MEC/FEA solvers used for a well-conditioned
-    system, so routing the default path through this registry changes nothing on the happy path.
+    THE NATIVE PATH FIRST (2026-09-26): a real sparse operator goes to the pattern-cached faer
+    factorisation (supernodal LU, or Cholesky when the values are verified exactly symmetric),
+    which measured faster than SuperLU at every production size. It is a DIFFERENT factorisation,
+    so it agrees with ``spsolve`` to round-off and not bit-for-bit; both sit behind the same
+    residual guard in :func:`solve_linear_system`. When the extension is absent, switched off
+    (``MOTRONICS_DIRECT_NATIVE=0``) or the operator is outside its reach (complex, dense), the
+    SciPy ``spsolve`` below runs -- logged once and counted in ``native_direct.DIRECT_SOLVES``,
+    never silently.
 
-    The one addition is a SINGULAR guard: SuperLU emits a :class:`MatrixRankWarning` when the factor
+    The SciPy half keeps a SINGULAR guard: SuperLU emits a :class:`MatrixRankWarning` when the factor
     hits a zero/near-zero pivot, then returns EITHER NaNs OR a FINITE-but-meaningless vector. The
     finite case slipped past the caller's finiteness check and shipped as ``status=ok`` garbage. We
     promote that warning to a hard :class:`LinearSolveError` here (belt), and the caller additionally
@@ -181,6 +190,9 @@ def _direct(matrix, rhs, *, x0=None, M=None):  # noqa: ARG001 -- direct ignores 
     feature-aligned polar-grid loop basis that is not full-rank at some mesh resolution -- fails
     honestly instead of returning a wrong number.
     """
+    native = native_solve(matrix, rhs)
+    if native is not None:
+        return native
     with warnings.catch_warnings():
         warnings.simplefilter('error', MatrixRankWarning)
         try:
@@ -194,7 +206,7 @@ def _direct(matrix, rhs, *, x0=None, M=None):  # noqa: ARG001 -- direct ignores 
             raise LinearSolveError(msg) from exc
 
 
-def _direct_symmetric(matrix, rhs, *, x0=None, M=None):  # noqa: ARG001 -- direct ignores x0/M by contract
+def _direct_symmetric(matrix, rhs, **_iterative_only):
     """SuperLU in SYMMETRIC mode: a minimum-degree ordering of ``A' + A`` and diagonal pivots.
 
     For a caller whose operator is SPD BY CONSTRUCTION -- a Galerkin stiffness with no convection,
@@ -263,7 +275,7 @@ def requires_symmetric(name: str) -> bool:
     return name in _SYMMETRIC_SOLVERS
 
 
-def _pardiso(matrix, rhs, *, x0=None, M=None):  # noqa: ARG001 -- the direct-shaped signature
+def _pardiso(matrix, rhs, **_iterative_only):
     """Intel MKL PARDISO sparse LU -- the multi-threaded direct solver (MATLAB-parity).
 
     The direct counterpart of scipy's single-threaded SuperLU: PARDISO threads the

@@ -119,7 +119,7 @@ def _blend(prev: np.ndarray | None, target: np.ndarray | None, alpha: float) -> 
 
 def relax_linear(previous: MaterialCoeffs, target: MaterialCoeffs, alpha: float) -> MaterialCoeffs:
     """The default :meth:`MaterialUpdate.relax`: every set coefficient blended by one global ``alpha``."""
-    return MaterialCoeffs(**{k: _blend(getattr(previous, k), getattr(target, k), alpha) for k in COEFFICIENT_NAMES})
+    return MaterialCoeffs(**{k: _blend(vars(previous)[k], vars(target)[k], alpha) for k in COEFFICIENT_NAMES})
 
 
 class CompositeUpdate:
@@ -146,7 +146,7 @@ class CompositeUpdate:
             s_new, coeffs = member.evaluate(s, fields, temperature)
             trial.append(s_new)
             for k in COEFFICIENT_NAMES:
-                v = getattr(coeffs, k)
+                v = vars(coeffs)[k]
                 if v is None:
                     continue
                 if k in merged:

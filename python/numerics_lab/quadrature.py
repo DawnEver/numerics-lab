@@ -28,6 +28,7 @@ __all__ = [
     'EXTRA_QUADRATURE_POINTS',
     'GRAM_BATCH_POINTS',
     'QuadratureRule',
+    'diffusion_blocks',
     'gauss_legendre_1d',
     'gradient_gram_triplets',
     'patch_quadrature',
@@ -193,3 +194,26 @@ def patch_quadrature(patch: Patch, *, extra_points: int = 0) -> QuadratureRule:
     points = np.stack([g.ravel(order='F') for g in grids], axis=1)
     weights = np.prod(np.stack([g.ravel(order='F') for g in weight_grids], axis=1), axis=1)
     return QuadratureRule(points=points, weights=weights)
+
+
+def diffusion_blocks(
+    gradients: NDArray[np.float64],
+    conductivity: NDArray[np.float64],
+    measure: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    """``INT k grad(N_i) . grad(N_j)`` per cell, for ANY space that hands over its quadrature.
+
+    The one spelling of the diffusion operator (IGA plan, phase 3), physics-free. A P1 simplex is a cell with one
+    quadrature point -- its constant gradient, weighted by its measure -- and a spline cell carries
+    its own rule; the operator reads neither the basis nor the element shape.
+
+    Args:
+        gradients: ``(n_cell, n_q, n_basis, dim)`` PHYSICAL basis gradients at each point.
+        conductivity: ``(n_cell, dim)`` diagonal conductivity per cell.
+        measure: ``(n_cell, n_q)`` quadrature weight times ``|det J|``.
+
+    Returns:
+        ``(n_cell, n_basis, n_basis)``.
+
+    """
+    return contract('eqid,eqjd,ed,eq->eij', gradients, gradients, conductivity, measure)

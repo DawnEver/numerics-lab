@@ -294,3 +294,39 @@ def test_an_event_within_time_tol_of_the_checkpoint_is_handled_there_not_bisecte
     assert t_event <= 1.0e-3
     ts = solution.times
     assert all(b > a for a, b in itertools.pairwise(ts))
+
+
+class _CountingRamp(_RampWithToggle):
+    """The ramp, recording every instant the integrator STEPS to -- each is one full field solve."""
+
+    def __init__(self, level: float) -> None:
+        super().__init__(level)
+        self.instants: set[float] = set()
+
+    def residual(self, u, u_dot, u_ddot, t):
+        self.instants.add(float(t))
+        return super().residual(u, u_dot, u_ddot, t)
+
+
+def test_a_crossing_is_located_in_few_re_steps_not_one_per_halving() -> None:
+    """A locator probe is a whole re-step, which on a field march is a whole nonlinear FEA solve.
+
+    MEASURED 2026-09-25: bisection to ``dt * 1e-6`` spent ~21 re-steps per crossing, ~80 s each on
+    synrm_parametric's chopper, so ONE switch event cost ~25 min. A curved event function (``u^3``)
+    keeps a secant locator honest: it cannot land exactly on the first probe, and it must still
+    converge to the SAME bracket width the bisection did.
+    """
+    problem = _CountingRamp(level=0.5)
+    study = TransientStudy(t0=0.0, t1=0.9, dt=0.3, integrator=IntegratorKind.BDF2)
+    solution = integrate_transient_with_events(
+        problem,
+        study,
+        np.array([0.0]),
+        event_fns=(lambda u, _t: float(u[0]) ** 3 - problem.level if problem.slope > 0.0 else -1.0,),
+        on_event=lambda _i, _t, _u: problem.toggle(),
+    )
+    ((_, t_event),) = solution.events
+    assert abs(t_event - 0.5 ** (1.0 / 3.0)) <= 0.3e-6
+    grid = {0.3, 0.6, 0.9}
+    probes = {t for t in problem.instants if min(abs(t - g) for g in grid) > 1e-12}
+    assert len(probes) <= 10, f'{len(probes)} distinct re-step instants to locate one crossing'

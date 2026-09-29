@@ -230,3 +230,34 @@ def test_a_step_the_floor_carried_says_so_and_one_its_own_bar_carried_does_not()
         'must be False -- if it is True the two verdicts have collapsed back into one'
     )
     assert set(hi.floor_converged_times) <= set(hi.times), 'a floor step at an instant never marched'
+
+
+class _RootAtTheFloor:
+    """``R(u) = k (u - 1) + noise``: the root is exact, but every evaluation carries a sign-flipping
+    remainder a tenth of the floor, so no iteration can go below it and none needs to.
+    """
+
+    def __init__(self, k: float) -> None:
+        self.k = k
+        self.calls = 0
+
+    def residual(self, u, u_dot, u_ddot, t):
+        self.calls += 1
+        floor = residual_floor(np.atleast_2d(self.k), np.atleast_1d(u))
+        return self.k * (np.asarray(u) - 1.0) + 0.1 * floor * (-1.0) ** self.calls
+
+    def jacobian(self, u, u_dot, u_ddot, t, weights):
+        return np.atleast_2d(self.k)
+
+
+def test_a_step_stalled_at_its_floor_stops_rather_than_exhausting_the_ceiling() -> None:
+    """MEASURED 2026-09-25 on ipm_uv's chopper: 30 of 51 solves ran all 50 Newton iterations at
+    |r| ~ 4e-9, one floor-width off the root, ~30 s each against ~2 s for a solve its bar
+    passed. Iterating on a residual that is already rounding changes nothing it can mean.
+    """
+    problem = _RootAtTheFloor(1.0e4)
+    study = TransientStudy(t0=0.0, t1=1e-3, dt=1e-3, integrator=IntegratorKind.BDF1)
+    sol = integrate_transient(problem, study, np.array([0.0]), max_newton=50, tol=0.0)
+    assert sol.floor_converged_times == [1e-3]
+    assert sol.nonconverged_times == []
+    assert problem.calls <= 12, f'{problem.calls} residual evaluations for one step at its floor'
