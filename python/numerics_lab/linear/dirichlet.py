@@ -18,8 +18,45 @@ a complex value array.
 from __future__ import annotations
 
 import numpy as np
+from numpy.typing import NDArray
+from scipy.sparse import csr_matrix
 
-__all__ = ['apply_dirichlet_triplets']
+__all__ = ['apply_dirichlet_csr', 'apply_dirichlet_triplets']
+
+
+def apply_dirichlet_csr(
+    matrix: csr_matrix,
+    rhs: NDArray[np.float64],
+    pinned: NDArray[np.intp],
+    values: NDArray[np.float64] | None = None,
+) -> tuple[csr_matrix, NDArray[np.float64]]:
+    """Apply symmetric Dirichlet elimination to a CSR system.
+
+    Non-zero prescribed values are lifted into ``rhs`` as ``rhs - matrix @ g`` before their
+    columns are removed. Pinned rows and columns then become identity rows, preserving symmetry
+    for solvers that require it. This operation depends on no mesh, basis, or physics.
+    """
+    if pinned.size == 0:
+        return matrix, rhs
+    prescribed = np.zeros(matrix.shape[0], dtype=float)
+    if values is not None:
+        prescribed[pinned] = values
+    lifted = rhs - matrix @ prescribed
+
+    rows = matrix.tolil()
+    for dof in pinned:
+        rows.rows[dof] = [int(dof)]
+        rows.data[dof] = [1.0]
+    constrained = rows.tocsr()
+
+    mask = np.ones(constrained.shape[0], dtype=float)
+    mask[pinned] = 0.0
+    constrained = constrained.multiply(csr_matrix(mask[None, :])).tolil()
+    for dof in pinned:
+        constrained[dof, dof] = 1.0
+    lifted = lifted.copy()
+    lifted[pinned] = prescribed[pinned]
+    return constrained.tocsr(), lifted
 
 
 def apply_dirichlet_triplets(row, col, val, rhs, bound_dirichlet, bias):

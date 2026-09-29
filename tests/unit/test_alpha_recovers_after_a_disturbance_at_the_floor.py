@@ -25,6 +25,16 @@ from motronics.gauss.nonlinear import _ALPHA_MIN, AssembledState, get_strategy
 
 pytestmark = pytest.mark.unit
 
+#: The undamped step this fixture holds constant. NOT ``+ 10.0`` ON EVERY COMPONENT, which is what
+#: it used to be and which `increment_ratio`'s gauge relaxation now reads as NO MOVEMENT AT ALL: a
+#: uniform shift of a gauge-free potential carries no energy and no B, so the relaxation reports
+#: the mean-removed part -- exactly zero for a constant vector -- and `_has_converged` fired on the
+#: first flat-energy step. The run ended at 10 iterations instead of 40 and the recovery assertions
+#: below had one sample to look at, or none, so they failed for a reason that had nothing to do
+#: with alpha. Scaling the components gives the step a SHAPE, which is what makes it movement; the
+#: MAGNITUDE is what these tests are about and it is still constant.
+_STEP = np.array([10.0, 5.0, 2.5])
+
 
 #: The undamped step both fixtures hold CONSTANT so the run cannot converge out from under the
 #: question they ask about alpha. It carries SHAPE -- its entries are not all equal -- and that is

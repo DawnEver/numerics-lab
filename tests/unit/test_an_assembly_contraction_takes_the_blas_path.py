@@ -2,7 +2,7 @@
 helper that guarantees it.
 
 THE MEASUREMENT THAT PUT THIS HERE, taken 2026-09-16 on ``cases/field/pm/spm_slotted`` at
-``SPLINE_REFINE = (2, 2)`` with ``compile_spline_magnetostatic``. Every ``np.einsum`` on the
+``SPLINE_REFINE = (2, 2)`` with ``compile_iga_magnetostatic``. Every ``np.einsum`` on the
 assembly path was timed by subscript, and the same call priced with ``optimize=True``:
 
 ===========================  =====  ==========  =========  ========
@@ -21,7 +21,7 @@ pairwise ``tensordot`` calls that land on ``dgemm``. Both languages are compiled
 was the ALGORITHM, not the implementation.
 
 Note WHICH site dominated, because the lane's standing suspicion was the other one: the 82.5 s is
-the VOLUME stiffness (``spline.py``), while ``trim_nitsche_blocks`` -- the 68 cut interfaces that
+the VOLUME stiffness (``iga.py``), while ``trim_nitsche_blocks`` -- the 68 cut interfaces that
 were the prime suspect for the assembly blow-up -- account for the 0.71 s row, 0.6% of the budget.
 
 WHY A HELPER RATHER THAN ``optimize=True`` AT EACH SITE: the defect is a DEFAULT, so any site that
@@ -41,25 +41,16 @@ import pytest
 import motronics
 from motronics.gauss.contract import contract
 
-#: The module GLOBS this scan reads. A GLOB AND NOT A HAND-WRITTEN LIST, and that is the whole
-#: repair (2026-09-22). The list that stood here named four files:
-#:
-#:     gauss/quadrature.py, hamilton/discretizations/spline{,_interface,_nonlinear}.py
-#:
-#: and all four still EXIST, so the `path.is_file()` guard below stayed green while the code walked
-#: out from under it. `spline.py` was split into `spline_estimate`, `spline_stabilise`,
-#: `spline_structural`, `spline_thermal`, `spline_trim_interface`, `spline_airgap` and
-#: `spline_electrostatic`; `gauss/quadrature.py`'s contractions moved to `gauss/spline_basis.py`.
-#: The four named files were left holding 7 contractions against a floor of 12 -- which is the
-#: floor doing exactly its job, and the reason this was found at all.
-#:
-#: A SPLIT CANNOT EMPTY A GLOB. That is the property being bought: the failure mode here was never
-#: "someone deleted a module", it was "someone moved the code and the list still resolved".
-_ASSEMBLY_MODULE_GLOBS = (
-    'gauss/quadrature.py',
-    'gauss/spline_basis.py',
-    'hamilton/discretizations/spline*.py',
-)
+#: Every module that assembles an operator by contracting basis values against a measure: DERIVED
+#: from the two trees that hold assembly, never listed -- a hand list went stale the day a new
+#: assembler (the coupled SDM subdomain) landed outside it.
+_ASSEMBLY_TREES = ('gauss', 'hamilton/discretizations')
+
+
+def _assembly_modules() -> list[str]:
+    root = _source_root()
+    return sorted(path.relative_to(root).as_posix() for tree in _ASSEMBLY_TREES for path in (root / tree).rglob('*.py'))
+
 
 #: Below this, the scan is not looking at the code that was measured. A scan that finds NOTHING is
 #: vacuous rather than green, so it carries a floor as well as a verdict.
@@ -82,14 +73,14 @@ _MINIMUM_CONTRACTIONS_SCANNED = 30
 #: added, still 18) and line numbers move under any edit. A module leaving this set is a
 #: conversion; a module ARRIVING is a new naive contraction in code that was clean, and the
 #: equality below reds on both -- which is what makes it a ratchet rather than an allowlist.
-_NAIVE_EINSUM_DEBT = frozenset({
-    'hamilton/discretizations/spline_airgap.py',
-    'hamilton/discretizations/spline_electrostatic.py',
-    'hamilton/discretizations/spline_estimate.py',
-    'hamilton/discretizations/spline_stabilise.py',
-    'hamilton/discretizations/spline_structural.py',
-    'hamilton/discretizations/spline_thermal.py',
-})
+_NAIVE_EINSUM_DEBT: frozenset[str] = frozenset()
+
+#: NOT COVERED BY THE TREE SCAN ABOVE, BY NAME, so that "the scan is green" cannot be read as "the
+#: tree is converted". The element (FEM) path inside `hamilton/discretizations` IS scanned now --
+#: `feat/sdm` converted it (`fix(fem): every assembly contraction takes the BLAS path`) and the
+#: port goldens were re-measured with it -- so what remains outside is the structural backend,
+#: which assembles in `hamilton/physics` and still carries naive multi-operand contractions.
+_NOT_SCANNED_BY_DESIGN = ('hamilton/physics/structural/backend.py',)
 
 
 def _source_root() -> Path:
@@ -151,6 +142,36 @@ def test_the_HELPER_IS_FASTER_THAN_THE_NAIVE_PATH_BY_A_STATED_RATIO() -> None:
     assert naive / fast >= 5.0, f'the helper is only {naive / fast:.1f}x the naive path, not the 35.5x measured'
 
 
+def test_THE_UNCOVERED_ELEMENT_PATH_IS_NAMED_AND_STILL_UNCOVERED() -> None:
+    """The exclusion is two-sided, so it cannot rot in either direction.
+
+    A named exclusion that nobody checks is the same failure as a stale module list: the file it
+    names gets deleted or converted and the prose goes on claiming a gap. This asserts each
+    excluded module still EXISTS, still carries at least one multi-operand contraction (so the
+    gap is real and not already closed), and is not also in the scanned list (so the two
+    declarations cannot contradict each other).
+    """
+    root = _source_root()
+    for relative in _NOT_SCANNED_BY_DESIGN:
+        path = root / relative
+        assert path.is_file(), f'{relative} is named as an uncovered module but is not in the tree'
+        assert relative not in _assembly_modules(), f'{relative} is declared uncovered but the tree scan reads it'
+        tree = ast.parse(path.read_text(encoding='utf-8'))
+        naive = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == 'einsum'
+            and len(node.args) >= 3
+            and not any(keyword.arg == 'optimize' for keyword in node.keywords)
+        ]
+        assert naive, (
+            f'{relative} is named as an uncovered element-path module but carries no naive '
+            'multi-operand einsum any more -- the gap is closed, so widen _ASSEMBLY_TREES to cover it.'
+        )
+
+
 def test_NO_ASSEMBLY_SITE_TAKES_THE_NAIVE_MULTI_OPERAND_EINSUM() -> None:
     """The scan that makes the helper a declaration the code must consult.
 
@@ -161,16 +182,17 @@ def test_NO_ASSEMBLY_SITE_TAKES_THE_NAIVE_MULTI_OPERAND_EINSUM() -> None:
     root = _source_root()
     scanned = 0
     offenders: list[str] = []
-    paths = sorted({q for pattern in _ASSEMBLY_MODULE_GLOBS for q in root.glob(pattern)})
-    assert paths, 'the globs matched no module at all, so this scan reads nothing'
-    for path in paths:
-        relative = path.relative_to(root).as_posix()
+    modules = _assembly_modules()
+    for relative in modules:
+        path = root / relative
         tree = ast.parse(path.read_text(encoding='utf-8'))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             target = node.func
-            name = target.attr if isinstance(target, ast.Attribute) else getattr(target, 'id', '')
+            name = (
+                target.attr if isinstance(target, ast.Attribute) else target.id if isinstance(target, ast.Name) else ''
+            )
             # args[0] is the subscript string, so two or more OPERANDS is len(args) >= 3.
             if name not in {'einsum', 'contract'} or len(node.args) < 3:
                 continue
@@ -181,7 +203,7 @@ def test_NO_ASSEMBLY_SITE_TAKES_THE_NAIVE_MULTI_OPERAND_EINSUM() -> None:
             if name == 'einsum' and not any(keyword.arg == 'optimize' for keyword in node.keywords):
                 offenders.append(f'{relative}:{node.lineno}')
     assert scanned >= _MINIMUM_CONTRACTIONS_SCANNED, (
-        f'the scan found only {scanned} multi-operand contractions across {len(paths)} '
+        f'the scan found only {scanned} multi-operand contractions across {len(modules)} '
         f'modules, below the floor {_MINIMUM_CONTRACTIONS_SCANNED} -- it is no longer reading the '
         'code that was measured, so finding no offender proves nothing'
     )

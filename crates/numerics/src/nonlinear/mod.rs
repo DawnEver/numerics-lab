@@ -35,17 +35,14 @@ pub use newton::{
     ContinuationStrategy, HeldFactorNewtonStrategy, ModifiedNewtonStrategy, NewtonKrylovStrategy,
     NewtonLineSearchStrategy, NewtonStrategy,
 };
-pub use picard::{
-    AdaptiveDampedPicardStrategy, DampedPicardStrategy, NuRelaxationDampedPicardStrategy,
-    PicardStrategy,
-};
+pub use picard::{DampedPicardStrategy, NuRelaxationDampedPicardStrategy, PicardStrategy};
 pub use quasi::{AndersonStrategy, BfgsStrategy, BroydenStrategy, LbfgsStrategy};
 
 // -- The damped-Picard parameters, moved verbatim from `mec/_sparse.py` -----------------------
 
-/// Floor for the adaptive under-relaxation factor.
+/// Floor for the damped under-relaxation factor.
 pub const ALPHA_MIN: f64 = 0.1;
-/// Adaptive-Picard recovery factor: grow `alpha` back toward 1 on a progressing step.
+/// Damped-Picard recovery factor after a calm window.
 pub const ALPHA_GROW: f64 = 1.5;
 /// Convergence: total-energy change below this fraction of a percent -- the FIXED-POINT bar
 /// (`1e-4` relative), the default of every strategy whose [`StopRule`] is [`StopRule::Energy`].
@@ -118,7 +115,7 @@ pub const STAGNATION_MAX_MIN_RATIO: f64 = 2.0;
 pub const DEFAULT_SOLVE_BUDGET_S: f64 = 500.0;
 
 /// The registry's spellings, in one place so the resolver and its error cannot drift.
-pub const KNOWN_STRATEGIES: [&str; 14] = [
+pub const KNOWN_STRATEGIES: [&str; 13] = [
     "anderson",
     "bfgs",
     "continuation",
@@ -130,7 +127,6 @@ pub const KNOWN_STRATEGIES: [&str; 14] = [
     "newton-linesearch",
     "nu-damped",
     "picard",
-    "picard-adaptive",
     "picard-damped",
     "quasi-newton",
 ];
@@ -582,32 +578,6 @@ pub fn has_converged_residual(
     residual_ratio < rtol && increment_ratio(x, x_next) < rtol
 }
 
-/// Energy-AND-flux convergence (fraction of a percent each), both below tolerance to pass.
-///
-/// A private copy of the FEA post-step check's formula — NOT a call into it: `gauss` sits BELOW
-/// `hamilton` in the dependency arrow, so this module cannot reach it without inverting the
-/// layering. [`NuRelaxationDampedPicardStrategy`] needs this two-metric check (not the
-/// single-metric [`energy_error_pct`] the other strategies use) to reproduce the removed FEA
-/// frozen loop's exact convergence test verbatim.
-#[must_use]
-pub(crate) fn energy_flux_convergence(
-    total_energy: f64,
-    total_flux: f64,
-    last_energy: Option<f64>,
-    last_flux: Option<f64>,
-    rtol_energy_pct: f64,
-    rtol_flux_pct: f64,
-) -> (f64, f64, bool) {
-    let (Some(le), Some(lf)) = (last_energy, last_flux) else {
-        return (f64::INFINITY, f64::INFINITY, false);
-    };
-    let energy_denom = total_energy.abs().max(le.abs()).max(1e-12);
-    let flux_denom = total_flux.abs().max(lf.abs()).max(1e-12);
-    let e = (total_energy - le).abs() / energy_denom * 100.0;
-    let fl = (total_flux - lf).abs() / flux_denom * 100.0;
-    (e, fl, e < rtol_energy_pct && fl < rtol_flux_pct)
-}
-
 /// The stagnation break, consulted NEXT TO [`has_converged`] — never instead of it.
 ///
 /// [`has_converged`] is the FAST break: energy settled AND the increment below `rtol/100`, checked
@@ -877,7 +847,6 @@ pub fn get_strategy<S: NonlinearSystem + 'static>(
     let s: Box<dyn IterationStrategy<S>> = match name {
         "picard-damped" => Box::new(DampedPicardStrategy),
         "nu-damped" => Box::new(NuRelaxationDampedPicardStrategy),
-        "picard-adaptive" => Box::new(AdaptiveDampedPicardStrategy::default()),
         "picard" => Box::new(PicardStrategy),
         "newton" => Box::new(NewtonStrategy::default()),
         "anderson" => Box::new(AndersonStrategy::default()),

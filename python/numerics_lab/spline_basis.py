@@ -49,10 +49,10 @@ not move when the patch is refined.
 
 THIS USED TO RETURN ``(n_points, n_basis)`` DENSE OVER THE WHOLE PATCH, and the module docstring
 called that "correct and wasteful". MEASURED on ``cases/field/pm/spm_slotted`` at
-``SPLINE_REFINE = (2, 2)`` before the change: the spline leg peaked at 2.87 GB RSS, returned
+``SPLINE_REFINE = (2, 2)`` before the change: the isogeometric leg peaked at 2.87 GB RSS, returned
 4.328 GB of dense arrays across 19613 calls against 0.385 GB of actual information (11.2x), and
 its largest single call was 234200 points by 105 basis functions -- ONE array of 0.55 GB, 94% of
-it structural zeros. 1.759 GB of the peak was not even transient: ``SplineNonlinearSystem``
+it structural zeros. 1.759 GB of the peak was not even transient: ``IgaNonlinearSystem``
 retains the values and gradients of every patch for the whole Picard loop. Refinement is this
 lane's main physics lever ((2,2) -> (3,3) moved torque from 0.307x to 0.553x of FEMM), and memory
 was what bounded it.
@@ -77,7 +77,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from motronics.contracts.errors import MotronicsError
-from motronics.contracts.ir.spline_space_ir import Patch
+from motronics.contracts.ir.spline_space_ir import Patch, bspline_basis
 from motronics.gauss.contract import contract
 
 __all__ = [
@@ -315,7 +315,7 @@ class PatchBasis:
             msg = 'no evaluation points were given, so there is nothing to evaluate the basis at'
             raise SplineBasisError(msg)
         # The DOMAIN check, matching Patch.evaluate's. Without it an out-of-domain parameter makes
-        # _cox_de_boor return an all-zero row, _rationalise_values divides 0/0, and the NaN flows
+        # bspline_basis return an all-zero row, _rationalise_values divides 0/0, and the NaN flows
         # into the stiffness matrix -- past the singular-map guard, which np.abs(nan) < tol does not
         # trip. Every consumer then assembles NaN with no error raised anywhere.
         for axis, knot in enumerate(self.patch.knots):
@@ -559,11 +559,11 @@ def _tensor_basis(
 
 
 def _knot_span(knot: NDArray[np.float64], degree: int, values: NDArray[np.float64], n_basis: int) -> NDArray[np.intp]:
-    """The index of the non-empty knot span each parameter falls in, matching :func:`_cox_de_boor`.
+    """The index of the non-empty knot span each parameter falls in, matching :func:`~motronics.contracts.ir.spline_space_ir.bspline_basis`.
 
     ``searchsorted(..., 'right') - 1`` lands on the LAST knot not greater than the parameter, which
     is what makes a repeated interior knot resolve to the span ABOVE it rather than to the empty
-    one between the copies -- the same choice ``_cox_de_boor``'s ``knot[i] <= x < knot[i+1]`` makes.
+    one between the copies -- the same choice ``bspline_basis``'s ``knot[i] <= x < knot[i+1]`` makes.
     The clamp at the top end is the other half of its ``values == knot[-1]`` special case: the
     domain's last parameter belongs to the last non-empty span rather than to a span past the end.
     """
@@ -575,33 +575,9 @@ def _bspline_1d(
     knot: NDArray[np.float64], degree: int, values: NDArray[np.float64], *, order: int
 ) -> list[NDArray[np.float64]]:
     """``[N, dN, d2N]`` up to ``order`` for one knot vector, by the Cox-de Boor recursion."""
-    out = [_cox_de_boor(knot, degree, values)]
+    out = [bspline_basis(knot, degree, values)]
     out.extend(_bspline_derivative(knot, degree, values, k) for k in range(1, order + 1))
     return out
-
-
-def _cox_de_boor(knot: NDArray[np.float64], degree: int, values: NDArray[np.float64]) -> NDArray[np.float64]:
-    """All B-spline basis functions of ``degree`` on ``knot`` at ``values``, dense."""
-    n_basis = len(knot) - degree - 1
-    values = np.asarray(values, dtype=float)
-    current = np.zeros((values.size, len(knot) - 1))
-    for i in range(len(knot) - 1):
-        inside = (values >= knot[i]) & (values < knot[i + 1])
-        if knot[i + 1] == knot[-1] and knot[i] < knot[i + 1]:
-            inside |= values == knot[-1]
-        current[inside, i] = 1.0
-    for p in range(1, degree + 1):
-        width = len(knot) - p - 1
-        nxt = np.zeros((values.size, width))
-        for i in range(width):
-            left_den = knot[i + p] - knot[i]
-            right_den = knot[i + p + 1] - knot[i + 1]
-            if left_den > 0:
-                nxt[:, i] += (values - knot[i]) / left_den * current[:, i]
-            if right_den > 0:
-                nxt[:, i] += (knot[i + p + 1] - values) / right_den * current[:, i + 1]
-        current = nxt
-    return current[:, :n_basis]
 
 
 def _bspline_derivative(
@@ -618,7 +594,7 @@ def _bspline_derivative(
         return np.zeros((np.asarray(values).size, n_basis))
     lower = _bspline_derivative(knot, degree - 1, values, order - 1) if order > 1 else None
     if order == 1:
-        lower = _cox_de_boor(knot, degree - 1, values)
+        lower = bspline_basis(knot, degree - 1, values)
     out = np.zeros((np.asarray(values).size, n_basis))
     for i in range(n_basis):
         left_den = knot[i + degree] - knot[i]

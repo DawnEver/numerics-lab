@@ -99,9 +99,11 @@ def test_the_backtracking_line_search_halves_an_overshooting_step() -> None:
 
     state = IntegratorState(us=[np.array([1.0]), np.array([1.0])], t=0.0)
     form = _bdf2_variable_form(state, 0.1, 0.1, 0.1)
+
     # The seam hands the solve the NEGATED residual, so 10 * (-r) = -10r: the right
     # direction at 10x the honest Newton step (the sharp channel's overshoot).
-    overshoot_solve = lambda _j, r: 10.0 * r  # noqa: E731 -- the seam's 10x overstep
+    def overshoot_solve(_j, r):  # the seam's 10x overstep
+        return 10.0 * r
 
     problem_bt = _Quadratic()
     u_bt, _converged, _it, _residual, _on_floor = _solve_step(
@@ -138,7 +140,7 @@ def test_the_stall_polish_switches_to_the_tangent_and_converges() -> None:
     from motronics.gauss.time_integrators import IntegratorState, _solve_step
     from motronics.gauss.time_integrators.events import _bdf2_variable_form
 
-    class _CouplingChord:
+    class _CouplingChordBase:
         """Two switches coupled through G: the ON channel's saturation
         (i = c u/(1+m u), the chord = i/u, the tangent = 1/(1+m u)^2) beside the OFF
         channel's near-zero chord (joff) -- the chord jacobian is near-singular and the
@@ -161,20 +163,23 @@ def test_the_stall_polish_switches_to_the_tangent_and_converges() -> None:
             d1 = self.c / (1.0 + self.m * u1) if u1 != 0.0 else self.c
             return np.array([[d1 + self.G, -self.G], [-self.G, self.joff + self.G]])
 
+    class _CouplingChord(_CouplingChordBase):
+        @property
+        def has_tangent_jacobian(self):
+            return True
+
         def jacobian_tangent(self, u_arg, u_dot, u_ddot, t, weights):
             self.tangent_calls += 1
             u1, _u2 = u_arg
             d1 = self.c / (1.0 + self.m * u1) ** 2
             return np.array([[d1 + self.G, -self.G], [-self.G, self.joff + self.G]])
 
-    class _ChordOnly(_CouplingChord):
-        """No jacobian_tangent seam (the attribute shadowed to None) -- the pure chord
-        Newton, the pre-polish behavior.
-        """
+    class _ChordOnly(_CouplingChordBase):
+        """No alternative-Jacobian capability: the pure chord Newton's pre-polish behavior."""
 
-        jacobian_tangent = None  # type: ignore[assignment] -- the seam's absence
+    def solve(j, r):  # the seam's solve
+        return np.linalg.solve(np.asarray(j), r)
 
-    solve = lambda j, r: np.linalg.solve(np.asarray(j), r)  # noqa: E731 -- the seam's solve
     state = IntegratorState(us=[np.array([0.5, 0.5]), np.array([0.5, 0.5])], t=0.0)
     form = _bdf2_variable_form(state, 0.1, 0.1, 0.1)
     guess = np.array([0.5, 0.5])
@@ -209,6 +214,9 @@ def test_a_polish_whose_step_the_line_search_cannot_accept_hands_back_to_the_new
     from motronics.gauss.time_integrators.events import _bdf2_variable_form
 
     class _SlowFarField:
+        #: The declared capability `AlternativeJacobianProblem` reads, so the polish can engage.
+        has_tangent_jacobian = True
+
         def __init__(self) -> None:
             self.alternative_calls = 0
 
@@ -223,7 +231,9 @@ def test_a_polish_whose_step_the_line_search_cannot_accept_hands_back_to_the_new
             self.alternative_calls += 1
             return -self.jacobian(u_arg, u_dot, u_ddot, t, weights)
 
-    solve = lambda j, r: np.linalg.solve(np.asarray(j), r)  # noqa: E731 -- the seam's solve
+    def solve(j, r):  # the seam's solve
+        return np.linalg.solve(np.asarray(j), r)
+
     state = IntegratorState(us=[np.zeros(1), np.zeros(1)], t=0.0)
     form = _bdf2_variable_form(state, 0.1, 0.1, 0.1)
     # Both line searches: the strict one, and the march's own tolerant band (`integrate_transient`

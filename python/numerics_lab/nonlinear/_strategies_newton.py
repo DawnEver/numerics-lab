@@ -8,8 +8,11 @@ from __future__ import annotations
 import logging
 
 import numpy as np
+import scipy.sparse as sp
+from scipy.sparse.linalg import LinearOperator, gmres, splu
 
 from motronics.gauss.linear import reject_nonfinite_solution
+from motronics.gauss.linear.native_direct import native_factor
 from motronics.gauss.nonlinear import (
     _RTOL_ENERGY_PCT,
     AssembledState,
@@ -38,6 +41,7 @@ __all__ = [
     'NewtonKrylovStrategy',
     'NewtonLineSearchStrategy',
     'NewtonStrategy',
+    'ResidualMarchStrategy',
 ]
 
 
@@ -47,10 +51,11 @@ def _free_residual_norm(system, x, state) -> float:
     A duck-typed system inherits nothing from a ``Protocol``, so the default body has to be
     spelled where it is consumed.
     """
-    norm_of = getattr(system, 'residual_norm', None)
-    if norm_of is not None:
-        return float(norm_of(x, state))
-    return float(np.linalg.norm(system.residual(x, state)))
+    try:
+        norm_of = system.residual_norm
+    except AttributeError:
+        return float(np.linalg.norm(system.residual(x, state)))
+    return float(norm_of(x, state))
 
 
 def _residual_reference(system, state, seed_norm: float) -> float:
@@ -63,8 +68,9 @@ def _residual_reference(system, state, seed_norm: float) -> float:
     H(curl) march already applies (``ref = max(||f_f||, ||R_f^0||)``). A system without the hook
     is judged against its seed residual, exact for the zero seed every such system starts from.
     """
-    rhs_norm = getattr(system, 'rhs_norm', None)
-    if rhs_norm is None:
+    try:
+        rhs_norm = system.rhs_norm
+    except AttributeError:
         return seed_norm
     return max(seed_norm, float(rhs_norm(state)))
 
@@ -151,7 +157,10 @@ class NewtonStrategy:
         self.factorizations += 1
         if self.refactor_every is None:
             return lambda rhs: system.solve_system(jac, rhs)
-        factorize = getattr(system, 'factorize', None)
+        try:
+            factorize = system.factorize
+        except AttributeError:
+            factorize = None
         if factorize is not None:
             return factorize(jac)
         lu = _lu_factorize(jac)
@@ -230,8 +239,13 @@ class NewtonStrategy:
             last_energy = state.total_energy
             increment = increment_ratio(x_prev, x)
             converged = _has_converged(
-                err, x_prev, x, rtol_energy_pct, residual_ratio=r_norm / reference
-            ) or watch.observe(err, increment)
+                err,
+                x_prev,
+                x,
+                rtol_energy_pct,
+                material_change=state.material_change,
+                residual_ratio=r_norm / reference,
+            ) or watch.observe(err, increment, state.material_change)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, lam, increment)
@@ -312,7 +326,9 @@ class AndersonStrategy:
                 if self.beta != 1.0:
                     x = x + (self.beta - 1.0) * (f - dF @ gamma)
             increment = increment_ratio(x_prev, x)
-            converged = _has_converged(err, x_prev, x, rtol_energy_pct) or watch.observe(err, increment)
+            converged = _has_converged(
+                err, x_prev, x, rtol_energy_pct, material_change=state.material_change
+            ) or watch.observe(err, increment, state.material_change)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, self.beta, increment)
@@ -330,13 +346,6 @@ def _lu_factorize(matrix):
     Returns ``None`` for a non-scipy tangent (e.g. FEA's opaque reduced-increment bundle), so those
     equations transparently fall back to the equation's own ``solve_system``.
     """
-    # Local import (matches NewtonKrylovStrategy): keep scipy off this module's hot default (Picard)
-    # import path; only the factorization-reusing strategies pull it in.
-    import scipy.sparse as sp  # noqa: PLC0415
-    from scipy.sparse.linalg import splu  # noqa: PLC0415
-
-    from motronics.gauss.linear.native_direct import native_factor  # noqa: PLC0415
-
     if not sp.issparse(matrix):
         return None
     native = native_factor(matrix)
@@ -433,7 +442,9 @@ class ModifiedNewtonStrategy:
                             dx = cached_lu.solve(-r) if cached_lu is not None else system.solve_system(cached_jac, -r)
                             x = x + dx
             increment = increment_ratio(x_prev, x)
-            converged = _has_converged(err, x_prev, x, rtol_energy_pct) or watch.observe(err, increment)
+            converged = _has_converged(
+                err, x_prev, x, rtol_energy_pct, material_change=state.material_change
+            ) or watch.observe(err, increment, state.material_change)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0, increment)
@@ -500,7 +511,9 @@ class BroydenStrategy:
             x = x + dx
             prev_r, prev_dx = r, dx
             increment = increment_ratio(x_prev, x)
-            converged = _has_converged(err, x_prev, x, rtol_energy_pct) or watch.observe(err, increment)
+            converged = _has_converged(
+                err, x_prev, x, rtol_energy_pct, material_change=state.material_change
+            ) or watch.observe(err, increment, state.material_change)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0, increment)
@@ -575,7 +588,9 @@ class BFGSStrategy:
             x = x + dx
             prev_r, prev_dx = r, dx
             increment = increment_ratio(x_prev, x)
-            converged = _has_converged(err, x_prev, x, rtol_energy_pct) or watch.observe(err, increment)
+            converged = _has_converged(
+                err, x_prev, x, rtol_energy_pct, material_change=state.material_change
+            ) or watch.observe(err, increment, state.material_change)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0, increment)
@@ -644,7 +659,9 @@ class LBFGSStrategy:
             x = x + dx
             prev_r, prev_dx = r, dx
             increment = increment_ratio(x_prev, x)
-            converged = _has_converged(err, x_prev, x, rtol_energy_pct) or watch.observe(err, increment)
+            converged = _has_converged(
+                err, x_prev, x, rtol_energy_pct, material_change=state.material_change
+            ) or watch.observe(err, increment, state.material_change)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0, increment)
@@ -711,11 +728,6 @@ class NewtonKrylovStrategy:
     def solve(
         self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
     ) -> IterationResult:
-        # Local imports: the Krylov seam + LinearOperator are only needed by this one strategy, and
-        # keeping them here avoids a scipy import on the module's hot default (Picard) path.
-        import scipy.sparse as _sp  # noqa: PLC0415
-        from scipy.sparse.linalg import LinearOperator, gmres  # noqa: PLC0415
-
         x = system.initial_guess()
         state: AssembledState | None = None
         last_energy: float | None = None
@@ -733,7 +745,7 @@ class NewtonKrylovStrategy:
             r = system.residual(x, state)
             jac = system.tangent(x, state)
             n = x.shape[0]
-            if jac is not None and not (_sp.issparse(jac) or isinstance(jac, LinearOperator)):
+            if jac is not None and not (sp.issparse(jac) or isinstance(jac, LinearOperator)):
                 # The equation returned an OPAQUE tangent bundle (FEA's reduced-increment dict), not a
                 # scipy operator GMRES can apply. Its own solve_system does the correct reduced Newton
                 # increment solve (direct), so route through it: still an exact Newton step converging to
@@ -757,10 +769,45 @@ class NewtonKrylovStrategy:
                     dx = system.solve_linear(state) - x  # Krylov breakdown -> Picard substitution
             x = x + dx
             increment = increment_ratio(x_prev, x)
-            converged = _has_converged(err, x_prev, x, rtol_energy_pct) or watch.observe(err, increment)
+            converged = _has_converged(
+                err, x_prev, x, rtol_energy_pct, material_change=state.material_change
+            ) or watch.observe(err, increment, state.material_change)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0, increment)
+        return IterationResult(x=x, state=state, iterations=ran, converged=converged)
+
+
+class ResidualMarchStrategy:
+    """A Newton / secant march judged on the RESIDUAL against the system's own arithmetic floor.
+
+    For an equation whose convergence is a statement about its residual rather than an energy --
+    the 3-D H(curl) curl-curl system, whose ``R = K(nu(B)) A - f`` is the measured quantity and
+    whose floor is ``eps * || |J| . |u| ||`` -- the system itself decides when the residual is
+    settled (:meth:`residual_settled`) and how long each step is (:meth:`step_length`); the
+    strategy owns only the march: assemble, ask, solve ``tangent dx = -r``, step. It is not in
+    ``ITERATION_REGISTRY`` because no energy-judged system can answer :meth:`residual_settled`.
+    """
+
+    name = 'residual-march'
+
+    def solve(
+        self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
+    ) -> IterationResult:
+        del rtol_energy_pct  # the system's own residual rule decides
+        x = system.initial_guess()
+        state: AssembledState | None = None
+        converged = False
+        ran = 0
+        for i in range(max_iter):
+            ran = i + 1
+            state = system.assemble(x)
+            system.on_iteration(i, state, 0.0, system.step_length(i), 0.0)
+            if system.residual_settled(state):
+                converged = True
+                break
+            dx = system.solve_system(system.tangent(x, state), -system.residual(x, state))
+            x = x + system.step_length(i) * dx
         return IterationResult(x=x, state=state, iterations=ran, converged=converged)
 
 
@@ -817,5 +864,37 @@ class _SeededSystem:
     def initial_guess(self) -> np.ndarray:
         return self._seed
 
-    def __getattr__(self, name: str) -> object:
-        return getattr(self._base, name)
+    @property
+    def unwrapped(self) -> NonlinearSystem:
+        return self._base
+
+    @property
+    def is_linear(self) -> bool:
+        return bool(self._base.is_linear)
+
+    def assemble(self, x, /):
+        return self._base.assemble(x)
+
+    def solve_linear(self, state, /):
+        return self._base.solve_linear(state)
+
+    def residual(self, x, state, /):
+        return self._base.residual(x, state)
+
+    def residual_norm(self, x, state, /):
+        return self._base.residual_norm(x, state)
+
+    def tangent(self, x, state, /):
+        return self._base.tangent(x, state)
+
+    def solve_system(self, matrix, rhs, /):
+        return self._base.solve_system(matrix, rhs)
+
+    def solve_secant(self, state, rhs, /):
+        return self._base.solve_secant(state, rhs)
+
+    def on_iteration(self, i, state, err, alpha, increment, /):
+        return self._base.on_iteration(i, state, err, alpha, increment)
+
+    def scale_source(self, lam, /):
+        return self._base.scale_source(lam)

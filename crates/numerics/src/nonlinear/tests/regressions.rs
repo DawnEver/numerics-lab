@@ -155,25 +155,24 @@ fn plateau_system(x0: f64) -> Synth {
     s
 }
 
-/// Every registered strategy except four, EXCLUDED BY NAME with their reasons rather than by a
+/// Every registered strategy except five, EXCLUDED BY NAME with their reasons rather than by a
 /// silent filter: `continuation` wraps another strategy and is driven through `scale_source`,
-/// `nu-damped` needs the raw pre-fold pair and refuses a system without it, and `newton` /
-/// `newton-linesearch` REFUSE a system with no tangent (2026-09-25) -- they are held to the
-/// plateau on a tangent-bearing fixture below. `nu-damped` still carries its own two-metric
-/// energy-AND-flux rule -- a NAMED hole in this test's scope, not a claim that it is covered.
-const PLATEAU_DRIVABLE: [&str; 9] = [
+/// `nu-damped` needs the raw pre-fold pair and refuses a system without it (it runs the same loop
+/// and the same `has_converged` as `picard-damped`), and `newton` / `newton-linesearch` /
+/// `newton-held-factor` REFUSE a system with no tangent (2026-09-25) -- they are held to the
+/// plateau on a tangent-bearing fixture below.
+const PLATEAU_DRIVABLE: [&str; 8] = [
     "anderson",
     "bfgs",
     "l-bfgs",
     "modified-newton",
     "newton-krylov",
     "picard",
-    "picard-adaptive",
     "picard-damped",
     "quasi-newton",
 ];
 
-/// The two registry names of the ONE Newton, which judges the RESIDUAL and needs a tangent.
+/// The three registry names of the ONE Newton, which judges the RESIDUAL and needs a tangent.
 const NEWTON_NAMES: [&str; 3] = ["newton", "newton-linesearch", "newton-held-factor"];
 
 #[test]

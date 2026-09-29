@@ -21,7 +21,7 @@ import itertools
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 import numpy as np
 
@@ -29,7 +29,6 @@ __all__ = [
     'DEFAULT_ITERATION_STRATEGY',
     'DEFAULT_SOLVE_BUDGET_S',
     'ITERATION_REGISTRY',
-    'AdaptiveDampedPicardStrategy',
     'AndersonStrategy',
     'AssembledState',
     'BFGSStrategy',
@@ -49,6 +48,7 @@ __all__ = [
     'NonlinearSystem',
     'NuRelaxationDampedPicardStrategy',
     'PicardStrategy',
+    'ResidualMarchStrategy',
     'get_strategy',
     'increment_ratio',
     'strategy_requires',
@@ -58,8 +58,8 @@ __all__ = [
 ]
 
 # Damped-Picard parameters (moved verbatim from mec/_sparse.py so the extracted loop is identical).
-_ALPHA_MIN = 0.1  # floor for the adaptive under-relaxation factor
-_ALPHA_GROW = 1.5  # adaptive-Picard recovery factor: grow alpha back toward 1 on a progressing step
+_ALPHA_MIN = 0.1  # floor for the damped under-relaxation factor
+_ALPHA_GROW = 1.5  # damped-Picard recovery factor after a calm window
 _RTOL_ENERGY_PCT = 0.01  # convergence: total-energy change below this fraction of a percent
 #: Consecutive UNDISTURBED steps (no energy-error growth, no energy-delta sign flip) before the
 #: damped Picard loop grows ``alpha`` back. The ratchet used to be one-way, so a single early
@@ -79,12 +79,16 @@ class AssembledState:
         total_energy: the scalar the convergence test tracks.
         payload: equation-specific extras the CALLER reads back off the final state (e.g. the
             per-branch energy/flux/B for MEC); the strategy never inspects it.
+        material_change: relative change of the IRREVERSIBLE material state this assembly's trial
+            implies (`gauss.nonlinear.material_state`); ``0`` for a system whose materials are all
+            reversible. The material term of :func:`_has_converged`.
 
     """
 
     system_matrix: object
     total_energy: float
     payload: object = None
+    material_change: float = 0.0
 
 
 @dataclass
@@ -187,6 +191,29 @@ class NonlinearSystem(Protocol):
         """
 
 
+@runtime_checkable
+class RawStateSystem(Protocol):
+    """Optional pre-boundary-fold assembly capability required by ``nu-damped``."""
+
+    def raw_state(self, x: np.ndarray, /): ...
+    def fold_raw(self, s_row, s_col, s_val, t_mat, total_energy, /) -> AssembledState: ...
+
+
+@runtime_checkable
+class WrappedNonlinearSystem(Protocol):
+    """A transparent nonlinear wrapper with an explicitly reachable wrapped system."""
+
+    @property
+    def unwrapped(self) -> NonlinearSystem: ...
+
+
+def unwrap_system(system: NonlinearSystem) -> NonlinearSystem:
+    """Return the concrete system beneath any explicit transparent wrappers."""
+    while isinstance(system, WrappedNonlinearSystem):
+        system = system.unwrapped
+    return system
+
+
 class NewtonTangentUnavailable(TypeError):
     """A Newton-family strategy was asked to drive a system that supplies no tangent.
 
@@ -199,7 +226,7 @@ class NewtonTangentUnavailable(TypeError):
     """
 
     def __init__(self, system: object, strategy: str) -> None:
-        inner = getattr(system, 'unwrapped', system)
+        inner = unwrap_system(system)
         super().__init__(
             f'{type(inner).__name__} returned no tangent, so {strategy!r} cannot run on it. Newton needs '
             f'the Jacobian of the residual; supply `tangent` on the system, or select a fixed-point '
@@ -277,10 +304,24 @@ class _TimeBudgetedSystem:
         """
         return self._inner
 
-    def __getattr__(self, name: str) -> object:
-        # Reached only for names this wrapper does not define, which is every part of the
-        # protocol that costs nothing -- `initial_guess`, `residual`, `on_iteration`, `is_linear`.
-        return getattr(self._inner, name)
+    @property
+    def is_linear(self) -> bool:
+        return bool(self._inner.is_linear)
+
+    def initial_guess(self):
+        return self._inner.initial_guess()
+
+    def residual(self, x, state, /):
+        return self._inner.residual(x, state)
+
+    def residual_norm(self, x, state, /):
+        return self._inner.residual_norm(x, state)
+
+    def on_iteration(self, i, state, err, alpha, increment, /):
+        return self._inner.on_iteration(i, state, err, alpha, increment)
+
+    def scale_source(self, lam, /):
+        return self._inner.scale_source(lam)
 
     def _check(self, where: str) -> None:
         elapsed = self._clock() - self._started
@@ -365,11 +406,13 @@ def _has_converged(
     x_next: np.ndarray,
     rtol_energy_pct: float,
     *,
+    material_change: float,
     residual_ratio: float | None = None,
 ) -> bool:
-    """The ONE convergence rule: the equation is satisfied (or its energy settled) AND the iterate has stopped moving.
+    """The ONE convergence rule: the equation is satisfied (or its energy settled), the iterate has
+    stopped moving, AND the irreversible material state has stopped changing.
 
-    TWO FIRST HALVES, ONE SECOND HALF (2026-09-25, the Newton unification). A strategy that holds
+    TWO FIRST HALVES, ONE SHARED REST (2026-09-25, the Newton unification). A strategy that holds
     the RESIDUAL -- the Newton family, which forms it every step anyway -- passes
     ``residual_ratio = ||r(x_next)|| / max(||r(x_0)||, ||rhs||)`` and is judged on it: the root of
     the equation is the thing being sought, so the residual is the direct measure and the energy
@@ -377,7 +420,14 @@ def _has_converged(
     (the seed residual, or the source norm when a warm start makes that smaller), so the ratio is
     scale-free in every unit and every family. A fixed-point
     strategy that never forms a residual passes ``None`` and keeps the energy half described below.
-    The increment half is shared, so neither can call a wandering iterate converged.
+    The increment and material halves are shared, so neither can call a wandering iterate converged.
+
+    THE MATERIAL TERM (D4, 2026-09-25). A reversible law (steel B-H) is a function of the iterate,
+    so the iterate test already sees it settle and its change is ``0``. A one-way remanence clamp
+    is NOT: its state is history, and an iterate can sit still for a step while the clamp is still
+    walking down the recoil line. ``material_change`` is that state's relative change on this
+    step, held to the same bar as the increment. It is REQUIRED (keyword, no default) so a strategy
+    cannot consult the rule without deciding what it passes.
 
     A FLAT ENERGY IS NOT A FIXED POINT. `total_energy` can sit on a near-flat plateau that is not
     the solution -- measured on a saturating-BH case, which read 0.00% energy change for 20+
@@ -405,7 +455,7 @@ def _has_converged(
     """
     rtol = rtol_energy_pct / 100.0
     settled = residual_ratio < rtol if residual_ratio is not None else err < rtol_energy_pct
-    return settled and increment_ratio(x, x_next) < rtol
+    return settled and increment_ratio(x, x_next) < rtol and float(material_change) < rtol
 
 
 #: Consecutive steps of the stagnation window. MEASURED (lane K, 2026-09-01): on
@@ -454,8 +504,16 @@ class _StagnationWatch:
         self._errs: deque[float] = deque(maxlen=self._window)
         self._increments: deque[float] = deque(maxlen=self._window)
 
-    def observe(self, err: float, increment: float, /) -> bool:
-        """Record one iteration's pair; True iff the full window is settled AND stationary."""
+    def observe(self, err: float, increment: float, material_change: float, /) -> bool:
+        """Record one iteration's pair; True iff the full window is settled AND stationary.
+
+        A stationary INCREMENT is no escape while the irreversible material state is still moving:
+        ``material_change`` must be under the same bar :func:`_has_converged` holds it to.
+        """
+        if float(material_change) >= self._rtol / 100.0:
+            self._errs.clear()
+            self._increments.clear()
+            return False
         self._errs.append(float(err))
         self._increments.append(float(increment))
         if len(self._errs) < self._window:
@@ -578,6 +636,19 @@ def increment_ratio(x: np.ndarray, x_next: np.ndarray, /) -> float:
     dx_norm = float(np.linalg.norm(dx))
     if dx_norm == 0.0:
         return 0.0  # the degenerate edge, where the constant fraction is undefined
+    if dx.size < 2:
+        # A ONE-COMPONENT ITERATE HAS NO SHAPE TO SEPARATE FROM ITS GAUGE. The relaxation below
+        # splits `dx` into a constant mode and a mean-removed shape; for n = 1 the shape subspace
+        # is {0}, so `dx - dx.mean()` is EXACTLY zero for every possible increment and the test
+        # `shape_norm / dx_norm < _GAUGE_ONLY_SHAPE_FRACTION` passes unconditionally. The function
+        # then returned 0.0 -- "the iterate has stopped moving" -- on a step of any size.
+        # MEASURED on the plateau fixture: `increment_ratio([5.0], [7.5])` returned 0.0, so
+        # `_has_converged` fired at x = 7.5 against a fixed point of 10.0 and six strategies
+        # reported `converged=True` three iterations into a solve that was still crossing the
+        # plateau their own tests were written to refuse.
+        # This is not a tolerance: the decomposition carries no information at n = 1, so the raw
+        # ratio is the only thing there is to report.
+        return dx_norm / x_scale
     # A UNIFORM SHIFT IN A GAUGE-FREE POTENTIAL IS NOT MOVEMENT. In 2-D magnetostatics the unknown
     # is the vector potential `A`, defined only up to an additive constant unless a Dirichlet row
     # pins it; that constant carries no energy and no `B`, so an iterate drifting along it has
@@ -619,38 +690,6 @@ def increment_ratio(x: np.ndarray, x_next: np.ndarray, /) -> float:
     return dx_norm / x_scale
 
 
-def _energy_flux_convergence(
-    total_energy: float,
-    total_flux: float,
-    last_energy: float | None,
-    last_flux: float | None,
-    rtol_energy_pct: float,
-    rtol_flux_pct: float,
-) -> tuple[float, float, bool]:
-    """Energy-AND-flux convergence test (fraction of a percent each), both below tolerance to pass.
-
-    THE ONLY COPY, since 2026-09-06. It began as a copy of
-    ``hamilton.discretizations.fem._post._check_convergence`` -- NOT an import of it, because
-    ``gauss`` sits BELOW ``hamilton`` in the dependency arrow (``hamilton -> ... -> gauss -> core
-    -> contracts``) and cannot import upward. That original had zero callers and was deleted in the
-    commit that fixed the rule below it: two copies of a convergence test, one of them dead, is the
-    drift this docstring used to only warn about, and it became concrete the moment the live one
-    gained an iterate test the dead one would never have received.
-
-    :class:`NuRelaxationDampedPicardStrategy` needs this two-metric check (not the single-metric
-    :func:`_energy_error_pct` the other strategies use) to reproduce the removed FEA frozen loop's
-    exact test. It is a NECESSARY condition there, not a sufficient one: neither metric can see a
-    redistribution that leaves ``max|x|`` alone, so the strategy ANDs it with :func:`_has_converged`.
-    """
-    if last_energy is None or last_flux is None:
-        return np.inf, np.inf, False
-    energy_denom = max(abs(total_energy), abs(last_energy), 1e-12)
-    flux_denom = max(abs(total_flux), abs(last_flux), 1e-12)
-    energy_error_pct = abs(total_energy - last_energy) / energy_denom * 100.0
-    flux_error_pct = abs(total_flux - last_flux) / flux_denom * 100.0
-    return energy_error_pct, flux_error_pct, energy_error_pct < rtol_energy_pct and flux_error_pct < rtol_flux_pct
-
-
 #: THE STRATEGY CLASSES LIVE IN TWO SIBLING MODULES, split 2026-08-22 because this file crossed
 #: the 800-line band: `_strategies_picard.py` (Picard family) and `_strategies_newton.py`
 #: (Newton family + continuation). Each imports the protocols and helpers above FROM THIS MODULE
@@ -667,9 +706,9 @@ from motronics.gauss.nonlinear._strategies_newton import (  # noqa: E402
     NewtonKrylovStrategy,
     NewtonLineSearchStrategy,
     NewtonStrategy,
+    ResidualMarchStrategy,
 )
 from motronics.gauss.nonlinear._strategies_picard import (  # noqa: E402
-    AdaptiveDampedPicardStrategy,
     DampedPicardStrategy,
     NuRelaxationDampedPicardStrategy,
     PicardStrategy,
@@ -678,7 +717,6 @@ from motronics.gauss.nonlinear._strategies_picard import (  # noqa: E402
 ITERATION_REGISTRY: dict[str, IterationStrategy] = {
     'picard-damped': DampedPicardStrategy(),
     'nu-damped': NuRelaxationDampedPicardStrategy(),
-    'picard-adaptive': AdaptiveDampedPicardStrategy(),
     'picard': PicardStrategy(),
     'newton': NewtonStrategy(),
     'anderson': AndersonStrategy(),
@@ -692,6 +730,8 @@ ITERATION_REGISTRY: dict[str, IterationStrategy] = {
     'continuation': ContinuationStrategy(),
 }
 
+_STRATEGY_REQUIREMENTS: dict[str, tuple[str, ...]] = {'nu-damped': ('raw_state', 'fold_raw')}
+
 
 def strategy_requires(name: str) -> tuple[str, ...]:
     """The system attributes strategy ``name`` needs, or ``()`` when it needs nothing special.
@@ -702,7 +742,8 @@ def strategy_requires(name: str) -> tuple[str, ...]:
     pair cannot run the strategy at all, and asking beforehand is the difference between a matrix
     that declares a cell unsupported and one that discovers it as a TypeError.
     """
-    return tuple(getattr(ITERATION_REGISTRY[name], 'requires', ()))
+    ITERATION_REGISTRY[name]
+    return _STRATEGY_REQUIREMENTS.get(name, ())
 
 
 def strategy_stops_on_residual(name: str) -> bool:
@@ -712,7 +753,11 @@ def strategy_stops_on_residual(name: str) -> bool:
     registered later answers by construction. Every other strategy stops on the energy change, and
     the two bars are different quantities with different defaults. An unknown name raises.
     """
-    return getattr(get_strategy(name), 'stop_rule', 'energy') == 'residual'
+    try:
+        rule = get_strategy(name).stop_rule
+    except AttributeError:  # no declaration is the energy stop every fixed-point strategy uses
+        rule = 'energy'
+    return rule == 'residual'
 
 
 def strategy_runs_on(name: str, system: object) -> bool:
@@ -723,7 +768,10 @@ def strategy_runs_on(name: str, system: object) -> bool:
     a future system type all answer correctly by construction, while a list of solver names would
     have to be maintained alongside the registry it describes.
     """
-    return all(getattr(system, attribute, None) is not None for attribute in strategy_requires(name))
+    requirements = strategy_requires(name)
+    if not requirements:
+        return True
+    return requirements == ('raw_state', 'fold_raw') and isinstance(unwrap_system(system), RawStateSystem)
 
 
 #: The strategy ``get_strategy(None)`` resolves to: Newton, in every family (user ruling 2026-09-25,

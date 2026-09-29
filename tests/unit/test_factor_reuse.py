@@ -26,7 +26,7 @@ from motronics.gauss.time_integrators.events import integrate_transient_with_eve
 from motronics.gauss.time_integrators.factor_reuse import FactorCache
 
 
-class _LinearSpring:
+class _SpringBase:
     """``u_dot = -K u`` (decaying 2-DOF), optionally with a MUTABLE stiffness for the event tests.
 
     ``factor_reuse_key`` is weights-plus-stiffness: everything its ``jacobian`` reads. ``K`` is a
@@ -44,14 +44,16 @@ class _LinearSpring:
     def jacobian(self, u, u_dot, u_ddot, t, weights: DerivativeWeights):
         return weights.alpha1.real * np.eye(len(self.k)) + weights.alpha0.real * self.k_scale * self.k
 
+
+class _LinearSpring(_SpringBase):
+    """A spring whose complete Jacobian dependency set forms a stable reuse key."""
+
     def factor_reuse_key(self, u, u_dot, u_ddot, t, weights: DerivativeWeights):
         return (weights.alpha0.real, weights.alpha1.real, weights.alpha2.real, self.k_scale)
 
 
-class _NoKeySpring(_LinearSpring):
+class _NoKeySpring(_SpringBase):
     """The same physics WITHOUT the reuse seam -- the pre-W6 problem shape (hamilton today)."""
-
-    factor_reuse_key = None  # attribute present but None: not a seam, must not be consulted
 
 
 def _study(dt: float = 0.05, t1: float = 1.0, integrator=IntegratorKind.BDF2) -> TransientStudy:

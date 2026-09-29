@@ -60,6 +60,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from numpy.typing import NDArray
 
+from motronics.contracts.spec.analysis_formulation import FactorReusableProblem
 from motronics.contracts.spec.study_spec import TransientStudy
 from motronics.gauss.time_integrators import (
     FactorCache,
@@ -140,7 +141,7 @@ def _sign(value: float) -> bool:
 
 
 def _locate_bracket(
-    lo_t: float, g_lo: float, hi_t: float, g_hi: float, probe: Callable[[float], float], tol: float
+    lo_t: float, g_lo: float, hi_t: float, g_hi: float, probe: Callable[[float], float], *, tol: float
 ) -> tuple[float, float]:
     """Shrink a sign-change bracket to ``tol`` wide; every ``probe`` is a whole re-step.
 
@@ -272,7 +273,7 @@ def integrate_transient_with_events(
     under-reads the system (the hole the module docstring names).
     """
     held = HeldFactor(refactor_every) if refactor_every is not None else None
-    if factor_cache is None and callable(getattr(problem, 'factor_reuse_key', None)):
+    if factor_cache is None and isinstance(problem, FactorReusableProblem):
         factor_cache = FactorCache()
     integrator = get_integrator(study.integrator)
     u0 = np.asarray(u0, dtype=float)
@@ -521,7 +522,9 @@ def integrate_transient_with_events(
                             raise RuntimeError(msg)
                         return float(event_fns[i](u_mid, mid_t))
 
-                    lo_t, hi_t = _locate_bracket(t_from, float(g_prev[i]), t_step, float(g_new[i]), _probe, bracket_tol)
+                    lo_t, hi_t = _locate_bracket(
+                        t_from, float(g_prev[i]), t_step, float(g_new[i]), _probe, tol=bracket_tol
+                    )
                     t_star_i = 0.5 * (lo_t + hi_t)
                     candidates.append((t_star_i, i))
 

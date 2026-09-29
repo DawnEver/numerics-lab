@@ -38,6 +38,14 @@ import scipy.sparse as sp
 
 from motronics.gauss.linear.errors import LinearSolveError
 
+try:
+    from motronics_native import gauss as _native_gauss
+except ImportError as _exc:  # the optional native extension; the SuperLU fallback says why
+    _native_gauss = None
+    _NATIVE_IMPORT_ERROR = str(_exc)
+else:
+    _NATIVE_IMPORT_ERROR = ''
+
 __all__ = ['DIRECT_SOLVES', 'NativeFactor', 'native_available', 'native_factor', 'native_solve']
 
 logger = logging.getLogger(__name__)
@@ -60,12 +68,10 @@ def _extension_or_reason():
     """``(DirectFactorization class, None)`` or ``(None, why the native path cannot run)``."""
     if os.environ.get(_ENV, '1') == '0':
         return None, f'{_ENV}=0'
-    try:
-        from motronics_native import gauss  # noqa: PLC0415 -- optional native extension
-    except ImportError as exc:
-        return None, f'motronics_native.gauss is not importable ({exc})'
-    cls = getattr(gauss, 'DirectFactorization', None)
-    if cls is None or not hasattr(cls, 'refactor'):
+    if _native_gauss is None:
+        return None, f'motronics_native.gauss is not importable ({_NATIVE_IMPORT_ERROR})'
+    cls = vars(_native_gauss).get('DirectFactorization')
+    if cls is None or 'refactor' not in vars(cls):
         return None, 'the installed motronics_native predates DirectFactorization.refactor'
     return cls, None
 

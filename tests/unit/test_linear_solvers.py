@@ -8,7 +8,7 @@ bicgstab/qmr) must reach that same solution within tolerance -- the linear analo
 import numpy as np
 import pytest
 import scipy.sparse as sp
-from scipy.sparse.linalg import spsolve
+from scipy.sparse.linalg import splu, spsolve
 
 from motronics.gauss import linear
 from motronics.gauss.linear import (
@@ -98,6 +98,22 @@ def test_registry_covers_the_roadmap_backends():
     assert set(PRECONDITIONER_REGISTRY) == {'jacobi', 'ilu', 'ssor'}
 
 
+def test_the_symmetric_direct_backend_is_the_direct_answer_on_an_spd_system():
+    """``direct-symmetric`` is a different ORDERING of the same factorization, not a new method."""
+    n = 30
+    lap = sp.diags([-np.ones(n - 1), 4.0 * np.ones(n), -np.ones(n - 1)], [-1, 0, 1])
+    A = (sp.kron(sp.eye(n), lap) + sp.kron(sp.diags([-np.ones(n - 1), -np.ones(n - 1)], [-1, 1]), sp.eye(n))).tocsc()
+    b = np.random.default_rng(3).normal(size=n * n)
+    x = solve_linear_system(A, b, linear_solver='direct-symmetric')
+    np.testing.assert_allclose(x, spsolve(A, b), rtol=1e-12, atol=1e-12 * np.abs(x).max())
+
+
+def test_the_symmetric_direct_backend_refuses_a_singular_system():
+    A = sp.csc_matrix(np.array([[1.0, -1.0], [-1.0, 1.0]]))
+    with pytest.raises(LinearSolveError):
+        solve_linear_system(A, np.array([1.0, 0.0]), linear_solver='direct-symmetric')
+
+
 def test_unknown_backend_raises():
     A, b = _spd_system(n=8)
     with pytest.raises(KeyError, match='unknown linear solver'):
@@ -162,3 +178,20 @@ def test_pardiso_registers_when_installed_and_is_hinted_when_not():
         A, b = _spd_system(n=8)
         with pytest.raises(KeyError, match='pip install pypardiso'):
             solve_linear_system(A, b, linear_solver='pardiso')
+
+
+def test_the_symmetric_ordering_fills_less_than_colamd_on_a_2d_stiffness():
+    """The CAUSE of the speedup, pinned deterministically -- fill, not seconds.
+
+    MEASURED 2026-09-25: COLAMD fills this 200 x 200 five-point Laplacian 1.78x as much as the
+    symmetric minimum-degree ordering (spm_slotted's sdm loop matrix: 1.75x, 16.96 M / 9.69 M; its
+    factor-and-solve 1.29 s -> 0.64 s). Wall time is NOT asserted: under a concurrent gate the same
+    pair read 0.94x-1.11x, which is the box, not the ordering. Both backends agree on the answer.
+    """
+    n = 200
+    lap = sp.diags([-np.ones(n - 1), 4.0 * np.ones(n), -np.ones(n - 1)], [-1, 0, 1])
+    A = (sp.kron(sp.eye(n), lap) + sp.kron(sp.diags([-np.ones(n - 1), -np.ones(n - 1)], [-1, 1]), sp.eye(n))).tocsc()
+    colamd = splu(A)
+    symmetric = splu(A, permc_spec='MMD_AT_PLUS_A', diag_pivot_thresh=0.0, options={'SymmetricMode': True})
+    fill_ratio = (colamd.L.nnz + colamd.U.nnz) / (symmetric.L.nnz + symmetric.U.nnz)
+    assert fill_ratio > 1.5, fill_ratio

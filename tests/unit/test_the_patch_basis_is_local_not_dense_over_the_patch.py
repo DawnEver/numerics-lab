@@ -7,7 +7,7 @@ carries 333 control points, so **97% of every array it returned was a structural
 are exact (Cox-de Boor writes ``0.0`` outside the support and every later step multiplies or
 divides that through unchanged), so they carried no information at all.
 
-MEASURED, ``cases/field/pm/spm_slotted`` at ``SPLINE_REFINE = (2, 2)``, the spline leg through
+MEASURED, ``cases/field/pm/spm_slotted`` at ``SPLINE_REFINE = (2, 2)``, the isogeometric leg through
 ``run_case_comparison`` -- the profile that named this defect before anything was changed:
 
     peak RSS                                       2.87 GB
@@ -15,7 +15,7 @@ MEASURED, ``cases/field/pm/spm_slotted`` at ``SPLINE_REFINE = (2, 2)``, the spli
     the same information at (p+1)**dim locality    0.385 GB   -> 11.2x
     largest SINGLE call    234200 points x 105 basis functions, one array of  0.55 GB
 
-and 1.759 GB of that peak is not transient at all: ``SplineNonlinearSystem`` RETAINS
+and 1.759 GB of that peak is not transient at all: ``IgaNonlinearSystem`` RETAINS
 ``values.values`` and ``values.gradients`` for every patch for the whole Picard loop, so the dense
 zeros stay resident until the solve ends. That is 61% of the peak and it is what makes the cost
 superlinear in ``refine`` -- refining grows the point count AND the patch the zeros are counted

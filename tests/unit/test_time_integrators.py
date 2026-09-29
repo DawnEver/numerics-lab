@@ -106,6 +106,13 @@ def test_bdf2_weights() -> None:
     assert w.alpha2 == 0.0
 
 
+@pytest.mark.parametrize('integrator', [BDF1Integrator(), BDF2Integrator()])
+def test_fixed_step_bdf_reuses_its_immutable_weights(integrator) -> None:
+    """A fixed-step march has one derivative operator; it must not allocate it at every step."""
+    assert integrator.weights(dt=0.1) is integrator.weights(dt=0.1)
+    assert integrator.weights(dt=0.2) is not integrator.weights(dt=0.1)
+
+
 def test_newmark_weights() -> None:
     dt = 0.1
     w = NewmarkIntegrator().weights(dt)  # average-acceleration beta=1/4, gamma=1/2

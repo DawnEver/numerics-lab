@@ -44,10 +44,11 @@ from scipy.sparse.linalg import (
     minres,
     qmr,
     spilu,
+    splu,
     spsolve,
 )
 
-from motronics.gauss.linear.dirichlet import apply_dirichlet_triplets
+from motronics.gauss.linear.dirichlet import apply_dirichlet_csr, apply_dirichlet_triplets
 
 #: ``errors`` (2026-09-17) -- THE SEAM'S OWN ERROR TYPE, and a TRUE LEAF. Both the backends above
 #: and the direct-solve guard in ``refinement`` raise it, so it can sit in neither without a cycle;
@@ -101,6 +102,7 @@ __all__ = [
     'PRECONDITIONER_REGISTRY',
     'LinearSolveError',
     'LinearSolver',
+    'apply_dirichlet_csr',
     'apply_dirichlet_triplets',
     'condition_estimate',
     'constraint_rows',
@@ -168,7 +170,7 @@ def reject_nonfinite_solution(x: np.ndarray, backend: str) -> np.ndarray:
     return x
 
 
-def _direct(matrix, rhs, *, x0=None, M=None):  # noqa: ARG001 -- direct ignores x0/M by contract
+def _direct(matrix, rhs, **_iterative_only):
     """Sparse direct factorization -- faer through :mod:`~motronics.gauss.linear.native_direct`, else ``spsolve``.
 
     THE NATIVE PATH FIRST (2026-09-26): a real sparse operator goes to the pattern-cached faer
@@ -204,11 +206,36 @@ def _direct(matrix, rhs, *, x0=None, M=None):  # noqa: ARG001 -- direct ignores 
             raise LinearSolveError(msg) from exc
 
 
-def _krylov(fn: Callable, *, symmetric: bool):
+def _direct_symmetric(matrix, rhs, **_iterative_only):
+    """SuperLU in SYMMETRIC mode: a minimum-degree ordering of ``A' + A`` and diagonal pivots.
+
+    For a caller whose operator is SPD BY CONSTRUCTION -- a Galerkin stiffness with no convection,
+    no eddy term and no constraint block. ``direct``'s COLAMD orders the COLUMNS alone, which is
+    blind to the symmetric pattern: MEASURED 2026-09-25 on spm_slotted's sdm loop matrix
+    (n = 89,871, nnz = 826,275) it fills 16.96 M against 9.69 M here, and a factor-and-solve
+    takes 1.29 s against 0.64 s, with the answers 1.7e-13 apart (relative). Diagonal pivoting is
+    safe only because the operator is SPD, which is why this is a separate NAME a caller chooses
+    and not a change to ``direct``. Singular-guarded exactly like ``direct``.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter('error', MatrixRankWarning)
+        try:
+            return splu(
+                sp.csc_matrix(matrix),
+                permc_spec='MMD_AT_PLUS_A',
+                diag_pivot_thresh=0.0,
+                options={'SymmetricMode': True},
+            ).solve(np.asarray(rhs, dtype=float))
+        except (MatrixRankWarning, RuntimeError) as exc:  # SuperLU reports an exact zero pivot as RuntimeError
+            msg = f'direct-symmetric solver reports the matrix is (near-)singular ({exc}); is a gauge/reference set?'
+            raise LinearSolveError(msg) from exc
+
+
+def _krylov(fn: Callable):
     """Wrap a scipy Krylov solver as a :class:`LinearSolver`.
 
-    ``symmetric`` documents the intended operator class (cg/minres assume SPD/symmetric); the wrapper
-    itself is agnostic. Converts the rhs to dense (scipy Krylov wants a 1-D array), forwards ``x0``
+    Operator-class requirements live beside the named registry below; the wrapper itself is
+    agnostic. Converts the rhs to dense (scipy Krylov wants a 1-D array), forwards ``x0``
     as the warm start and ``M`` as the preconditioner, and raises :class:`LinearSolveError` on a
     non-zero ``info`` (non-convergence within maxiter or a breakdown) rather than returning a wrong x.
 
@@ -239,18 +266,16 @@ def _krylov(fn: Callable, *, symmetric: bool):
         return x
 
     _solve.__name__ = fn.__name__
-    # Tag the backend with the operator class it assumes (cg/minres want SPD/symmetric); the
-    # benchmark harness reads this to skip a symmetric-only solver on a non-symmetric Jacobian.
-    _solve.requires_symmetric = symmetric
     return _solve
 
 
 def requires_symmetric(name: str) -> bool:
     """Whether the named linear backend assumes a symmetric/SPD operator (cg / minres)."""
-    return bool(getattr(LINEAR_SOLVER_REGISTRY[name], 'requires_symmetric', False))
+    LINEAR_SOLVER_REGISTRY[name]
+    return name in _SYMMETRIC_SOLVERS
 
 
-def _pardiso(matrix, rhs, *, x0=None, M=None):  # noqa: ARG001 -- the direct-shaped signature
+def _pardiso(matrix, rhs, **_iterative_only):
     """Intel MKL PARDISO sparse LU -- the multi-threaded direct solver (MATLAB-parity).
 
     The direct counterpart of scipy's single-threaded SuperLU: PARDISO threads the
@@ -267,12 +292,14 @@ def _pardiso(matrix, rhs, *, x0=None, M=None):  # noqa: ARG001 -- the direct-sha
 # 'pardiso' joins when pypardiso is installed (the optional MKL entry above).
 LINEAR_SOLVER_REGISTRY: dict[str, LinearSolver] = {
     'direct': _direct,
-    'cg': _krylov(cg, symmetric=True),
-    'minres': _krylov(minres, symmetric=True),
-    'gmres': _krylov(gmres, symmetric=False),
-    'bicgstab': _krylov(bicgstab, symmetric=False),
-    'qmr': _krylov(qmr, symmetric=False),
+    'direct-symmetric': _direct_symmetric,
+    'cg': _krylov(cg),
+    'minres': _krylov(minres),
+    'gmres': _krylov(gmres),
+    'bicgstab': _krylov(bicgstab),
+    'qmr': _krylov(qmr),
 }
+_SYMMETRIC_SOLVERS = frozenset({'cg', 'minres'})
 if _pardiso_spsolve is not None:
     LINEAR_SOLVER_REGISTRY['pardiso'] = _pardiso
 
@@ -361,7 +388,7 @@ def solve_linear_system(
     # Only the direct backends need this (SuperLU and PARDISO alike) -- the Krylov backends
     # already raise on a non-zero convergence ``info`` and asserting their (looser) residual
     # here would clash with their own stop criterion.
-    if name in ('direct', 'pardiso'):
+    if name in ('direct', 'direct-symmetric', 'pardiso'):
         # REPAIR, THEN JUDGE, both against the same unchanged bar. `repair_direct_solution` returns
         # `x` untouched unless the residual trigger fires, so this is free for every solve that
         # passes today; when it does fire, the steps it takes are the ones the verdict below was
