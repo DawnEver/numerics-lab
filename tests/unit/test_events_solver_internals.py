@@ -37,8 +37,10 @@ def test_the_relative_tolerance_labels_a_scale_stalled_step_converged() -> None:
         further).
         """
 
+        calls = 0
+
         def residual(self, u_arg, u_dot, u_ddot, t):
-            self.calls = getattr(self, 'calls', 0) + 1
+            self.calls += 1
             norm = 1.0e3 if self.calls == 1 else 1.0e-1
             return np.array([norm])
 
