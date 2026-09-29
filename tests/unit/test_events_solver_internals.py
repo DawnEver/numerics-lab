@@ -293,3 +293,26 @@ def test_a_discarded_bisection_probe_does_not_count_as_a_nonconverged_STEP() -> 
         f'nonconverged_times must contain only times that LANDED in the solution; '
         f'{len(stray)} of {len(sol.nonconverged_times)} are discarded bisection probes: {stray[:5]}'
     )
+
+
+def test_an_adaptive_march_does_not_locate_a_switch_from_an_unsolved_probe() -> None:
+    """A rejected Newton iterate has no physical event sign for a field-circuit switch."""
+
+    class _UnsolvableBetweenGridPoints(_RampWithToggle):
+        def residual(self, u, u_dot, u_ddot, t):
+            if abs(t / 0.3 - round(t / 0.3)) > 1e-8:
+                return np.array([1.0])
+            return super().residual(u, u_dot, u_ddot, t)
+
+    problem = _UnsolvableBetweenGridPoints(level=1.0)
+    study = TransientStudy(t0=0.0, t1=1.5, dt=0.3, integrator=IntegratorKind.BDF2)
+    with pytest.raises(RuntimeError, match='event probe.*converge'):
+        integrate_transient_with_events(
+            problem,
+            study,
+            np.array([0.0]),
+            event_fns=(problem.event_fn,),
+            on_event=lambda _i, _t, _u: problem.toggle(),
+            adaptive=True,
+            max_newton=2,
+        )

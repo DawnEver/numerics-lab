@@ -518,7 +518,13 @@ def integrate_transient_with_events(
 
                     def _probe(mid_t: float, i: int = i, t_from: float = t_from, checkpoint=checkpoint) -> float:
                         trial_state, trial_prev_dt = _rollback(checkpoint, solution)
-                        _ps, u_mid, _ok = step_from(trial_state, trial_prev_dt, mid_t - t_from, mid_t)
+                        _ps, u_mid, ok = step_from(trial_state, trial_prev_dt, mid_t - t_from, mid_t)
+                        if adaptive and not ok:
+                            msg = (
+                                f'event probe at t={mid_t:g} did not converge; its event sign cannot '
+                                'locate a physical switch. Reduce the step or repair the nonlinear solve.'
+                            )
+                            raise RuntimeError(msg)
                         return float(event_fns[i](u_mid, mid_t))
 
                     lo_t, hi_t = _locate_bracket(t_from, float(g_prev[i]), t_step, float(g_new[i]), _probe, bracket_tol)
