@@ -68,6 +68,7 @@ from motronics.gauss.time_integrators import (
     TransientSolution,
     _bdf2_variable_form,
     _default_solve,
+    _full_fixed_steps,
     _solve_step,
     get_integrator,
 )
@@ -375,9 +376,8 @@ def integrate_transient_with_events(
                 solution.nonconverged_times.append(t_new)
                 break
 
-    # The plain march's fixed step count -- integrate_transient's own n_steps; the eventful
-    # march without breakpoints must take exactly these (SR-038), so the count lives here.
-    n_steps = round((study.t1 - study.t0) / dt)
+    # The plain march's full-cell count; the final cell is partial when needed.
+    n_steps = _full_fixed_steps(study)
     resume_from: float | None = None
     k = 0
     # A clipped cell RE-ANCHORS the nominal grid at the breakpoint (resume_from keeps the
@@ -387,7 +387,10 @@ def integrate_transient_with_events(
     # [0, 0.05, 0.2, ...] carried states [0, 0.05, 0.15, ...], max |u - t| = 0.08 (SR-022,
     # the W1b march-corruption repro). A while loop (not a fixed step count) because
     # clipping inserts grid points: the march ends at t1, not at a fixed step count.
-    while state.t < study.t1 - bracket_tol:
+    # The event locator's tolerance is not a licence to erase the observation
+    # window. Only roundoff at the declared end may terminate this march.
+    end_tol = 1e-12 * max(abs(study.t0), abs(study.t1), study.t1 - study.t0)
+    while state.t < study.t1 - end_tol:
         if resume_from is not None:
             # The re-anchored grid continues from the last breakpoint; the t1 clamp makes the
             # FINAL re-anchored cell a PARTIAL step, so its dt is the true remainder -- a full
@@ -396,18 +399,9 @@ def integrate_transient_with_events(
             t_target = min(resume_from, study.t1)
             resume_from = t_target + dt
             pending_dt = t_target - state.t
-        # Without breakpoints the grid is the plain nominal one, and it must be BIT-
-        # IDENTICAL to integrate_transient's: that march stops after its fixed step count
-        # n_steps = round((t1-t0)/dt) -- which TRUNCATES at the last nominal step before
-        # t1 (plain [0, .3, .6, .9] for t1=1.0, dt=0.3) -- never a full step past t1
-        # (SR-038: the round-2 adjudication wrongly claimed integrate_transient lands
-        # past t1; the eventful march did, and the bit-identity promise broke).
+        # Without breakpoints this grid must be bit-identical to the plain march:
+        # full nominal cells followed by the exact partial cell to t1, never past it.
         elif k >= n_steps:
-            # Preserve the plain march's truncated grid only when there is nothing left
-            # to consume.  A breakpoint in the final partial interval makes that interval
-            # part of the eventful march, including the remainder from the edge to t1.
-            if bp_index >= len(breakpoints):
-                break
             t_target = study.t1
             pending_dt = t_target - state.t
         else:

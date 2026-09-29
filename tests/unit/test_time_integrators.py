@@ -71,6 +71,14 @@ def test_fake_problem_satisfies_protocol() -> None:
     assert isinstance(OscillatorProblem(1.0), SemiDiscreteProblem)
 
 
+def test_fixed_grid_lands_a_partial_final_step_at_the_declared_end() -> None:
+    """The observation window is a bound, not an approximate step count."""
+    study = TransientStudy(t0=0.0, t1=1.0, dt=0.3, integrator=IntegratorKind.BDF2)
+    solution = integrate_transient(DecayProblem(1.0), study, np.array([1.0]))
+    assert solution.times == pytest.approx([0.0, 0.3, 0.6, 0.9, 1.0])
+    assert np.all(np.isfinite(solution.states))
+
+
 # ---- DerivativeWeights: each integrator emits the textbook alpha triple -------------------
 
 
