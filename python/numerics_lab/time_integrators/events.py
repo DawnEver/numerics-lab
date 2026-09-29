@@ -277,6 +277,9 @@ def integrate_transient_with_events(
     u0 = np.asarray(u0, dtype=float)
     state = integrator.start(u0, study.t0, v0, a0)
     dt = study.dt
+    if time_tol is not None and (not np.isfinite(time_tol) or time_tol <= 0.0):
+        msg = f'time_tol must be finite and positive, got {time_tol!r}'
+        raise ValueError(msg)
     bracket_tol = dt * 1.0e-6 if time_tol is None else time_tol
     solution = EventfulTransientSolution(times=[study.t0], states=[u0])
     g_prev = [float(g(u0, study.t0)) for g in event_fns]
