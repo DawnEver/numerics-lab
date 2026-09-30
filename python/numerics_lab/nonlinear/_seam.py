@@ -7,6 +7,20 @@ package no longer needs a circular import after its own definitions to reach the
 
 from __future__ import annotations
 
+__all__ = [
+    'AssembledState',
+    'IterationBudgetExceeded',
+    'IterationResult',
+    'IterationStrategy',
+    'NewtonTangentUnavailable',
+    'NonlinearSystem',
+    'RawStateSystem',
+    'WrappedNonlinearSystem',
+    'increment_ratio',
+    'unwrap_system',
+    'with_time_budget',
+]
+
 import itertools
 import time
 from collections import deque

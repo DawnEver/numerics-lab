@@ -57,13 +57,6 @@ from motronics.gauss.time_integrators.factor_reuse import FactorCache
 logger = logging.getLogger(__name__)
 
 
-def _full_fixed_steps(study: TransientStudy) -> int:
-    """Count full cells, treating a floating-point near-integer as an integer."""
-    ratio = (study.t1 - study.t0) / study.dt
-    nearest = round(ratio)
-    return nearest if abs(ratio - nearest) <= 1e-10 else int(np.floor(ratio))
-
-
 __all__ = [
     'INTEGRATOR_REGISTRY',
     'BDF1Integrator',
@@ -75,6 +68,13 @@ __all__ = [
     'get_integrator',
     'integrate_transient',
 ]
+
+
+def _full_fixed_steps(study: TransientStudy) -> int:
+    """Count full cells, treating a floating-point near-integer as an integer."""
+    ratio = (study.t1 - study.t0) / study.dt
+    nearest = round(ratio)
+    return nearest if abs(ratio - nearest) <= 1e-10 else int(np.floor(ratio))
 
 
 def _bdf2_variable_form(state: IntegratorState, dt: float, h: float, t_new: float) -> StepForm:
