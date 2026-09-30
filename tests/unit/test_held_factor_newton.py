@@ -27,12 +27,35 @@ from motronics.gauss.nonlinear import (
     get_strategy,
     strategy_stops_on_residual,
 )
+from motronics.gauss.nonlinear._seam import _TimeBudgetedSystem
+from motronics.gauss.nonlinear._strategies_newton import _residual_reference, _SeededSystem
 from motronics.gauss.time_integrators import integrate_transient
 from motronics.gauss.time_integrators._step import HeldFactor
 from motronics.hamilton.discretizations.constitutive import binding_from_group_materials
 from motronics.hamilton.solve import solve
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize('wrappers', ['bare', 'seeded', 'timed', 'seeded-timed', 'timed-seeded'])
+def test_transparent_wrappers_preserve_the_physical_source_reference(wrappers) -> None:
+    base = _CubicSystem()
+    seed = base.initial_guess()
+    state = base.assemble(seed)
+    system = base
+    for wrapper in wrappers.split('-'):
+        if wrapper == 'seeded':
+            system = _SeededSystem(system, seed)
+        elif wrapper == 'timed':
+            system = _TimeBudgetedSystem(system, 10.0, lambda: 0.0)
+    source_norm = base.rhs_norm(state)
+    assert _residual_reference(system, state, source_norm * 1e-8) == source_norm
+    assert _residual_reference(system, state, source_norm * 2.0) == source_norm * 2.0
+
+
+def test_a_system_without_a_source_norm_retains_its_seed_reference() -> None:
+    system = _TimeBudgetedSystem(object(), 10.0, lambda: 0.0)
+    assert _residual_reference(system, None, 3.0) == 3.0
 
 
 class _CubicSystem:

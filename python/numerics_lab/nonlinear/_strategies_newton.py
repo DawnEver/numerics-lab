@@ -24,6 +24,7 @@ from motronics.gauss.nonlinear._seam import (
     _has_converged,
     _StagnationWatch,
     increment_ratio,
+    unwrap_system,
 )
 from motronics.gauss.nonlinear._strategies_picard import DampedPicardStrategy
 
@@ -65,7 +66,7 @@ def _residual_reference(system, state, seed_norm: float) -> float:
     is judged against its seed residual, exact for the zero seed every such system starts from.
     """
     try:
-        rhs_norm = system.rhs_norm
+        rhs_norm = unwrap_system(system).rhs_norm
     except AttributeError:
         return seed_norm
     return max(seed_norm, float(rhs_norm(state)))
