@@ -37,7 +37,6 @@ __all__ = [
     'NewtonKrylovStrategy',
     'NewtonLineSearchStrategy',
     'NewtonStrategy',
-    'ResidualMarchStrategy',
 ]
 
 
@@ -233,11 +232,16 @@ class NewtonStrategy:
             x, state, r_norm = trial, trial_state, trial_norm
             err = _energy_error_pct(state.total_energy, last_energy)
             last_energy = state.total_energy
-            increment = increment_ratio(x_prev, x)
+            # THE RULE IS ASKED ABOUT THE FULL CORRECTION `dx`, not the damped `lam dx`: a line
+            # search that exhausted its backtracks takes a shrink**k-scaled step, and read as an
+            # iterate that stopped moving that is a `converged=True` far from the root -- measured
+            # 2026-09-27 on ipm_v_e45h fea,tri (two identical 1.45e-5 increments, then "converged").
+            x_full = x_prev + dx
+            increment = increment_ratio(x_prev, x_full)
             converged = _has_converged(
                 err,
                 x_prev,
-                x,
+                x_full,
                 rtol_energy_pct,
                 material_change=state.material_change,
                 residual_ratio=r_norm / reference,
@@ -484,39 +488,6 @@ class NewtonKrylovStrategy:
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0, increment)
-        return IterationResult(x=x, state=state, iterations=ran, converged=converged)
-
-
-class ResidualMarchStrategy:
-    """A Newton / secant march judged on the RESIDUAL against the system's own arithmetic floor.
-
-    For an equation whose convergence is a statement about its residual rather than an energy --
-    the 3-D H(curl) curl-curl system, whose ``R = K(nu(B)) A - f`` is the measured quantity and
-    whose floor is ``eps * || |J| . |u| ||`` -- the system itself decides when the residual is
-    settled (:meth:`residual_settled`) and how long each step is (:meth:`step_length`); the
-    strategy owns only the march: assemble, ask, solve ``tangent dx = -r``, step. It is not in
-    ``ITERATION_REGISTRY`` because no energy-judged system can answer :meth:`residual_settled`.
-    """
-
-    name = 'residual-march'
-
-    def solve(
-        self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
-    ) -> IterationResult:
-        del rtol_energy_pct  # the system's own residual rule decides
-        x = system.initial_guess()
-        state: AssembledState | None = None
-        converged = False
-        ran = 0
-        for i in range(max_iter):
-            ran = i + 1
-            state = system.assemble(x)
-            system.on_iteration(i, state, 0.0, system.step_length(i), 0.0)
-            if system.residual_settled(state):
-                converged = True
-                break
-            dx = system.solve_system(system.tangent(x, state), -system.residual(x, state))
-            x = x + system.step_length(i) * dx
         return IterationResult(x=x, state=state, iterations=ran, converged=converged)
 
 
