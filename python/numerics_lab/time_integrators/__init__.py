@@ -42,6 +42,7 @@ from motronics.contracts.spec.analysis_formulation import (
     AlternativeJacobianProblem,
     DerivativeWeights,
     FactorReusableProblem,
+    HistoryProblem,
     ResidualFloorProblem,
     SemiDiscreteProblem,
 )
@@ -821,6 +822,8 @@ def integrate_transient(
                 state = integrator.advance(state, u_new, h, t_new)
                 solution.times.append(t_new)
                 solution.states.append(u_new)
+                if isinstance(problem, HistoryProblem):
+                    problem.commit_history(u_new, t_new)
                 h_prev = h
                 if err > 0.0:
                     h = min(h_hi, max(h_lo, h * min(2.0, 1.2 * (atol / err) ** (1.0 / 3.0))))
@@ -868,6 +871,11 @@ def integrate_transient(
         state = integrator.advance(state, u_new, dt, t_new)
         solution.times.append(t_new)
         solution.states.append(u_new)
+        # THE STEP JOINED THE TRAJECTORY, so its material history is the one the next step starts
+        # from -- including a step labelled non-converged: the march continues from `u_new`, and a
+        # history left at the previous step would be a trajectory the material never followed.
+        if isinstance(problem, HistoryProblem):
+            problem.commit_history(u_new, t_new)
     if held is not None:
         logger.info('held-factor march: factorizations=%d solves=%d', held.factorizations, held.solves)
     return solution
