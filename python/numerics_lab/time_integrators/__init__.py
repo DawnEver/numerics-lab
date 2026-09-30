@@ -52,13 +52,6 @@ from motronics.gauss.time_integrators.factor_reuse import FactorCache, apply_fac
 logger = logging.getLogger(__name__)
 
 
-def _full_fixed_steps(study: TransientStudy) -> int:
-    """Count full cells, treating a floating-point near-integer as an integer."""
-    ratio = (study.t1 - study.t0) / study.dt
-    nearest = round(ratio)
-    return nearest if abs(ratio - nearest) <= 1e-10 else int(np.floor(ratio))
-
-
 __all__ = [
     'HELD_STALL_RATIO',
     'INTEGRATOR_REGISTRY',
@@ -78,6 +71,13 @@ __all__ = [
     'residual_floor',
     'residual_floor_of_magnitude',
 ]
+
+
+def _full_fixed_steps(study: TransientStudy) -> int:
+    """Count full cells, treating a floating-point near-integer as an integer."""
+    ratio = (study.t1 - study.t0) / study.dt
+    nearest = round(ratio)
+    return nearest if abs(ratio - nearest) <= 1e-10 else int(np.floor(ratio))
 
 
 #: Safety factor on the estimated roundoff floor, DELIBERATELY the same 64 as the DC operating
