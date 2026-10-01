@@ -551,7 +551,7 @@ def integrate_transient_with_events(
             state, prev_dt = _rollback(checkpoint, solution)
             if t_star > t_from:  # land the march exactly on the event
                 state, u_star, landed = step_from(state, prev_dt, t_star - t_from, t_star)
-                if adaptive and not landed:
+                if not landed:
                     msg = (
                         f'event landing at t={t_star:g} did not converge; its state cannot '
                         'trigger a physical switch. Reduce the step or repair the nonlinear solve.'
