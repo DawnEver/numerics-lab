@@ -205,7 +205,8 @@ impl PyDirectFactorization {
             .factorization
             .solve(&self.csr, &b)
             .map_err(|e| PyValueError::new_err(format!("{e:?}")))?;
-        check_direct_residual(&self.csr, &b, &x).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        check_direct_residual(&self.csr, &b, &x)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(x.into_pyarray(py))
     }
 
