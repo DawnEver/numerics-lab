@@ -191,6 +191,9 @@ class TransientSolution:
 
     times: list[float] = field(default_factory=list)
     states: list[NDArray[np.floating]] = field(default_factory=list)
+    #: Actual residual-evaluation rates at committed times[1:], with no invented t0 rate.
+    #: None means a producer did not record them; it is NOT an all-zero derivative.
+    state_rates: list[NDArray[np.floating]] | None = None
     worst_step_residual: float = 0.0
     nonconverged_times: list[float] = field(default_factory=list)
     #: Exhausted steps that were DISCARDED by an event rollback (bisection probes). Diagnostic
