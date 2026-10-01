@@ -458,6 +458,51 @@ def _gmin_continue(
     return u, False, residual, False
 
 
+#: Secant (Illinois) evaluations :func:`directional_line_search` spends bracketing the line minimum.
+_DIRECTIONAL_EVALS = 12
+
+
+def directional_line_search(residual, u, step, r0, *, curvature: float = 0.5):
+    """Minimize the step's ENERGY along ``step`` using only residuals: ``phi'(s) = R(u + s step) . step``.
+
+    For a residual that IS the gradient of a convex potential (a magnetostatic step with a monotone
+    law: the variational play, a monotone B-H curve, ``sigma/dt`` mass), ``phi`` is convex along the
+    ray, so its minimizer is the root of the nondecreasing ``phi'``. Judging a step by ``|R|``
+    instead is not a merit of that problem -- on a law with kinks the Newton direction need not
+    lower ``|R|`` at all, measured on ipm_uv with the hysteretic steel: full steps 4e2 -> 5e3,
+    100 iterations at ~10 % each. Differences of the potential itself would cancel to round-off
+    near the root; its DERIVATIVE does not. The full step is taken when ``phi'(1) <= 0``; otherwise
+    a bracketed Illinois secant stops at a LOW-side point ``-curvature |phi'(0)| <= phi'(s) <= 0``.
+    A non-descent direction (``phi'(0) >= 0``) is taken whole: there is nothing to minimize along it.
+    """
+    g0 = float(np.dot(np.ravel(r0), np.ravel(step)))
+    if not g0 < 0.0:
+        return u + step
+    g1 = float(np.dot(np.ravel(residual(u + step)), np.ravel(step)))
+    if g1 <= 0.0:
+        return u + step
+    lo, glo, hi, ghi = 0.0, g0, 1.0, g1
+    s, side = 1.0, 0
+    for _ in range(_DIRECTIONAL_EVALS):
+        s = lo - glo * (hi - lo) / (ghi - glo)
+        g = float(np.dot(np.ravel(residual(u + s * step)), np.ravel(step)))
+        if -curvature * abs(g0) <= g <= 0.0:
+            return u + s * step
+        if g < 0.0:
+            lo, glo = s, g
+            if side == -1:
+                ghi *= 0.5
+            side = -1
+        else:
+            hi, ghi = s, g
+            if side == 1:
+                glo *= 0.5
+            side = 1
+    # Unclosed: the bracket's LOW end, where phi' < 0 and so the energy fell; a point past the
+    # minimum may sit above phi(0) however small its slope.
+    return u + (lo if lo > 0.0 else s) * step
+
+
 def _solve_step(
     problem: SemiDiscreteProblem,
     form: StepForm,
@@ -470,6 +515,7 @@ def _solve_step(
     factor_cache: FactorCache | None = None,
     backtrack_band: float | None = None,
     backtrack_cap: int = 8,
+    line_search: str = 'backtrack',
     jacobian_tangent: Callable | None = None,
     gmin_stages: tuple[float, ...] | None = None,
     held: HeldFactor | None = None,
@@ -618,7 +664,14 @@ def _solve_step(
             )
             tangent = factor_cache.matrix
         step = du.reshape(u.shape)
-        if max_newton > 1 and backtrack_cap > 0:
+        if max_newton > 1 and line_search == 'directional':
+            u = directional_line_search(
+                lambda x: np.asarray(problem.residual(form.u_arg(x), form.u_dot(x), form.u_ddot(x), t), dtype=float),
+                u,
+                step,
+                r,
+            )
+        elif max_newton > 1 and backtrack_cap > 0:
             raised = False
             for _ in range(backtrack_cap):
                 u_try = u + step
@@ -716,6 +769,7 @@ def integrate_transient(
     factor_cache: FactorCache | None = None,
     backtrack_band: float = 1.5,
     backtrack_cap: int = 4,
+    line_search: str = 'backtrack',
     gmin_stages: tuple[float, ...] | None = None,
     adaptive: bool = False,
     atol: float = 1e-6,
@@ -848,6 +902,7 @@ def integrate_transient(
             factor_cache=factor_cache,
             backtrack_band=backtrack_band,
             backtrack_cap=backtrack_cap,
+            line_search=line_search,
             gmin_stages=gmin_stages,
             held=held,
         )
