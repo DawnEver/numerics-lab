@@ -24,8 +24,9 @@ __all__ = [
 import itertools
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Protocol, overload, runtime_checkable
 
 import numpy as np
 
@@ -82,7 +83,8 @@ class NonlinearSystem(Protocol):
     that cannot supply a Jacobian, and NewtonStrategy then RAISES :class:`NewtonTangentUnavailable`.
     """
 
-    is_linear: bool
+    @property
+    def is_linear(self) -> bool: ...
 
     # Every parameter below is positional-only (``/``): every real caller (the strategies in this
     # module) invokes them positionally, and the two implementers name their iterate differently
@@ -98,6 +100,7 @@ class NonlinearSystem(Protocol):
 
     def residual(self, x: np.ndarray, state: AssembledState, /) -> np.ndarray:
         """Residual r(x) whose root is the solution (Newton drives ``tangent @ dx = -r``)."""
+        ...
 
     def residual_norm(self, x: np.ndarray, state: AssembledState, /) -> float:
         """Scalar convergence measure a line search minimises -- the norm over the FREE DOFs only.
@@ -128,22 +131,11 @@ class NonlinearSystem(Protocol):
         ``matrix`` is whatever :meth:`tangent` returned for this equation (a raw sparse matrix for
         MEC, a reduced-tangent bundle for FEA); the strategy passes it back verbatim, so only Newton-
         family strategies that obtained it from :meth:`tangent` call this. Quasi-Newton strategies that
-        need a SECANT solve of an arbitrary rhs use :meth:`solve_secant` instead (which every equation
-        implements uniformly), because the secant ``system_matrix`` is not always in ``solve_system``'s
+        need a SECANT solve of an arbitrary rhs require :class:`SecantSystem`, because the
+        secant ``system_matrix`` is not always in ``solve_system``'s
         accepted form (FEA's ``solve_system`` takes the reduced-tangent bundle, not a raw matrix).
         """
-
-    def solve_secant(self, state: AssembledState, rhs: np.ndarray, /) -> np.ndarray:
-        """Solve the SECANT system ``S @ y = rhs`` for an arbitrary rhs, with BC reduction folded in.
-
-        The uniform ``H0`` action the quasi-Newton family (Broyden / BFGS / L-BFGS) needs: ``S`` is the
-        assembled secant operator at the current iterate, reduced through the equation's own Dirichlet /
-        periodic / hanging machinery so ``y`` lives in the full DOF space. ``solve_linear`` is the
-        special case ``rhs = source``. Default: ``solve_system(state.system_matrix, rhs)`` (correct for
-        MEC, whose ``solve_system`` accepts a raw matrix); FEA overrides it to reduce ``rhs`` like a
-        source and solve the reduced secant.
-        """
-        return self.solve_system(state.system_matrix, rhs)
+        ...
 
     def on_iteration(self, i: int, state: AssembledState, err: float, alpha: float, increment: float, /) -> None:
         """Optional per-iteration hook (logging); default no-op.
@@ -153,6 +145,18 @@ class NonlinearSystem(Protocol):
         a capped solve and a converged one identically.
         """
 
+
+@runtime_checkable
+class SecantSystem(Protocol):
+    """Optional arbitrary-rhs secant action, including the equation's physical constraints."""
+
+    def solve_secant(self, state: AssembledState, rhs: np.ndarray, /) -> np.ndarray: ...
+
+
+@runtime_checkable
+class SourceScalableSystem(Protocol):
+    """Optional source rescaling, not a requirement on Picard/Newton equations."""
+
     def scale_source(self, lam: float, /) -> NonlinearSystem:
         """Return a copy of this system with its SOURCE scaled by ``lam`` (continuation stepping).
 
@@ -161,13 +165,43 @@ class NonlinearSystem(Protocol):
         the strategy degrades to solving the full-source problem directly. ``lam=1`` returns the
         original (full-source) system.
         """
+        ...
+
+
+@runtime_checkable
+class ResidualReferencedSystem(Protocol):
+    """Optional source norm used to normalize the actual residual."""
+
+    def rhs_norm(self, state: AssembledState, /) -> float: ...
+
+
+@runtime_checkable
+class FactorizableSystem(Protocol):
+    """Optional equation-owned factorization of its opaque tangent bundle."""
+
+    def factorize(self, matrix, /) -> Callable[[np.ndarray], np.ndarray]: ...
+
+
+class ResidualMarchSystem(NonlinearSystem, Protocol):
+    """The residual march's actual step schedule and acceptance rule."""
+
+    def step_length(self, iteration: int, /) -> float: ...
+    def residual_settled(self, state: AssembledState, /) -> bool: ...
+
+
+@runtime_checkable
+class ResidualStoppingStrategy(Protocol):
+    """Optional declared stopping rule; absence means the energy rule."""
+
+    @property
+    def stop_rule(self) -> str: ...
 
 
 @runtime_checkable
 class RawStateSystem(Protocol):
     """Optional pre-boundary-fold assembly capability required by ``nu-damped``."""
 
-    def raw_state(self, x: np.ndarray, /): ...
+    def raw_state(self, x: np.ndarray, /) -> tuple: ...
     def fold_raw(self, s_row, s_col, s_val, t_mat, total_energy, /) -> AssembledState: ...
 
 
@@ -179,10 +213,32 @@ class WrappedNonlinearSystem(Protocol):
     def unwrapped(self) -> NonlinearSystem: ...
 
 
-def unwrap_system(system: NonlinearSystem) -> NonlinearSystem:
+@overload
+def unwrap_system(system: NonlinearSystem) -> NonlinearSystem: ...
+
+
+@overload
+def unwrap_system(system: object) -> object: ...
+
+
+def unwrap_system(system: object) -> object:
     """Return the concrete system beneath any explicit transparent wrappers."""
     while isinstance(system, WrappedNonlinearSystem):
         system = system.unwrapped
+    return system
+
+
+def has_secant_system(system: object) -> bool:
+    """Whether the concrete equation and its transparent carrier expose secant solves."""
+    return isinstance(unwrap_system(system), SecantSystem) and isinstance(system, SecantSystem)
+
+
+def require_secant_system(system: NonlinearSystem) -> SecantSystem:
+    """Check the actual capability, then delegate through wrappers (including their budgets)."""
+    if not has_secant_system(system):
+        msg = f'{type(unwrap_system(system)).__name__} cannot run quasi-Newton without solve_secant'
+        raise TypeError(msg)
+    assert isinstance(system, SecantSystem)
     return system
 
 

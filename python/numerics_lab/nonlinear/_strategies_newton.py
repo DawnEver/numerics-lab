@@ -6,24 +6,31 @@ protocol these implement.
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 
 import numpy as np
 import scipy.sparse as sp
-from scipy.sparse.linalg import LinearOperator, gmres, splu
+from scipy.sparse.linalg import LinearOperator, aslinearoperator, gmres, splu
 
 from motronics.gauss.linear import reject_nonfinite_solution
 from motronics.gauss.linear.native_direct import native_factor
 from motronics.gauss.nonlinear._seam import (
     _RTOL_ENERGY_PCT,
     AssembledState,
+    FactorizableSystem,
     IterationResult,
     IterationStrategy,
     NewtonTangentUnavailable,
     NonlinearSystem,
+    ResidualMarchSystem,
+    ResidualReferencedSystem,
+    SourceScalableSystem,
     _energy_error_pct,
     _has_converged,
     _StagnationWatch,
     increment_ratio,
+    require_secant_system,
+    unwrap_system,
 )
 from motronics.gauss.nonlinear._strategies_picard import DampedPicardStrategy
 
@@ -63,11 +70,10 @@ def _residual_reference(system, state, seed_norm: float) -> float:
     H(curl) march already applies (``ref = max(||f_f||, ||R_f^0||)``). A system without the hook
     is judged against its seed residual, exact for the zero seed every such system starts from.
     """
-    try:
-        rhs_norm = system.rhs_norm
-    except AttributeError:
+    inner = unwrap_system(system)
+    if not isinstance(inner, ResidualReferencedSystem):
         return seed_norm
-    return max(seed_norm, float(rhs_norm(state)))
+    return max(seed_norm, float(inner.rhs_norm(state)))
 
 
 class NewtonStrategy:
@@ -120,6 +126,9 @@ class NewtonStrategy:
         stall_ratio: float = 0.5,
     ) -> None:
         self.max_backtracks = int(max_backtracks)
+        if self.max_backtracks < 0:
+            msg = f'max_backtracks must be nonnegative, got {max_backtracks!r}'
+            raise ValueError(msg)
         self.shrink = float(shrink)
         self.armijo = float(armijo)
         #: ``None`` is full Newton: a fresh tangent and factor every iteration. An integer ``k`` is
@@ -152,12 +161,8 @@ class NewtonStrategy:
         self.factorizations += 1
         if self.refactor_every is None:
             return lambda rhs: system.solve_system(jac, rhs)
-        try:
-            factorize = system.factorize
-        except AttributeError:
-            factorize = None
-        if factorize is not None:
-            return factorize(jac)
+        if isinstance(system, FactorizableSystem):
+            return system.factorize(jac)
         lu = _lu_factorize(jac)
         if lu is None:
             return lambda rhs: system.solve_system(jac, rhs)
@@ -176,6 +181,7 @@ class NewtonStrategy:
             if np.isfinite(trial_norm) and trial_norm <= (1.0 - self.armijo * lam) * r_norm:
                 return lam, True, trial, trial_state, trial_norm, full_step
             lam *= self.shrink
+        assert full_step is not None  # nonnegative max_backtracks always tries the full step
         return lam, False, trial, trial_state, trial_norm, full_step
 
     def solve(
@@ -209,6 +215,7 @@ class NewtonStrategy:
             if fresh:
                 held, age, stale = self._held_solver(system, x, state), 0, False
             rhs = -system.residual(x, state)
+            assert held is not None  # the first iteration and every stale factor refresh above
             dx = held(rhs)
             x_prev = x
             lam, accepted, trial, trial_state, trial_norm, full_step = self._search(system, x, dx, r_norm)
@@ -476,7 +483,7 @@ class NewtonKrylovStrategy:
                         r_pert = system.residual(_x + eps * v, system.assemble(_x + eps * v))
                         return (r_pert - _r) / eps
 
-                    op = LinearOperator((n, n), matvec=matvec)
+                    op = aslinearoperator(SimpleNamespace(shape=(n, n), matvec=matvec))
                 dx, info = gmres(op, -r, rtol=1e-8, atol=0.0, maxiter=4 * max(n, 1))
                 if info != 0 or not np.all(np.isfinite(dx)):
                     dx = system.solve_linear(state) - x  # Krylov breakdown -> Picard substitution
@@ -488,6 +495,39 @@ class NewtonKrylovStrategy:
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0, increment)
+        return IterationResult(x=x, state=state, iterations=ran, converged=converged)
+
+
+class ResidualMarchStrategy:
+    """A Newton / secant march judged on the RESIDUAL against the system's own arithmetic floor.
+
+    For an equation whose convergence is a statement about its residual rather than an energy --
+    the 3-D H(curl) curl-curl system, whose ``R = K(nu(B)) A - f`` is the measured quantity and
+    whose floor is ``eps * || |J| . |u| ||`` -- the system itself decides when the residual is
+    settled (:meth:`residual_settled`) and how long each step is (:meth:`step_length`); the
+    strategy owns only the march: assemble, ask, solve ``tangent dx = -r``, step. It is not in
+    ``ITERATION_REGISTRY`` because no energy-judged system can answer :meth:`residual_settled`.
+    """
+
+    name = 'residual-march'
+
+    def solve(
+        self, system: ResidualMarchSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
+    ) -> IterationResult:
+        del rtol_energy_pct  # the system's own residual rule decides
+        x = system.initial_guess()
+        state: AssembledState | None = None
+        converged = False
+        ran = 0
+        for i in range(max_iter):
+            ran = i + 1
+            state = system.assemble(x)
+            system.on_iteration(i, state, 0.0, system.step_length(i), 0.0)
+            if system.residual_settled(state):
+                converged = True
+                break
+            dx = system.solve_system(system.tangent(x, state), -system.residual(x, state))
+            x = x + system.step_length(i) * dx
         return IterationResult(x=x, state=state, iterations=ran, converged=converged)
 
 
@@ -511,6 +551,11 @@ class ContinuationStrategy:
     def solve(
         self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
     ) -> IterationResult:
+        if not isinstance(unwrap_system(system), SourceScalableSystem):
+            return self.inner.solve(system, max_iter=max_iter, rtol_energy_pct=rtol_energy_pct)
+        if not isinstance(system, SourceScalableSystem):
+            msg = 'the nonlinear wrapper does not delegate scale_source'
+            raise TypeError(msg)
         lambdas = [(k + 1) / self.steps for k in range(self.steps)]
         result: IterationResult | None = None
         seed: np.ndarray | None = None
@@ -526,6 +571,7 @@ class ContinuationStrategy:
             seed = result.x
         # ``result.state`` came from the scaled sub-system; re-assemble on the FULL system at the
         # converged iterate so the returned payload/energy are the true (lam=1) fields.
+        assert result is not None  # steps is at least one
         final_state = system.assemble(result.x)
         return IterationResult(x=result.x, state=final_state, iterations=result.iterations, converged=result.converged)
 
@@ -571,10 +617,13 @@ class _SeededSystem:
         return self._base.solve_system(matrix, rhs)
 
     def solve_secant(self, state, rhs, /):
-        return self._base.solve_secant(state, rhs)
+        return require_secant_system(self._base).solve_secant(state, rhs)
 
     def on_iteration(self, i, state, err, alpha, increment, /):
         return self._base.on_iteration(i, state, err, alpha, increment)
 
     def scale_source(self, lam, /):
-        return self._base.scale_source(lam)
+        if isinstance(self._base, SourceScalableSystem):
+            return self._base.scale_source(lam)
+        msg = 'the wrapped equation cannot scale_source'
+        raise NotImplementedError(msg)

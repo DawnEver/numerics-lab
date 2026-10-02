@@ -26,6 +26,8 @@ from motronics.gauss.nonlinear._seam import (
     NewtonTangentUnavailable,
     NonlinearSystem,
     RawStateSystem,
+    ResidualStoppingStrategy,
+    has_secant_system,
     increment_ratio,
     unwrap_system,
     with_time_budget,
@@ -93,17 +95,20 @@ ITERATION_REGISTRY: dict[str, IterationStrategy] = {
     'continuation': ContinuationStrategy(),
 }
 
-_STRATEGY_REQUIREMENTS: dict[str, tuple[str, ...]] = {'nu-damped': ('raw_state', 'fold_raw')}
+_STRATEGY_REQUIREMENTS: dict[str, tuple[str, ...]] = {
+    'nu-damped': ('raw_state', 'fold_raw'),
+    'quasi-newton': ('solve_secant',),
+    'bfgs': ('solve_secant',),
+    'l-bfgs': ('solve_secant',),
+}
 
 
 def strategy_requires(name: str) -> tuple[str, ...]:
     """The system attributes strategy ``name`` needs, or ``()`` when it needs nothing special.
 
-    Every strategy in :data:`ITERATION_REGISTRY` runs on the generic `assemble`/`solve_linear`
-    seam except `nu-damped`, which mixes reluctivity BEFORE the boundary fold and so needs the raw
-    pre-fold pair. That is a capability boundary, not a convergence property: a system without the
-    pair cannot run the strategy at all, and asking beforehand is the difference between a matrix
-    that declares a cell unsupported and one that discovers it as a TypeError.
+    Quasi-Newton needs arbitrary-rhs secant solves; `nu-damped` needs pre-fold assembly.
+    Continuation can run without source scaling by solving the full source directly.
+    These are capability boundaries, not convergence properties.
     """
     ITERATION_REGISTRY[name]
     return _STRATEGY_REQUIREMENTS.get(name, ())
@@ -116,11 +121,8 @@ def strategy_stops_on_residual(name: str) -> bool:
     registered later answers by construction. Every other strategy stops on the energy change, and
     the two bars are different quantities with different defaults. An unknown name raises.
     """
-    try:
-        rule = get_strategy(name).stop_rule
-    except AttributeError:  # no declaration is the energy stop every fixed-point strategy uses
-        rule = 'energy'
-    return rule == 'residual'
+    strategy = get_strategy(name)
+    return isinstance(strategy, ResidualStoppingStrategy) and strategy.stop_rule == 'residual'
 
 
 def strategy_runs_on(name: str, system: object) -> bool:
@@ -134,6 +136,8 @@ def strategy_runs_on(name: str, system: object) -> bool:
     requirements = strategy_requires(name)
     if not requirements:
         return True
+    if requirements == ('solve_secant',):
+        return has_secant_system(system)
     return requirements == ('raw_state', 'fold_raw') and isinstance(unwrap_system(system), RawStateSystem)
 
 

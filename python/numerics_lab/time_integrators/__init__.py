@@ -122,7 +122,7 @@ def integrate_transient(
     tol: float = 1e-12,
     tol_rel: float | None = None,
     factor_cache: FactorCache | None = None,
-    backtrack_band: float = 1.5,
+    backtrack_band: float | None = 1.5,
     backtrack_cap: int = 4,
     gmin_stages: tuple[float, ...] | None = None,
     adaptive: bool = False,
@@ -169,7 +169,7 @@ def integrate_transient(
         h_lo = dt / 1000.0 if h_min is None else h_min
         h_hi = dt * 1000.0 if h_max is None else h_max
         t_end = study.t1
-        solution = TransientSolution(times=[study.t0], states=[u0])
+        solution = TransientSolution(times=[study.t0], states=[u0], state_rates=[], rate_state_overrides={})
         while state.t < t_end - 1e-14:
             h = min(h, t_end - state.t)
             t_new = state.t + h
@@ -230,6 +230,8 @@ def integrate_transient(
                 state = integrator.advance(state, u_new, h, t_new)
                 solution.times.append(t_new)
                 solution.states.append(u_new)
+                assert solution.state_rates is not None
+                solution.state_rates.append(form.u_dot(u_new))
                 h_prev = h
                 if err > 0.0:
                     h = min(h_hi, max(h_lo, h * min(2.0, 1.2 * (atol / err) ** (1.0 / 3.0))))
@@ -239,7 +241,7 @@ def integrate_transient(
                 h = max(h_lo, h / 2.0)
         return solution
     n_full = _full_fixed_steps(study)
-    solution = TransientSolution(times=[study.t0], states=[u0])
+    solution = TransientSolution(times=[study.t0], states=[u0], state_rates=[], rate_state_overrides={})
     has_remainder = study.t1 - (study.t0 + n_full * dt) > 1e-12 * max(dt, abs(study.t1 - study.t0))
     for k in range(n_full + int(has_remainder)):
         final_partial = k == n_full
@@ -283,6 +285,8 @@ def integrate_transient(
         state = integrator.advance(state, u_new, step_dt, t_new)
         solution.times.append(t_new)
         solution.states.append(u_new)
+        assert solution.state_rates is not None
+        solution.state_rates.append(form.u_dot(u_new))
     if held is not None:
         logger.info('held-factor march: factorizations=%d solves=%d', held.factorizations, held.solves)
     return solution

@@ -11,6 +11,7 @@ adaptive-step/refine accuracy tests in ``test_events_step_control.py``.
 
 from __future__ import annotations
 
+from importlib import import_module
 from unittest.mock import patch
 
 import numpy as np
@@ -261,7 +262,7 @@ def test_a_polish_whose_step_the_line_search_cannot_accept_hands_back_to_the_new
         assert converged, f'band {band}: the step exhausted at residual {residual:g} after {iterations} iterations'
 
 
-def test_a_discarded_bisection_probe_does_not_count_as_a_nonconverged_STEP() -> None:
+def test_a_discarded_bisection_probe_does_not_count_as_a_nonconverged_STEP(monkeypatch) -> None:
     """``converged`` must mean what it says: every step OF THE SOLUTION met the tolerance.
 
     The event locator bisects by RE-STEPPING from a checkpoint and throwing the result away
@@ -292,18 +293,48 @@ def test_a_discarded_bisection_probe_does_not_count_as_a_nonconverged_STEP() -> 
 
     problem = _NonlinearRampWithToggle(level=0.35)
     study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
-    # A starved ceiling on a nonlinear problem: steps DO exhaust, so the bisection's discarded
-    # probes exhaust too -- which is the situation the tag has to classify correctly.
+    events = import_module('motronics.gauss.time_integrators.events')
+    solve_step, locate = events._solve_step, events._locate_bracket
+    discarded_probe = False
+    probe_failures = []
+
+    def classified_solve(problem, form, *args, **kwargs):
+        result = solve_step(problem, form, *args, **kwargs)
+        if discarded_probe or form.t_eval >= 0.9:
+            # Explicit independent solver verdicts: discarded locator probes
+            # fail, as does a non-event fixed step. The physical event landing
+            # itself must be accepted; a starved landing cannot fire a switch.
+            if discarded_probe:
+                probe_failures.append(form.t_eval)
+            u, _ok, iterations, residual, floor = result
+            return u, False, iterations, residual, floor
+        return result
+
+    def classified_locator(lo_t, g_lo, hi_t, g_hi, probe, *, tol):
+        def failed_probe(t):
+            nonlocal discarded_probe
+            discarded_probe = True
+            try:
+                return probe(t)
+            finally:
+                discarded_probe = False
+
+        return locate(lo_t, g_lo, hi_t, g_hi, failed_probe, tol=tol)
+
+    monkeypatch.setattr(events, '_solve_step', classified_solve)
+    monkeypatch.setattr(events, '_locate_bracket', classified_locator)
     sol = integrate_transient_with_events(
         problem,
         study,
         np.array([0.0]),
         event_fns=[problem.event_fn],
         on_event=lambda _i, _t, _u: problem.toggle(),
-        max_newton=1,
+        max_newton=100,
         tol=1.0e-12,
     )
     assert problem.toggles == 1, 'the event must actually fire (else the probe path never runs)'
+    assert probe_failures, 'the locator must genuinely discard failed solve verdicts'
+    assert sol.nonconverged_probe_times
     assert sol.nonconverged_times, 'the starved ceiling must exhaust somewhere (the precondition)'
     landed = set(sol.times)
     stray = [t for t in sol.nonconverged_times if t not in landed]

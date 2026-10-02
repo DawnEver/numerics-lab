@@ -21,42 +21,63 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.sparse import csr_matrix
 
-__all__ = ['apply_dirichlet_csr', 'apply_dirichlet_triplets']
+__all__ = ['apply_dirichlet_csr', 'apply_dirichlet_triplets', 'lift_dirichlet_rhs']
 
 
 def apply_dirichlet_csr(
     matrix: csr_matrix,
-    rhs: NDArray[np.float64],
+    rhs: NDArray[np.number],
     pinned: NDArray[np.intp],
-    values: NDArray[np.float64] | None = None,
-) -> tuple[csr_matrix, NDArray[np.float64]]:
+    values: NDArray[np.number] | None = None,
+) -> tuple[csr_matrix, NDArray[np.number]]:
     """Apply symmetric Dirichlet elimination to a CSR system.
 
     Non-zero prescribed values are lifted into ``rhs`` as ``rhs - matrix @ g`` before their
     columns are removed. Pinned rows and columns then become identity rows, preserving symmetry
     for solvers that require it. This operation depends on no mesh, basis, or physics.
+    ``rhs`` may contain multiple columns. A vector of prescribed values applies to
+    every column; a matrix supplies each column's own boundary values.
     """
     if pinned.size == 0:
         return matrix, rhs
-    prescribed = np.zeros(matrix.shape[0], dtype=float)
-    if values is not None:
-        prescribed[pinned] = values
-    lifted = rhs - matrix @ prescribed
+    lifted = lift_dirichlet_rhs(matrix, rhs, pinned, values)
 
     rows = matrix.tolil()
     for dof in pinned:
         rows.rows[dof] = [int(dof)]
         rows.data[dof] = [1.0]
     constrained = rows.tocsr()
+    assert constrained.shape is not None
 
     mask = np.ones(constrained.shape[0], dtype=float)
     mask[pinned] = 0.0
     constrained = constrained.multiply(csr_matrix(mask[None, :])).tolil()
     for dof in pinned:
         constrained[dof, dof] = 1.0
+    return constrained.tocsr(), lifted
+
+
+def lift_dirichlet_rhs(
+    matrix: csr_matrix,
+    rhs: NDArray[np.number],
+    pinned: NDArray[np.intp],
+    values: NDArray[np.number] | None = None,
+) -> NDArray[np.number]:
+    """Lift each RHS using its declared boundary values without rebuilding the operator."""
+    dtype = np.result_type(
+        matrix.dtype, rhs.dtype, np.float64, np.asarray(values).dtype if values is not None else float
+    )
+    prescribed = np.zeros(rhs.shape, dtype=dtype)
+    if values is not None:
+        boundary_values = np.asarray(values)
+        if rhs.ndim == 2 and boundary_values.ndim == 1:
+            boundary_values = boundary_values[:, None]
+        prescribed[pinned] = boundary_values
+    lifted = rhs - matrix @ prescribed
+
     lifted = lifted.copy()
     lifted[pinned] = prescribed[pinned]
-    return constrained.tocsr(), lifted
+    return lifted
 
 
 def apply_dirichlet_triplets(row, col, val, rhs, bound_dirichlet, bias):
