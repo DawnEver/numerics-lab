@@ -12,8 +12,8 @@ the three levers ``direct.rs`` pulls, faer beats SciPy's SuperLU at every produc
 (5k to 129k unknowns), so there is no size threshold.
 
 THE PATTERN IS CHECKED, NEVER ASSUMED. The cache key is a CRC of ``indptr``/``indices``, which is a
-lookup, not a proof: the extension compares the full pattern on every refactor and refuses a
-different one, and a refusal here re-analyses. A HELD factor (:class:`NativeFactor`, what
+lookup, not a proof: Python compares the full pattern against owned copies before the extension's
+values-only refactor, and a different pattern re-analyses. A HELD factor (:class:`NativeFactor`, what
 ``factor_matrix`` hands a held-factor Newton or a march cache) shares its analysis with later solves
 on the same pattern, so it records the generation it was factorised at and re-factorises its own
 values if another solve has since overwritten the shared storage -- a stale factor is never
@@ -36,6 +36,7 @@ from collections import Counter, OrderedDict
 import numpy as np
 import scipy.sparse as sp
 
+from motronics.gauss.linear.dirichlet import lift_dirichlet_rhs
 from motronics.gauss.linear.errors import LinearSolveError
 
 try:
@@ -91,11 +92,14 @@ def _fallback(reason: str) -> None:
 class _Entry:
     """One analysed pattern and the generation of its last refactor."""
 
-    __slots__ = ('factorization', 'generation')
+    __slots__ = ('factorization', 'generation', 'indices', 'indptr', 'shape')
 
-    def __init__(self, factorization) -> None:
+    def __init__(self, factorization, csr) -> None:
         self.factorization = factorization
         self.generation = 0
+        self.shape = csr.shape
+        self.indptr = csr.indptr.copy()
+        self.indices = csr.indices.copy()
 
 
 def _canonical(matrix):
@@ -119,6 +123,12 @@ def _refactor(cls, csr) -> tuple[_Entry, str]:
     indices = np.asarray(csr.indices, dtype=np.int64)
     key = (csr.shape[0], csr.nnz, zlib.crc32(indptr.tobytes()), zlib.crc32(indices.tobytes()))
     entry = _cache.get(key)
+    if entry is not None and (
+        entry.shape != csr.shape
+        or not np.array_equal(entry.indptr, indptr)
+        or not np.array_equal(entry.indices, indices)
+    ):
+        entry = None
     if entry is not None:
         _cache.move_to_end(key)
         try:
@@ -126,7 +136,7 @@ def _refactor(cls, csr) -> tuple[_Entry, str]:
         except ValueError as exc:
             if 'PatternChanged' not in str(exc):
                 raise _singular(exc, csr.shape[0]) from exc
-            entry = None  # a CRC collision: the extension's full comparison refused it
+            entry = None  # defensive support for an extension that also validates its pattern
         else:
             entry.generation += 1
             return entry, kind
@@ -135,7 +145,7 @@ def _refactor(cls, csr) -> tuple[_Entry, str]:
         kind = factorization.refactor(csr.data)
     except ValueError as exc:
         raise _singular(exc, csr.shape[0]) from exc
-    entry = _Entry(factorization)
+    entry = _Entry(factorization, csr)
     entry.generation = 1
     _cache[key] = entry
     while len(_cache) > _CACHE_SIZE:
@@ -166,6 +176,7 @@ def native_solve(matrix, rhs) -> np.ndarray | None:
     """
     cls, reason = _extension_or_reason()
     if cls is None:
+        assert reason is not None
         _fallback(reason)
         return None
     csr = _canonical(matrix)
@@ -195,18 +206,27 @@ class NativeFactor:
     refactorised the shared storage first re-factorises these values, never answers from theirs.
     """
 
-    def __init__(self, cls, csr, entry: _Entry, kind: str) -> None:
+    def __init__(self, cls, csr, entry: _Entry, kind: str, *, original=None, pinned=None, free=None) -> None:
         self._cls = cls
         self._csr = csr
         self._entry = entry
         self._generation = entry.generation
         self.kind = kind
+        self._original = original
+        self._pinned = pinned
+        self._free = free
 
     def solve(self, b) -> np.ndarray:
         if self._entry.generation != self._generation:
             self._entry, self.kind = _refactor(self._cls, self._csr)
             self._generation = self._entry.generation
         DIRECT_SOLVES[f'faer-{self.kind}'] += 1
+        if self._original is not None:
+            assert self._pinned is not None and self._free is not None
+            b = np.asarray(b, dtype=float)
+            lifted = lift_dirichlet_rhs(self._original, b, self._pinned, b[self._pinned])
+            lifted[self._free] = _back_substitute(self._entry.factorization, lifted[self._free], self._csr.shape[0])
+            return lifted
         return _back_substitute(self._entry.factorization, b, self._csr.shape[0])
 
 
@@ -214,6 +234,7 @@ def native_factor(matrix) -> NativeFactor | None:
     """Factorise ``matrix`` natively for repeated back-substitution, or ``None`` (logged)."""
     cls, reason = _extension_or_reason()
     if cls is None:
+        assert reason is not None
         _fallback(reason)
         return None
     csr = _canonical(matrix)
@@ -223,5 +244,17 @@ def native_factor(matrix) -> NativeFactor | None:
     # The held factor keeps its values across other solves, so they must not alias a buffer the
     # caller may go on to mutate.
     csr = csr.copy() if csr is matrix else csr
+    # Exact algebraic unit rows specify their unknown directly. Eliminating them is a solve
+    # coordinate change, not a change to the full residual or a declaration that it is symmetric.
+    lengths = np.diff(csr.indptr)
+    candidates = np.flatnonzero(lengths == 1)
+    slots = csr.indptr[candidates]
+    pinned = candidates[(csr.indices[slots] == candidates) & (csr.data[slots] == 1.0)]
+    if 0 < pinned.size < csr.shape[0]:
+        free = np.setdiff1d(np.arange(csr.shape[0]), pinned, assume_unique=True)
+        reduced = csr[free][:, free].tocsr()
+        if (reduced != reduced.T).nnz == 0:
+            entry, kind = _refactor(cls, reduced)
+            return NativeFactor(cls, reduced, entry, kind, original=csr, pinned=pinned, free=free)
     entry, kind = _refactor(cls, csr)
     return NativeFactor(cls, csr, entry, kind)

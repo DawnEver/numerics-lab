@@ -194,6 +194,9 @@ class TransientSolution:
     #: Actual residual-evaluation rates at committed times[1:], with no invented t0 rate.
     #: None means a producer did not record them; it is NOT an all-zero derivative.
     state_rates: list[NDArray[np.floating]] | None = None
+    #: Sparse pre-handler residual states keyed by accepted rate index. None is unrecorded;
+    #: an empty dict verifies that every published state retains its residual-side value.
+    rate_state_overrides: dict[int, NDArray[np.floating]] | None = None
     worst_step_residual: float = 0.0
     nonconverged_times: list[float] = field(default_factory=list)
     #: Exhausted steps that were DISCARDED by an event rollback (bisection probes). Diagnostic

@@ -18,6 +18,7 @@ from motronics.gauss.nonlinear._seam import (
     _has_converged,
     _StagnationWatch,
     increment_ratio,
+    require_secant_system,
 )
 
 __all__ = [
@@ -117,7 +118,7 @@ class BroydenStrategy:
 
     def _apply_inverse(self, system, state, r, updates):
         # H0^{-1} r via one secant solve, then the stored rank-1 Broyden updates.
-        v = system.solve_secant(state, r)
+        v = require_secant_system(system).solve_secant(state, r)
         for s_vec, denom, u in updates:
             v = v + (s_vec @ v) / denom * u
         return v
@@ -131,6 +132,7 @@ class BroydenStrategy:
         converged = False
         ran = 0
         watch = _StagnationWatch(rtol_energy_pct)
+        require_secant_system(system)
         updates: list[tuple] = []  # (s_row_vector, denom, u_column) rank-1 inverse-Jacobian updates
         prev_r = None
         prev_dx = None
@@ -146,6 +148,7 @@ class BroydenStrategy:
             if prev_r is not None:
                 # Broyden "good" inverse update: H <- H + ((dx - H df) / (dx.H df)) dx.H, applied as a
                 # stored rank-1 pair so future applies stay matrix-free.
+                assert prev_dx is not None
                 df = r - prev_r
                 h_df = self._apply_inverse(system, state, df, updates)
                 denom = float(prev_dx @ h_df)
@@ -197,7 +200,7 @@ class BFGSStrategy:
             a = rho * float(s_vec @ q)
             q = q - a * y_vec
             alphas.append(a)
-        z = system.solve_secant(state, q)
+        z = require_secant_system(system).solve_secant(state, q)
         for (s_vec, y_vec, rho), a in zip(pairs, reversed(alphas), strict=True):
             b = rho * float(y_vec @ z)
             z = z + (a - b) * s_vec
@@ -212,6 +215,7 @@ class BFGSStrategy:
         converged = False
         ran = 0
         watch = _StagnationWatch(rtol_energy_pct)
+        require_secant_system(system)
         pairs: list[tuple] = []  # (s = dx, y = dr, rho = 1/(y.s)) BFGS secant pairs
         prev_r = None
         prev_dx = None
@@ -225,6 +229,7 @@ class BFGSStrategy:
             x_prev = x
             r = system.residual(x, state)
             if prev_r is not None:
+                assert prev_dx is not None
                 y = r - prev_r
                 ys = float(y @ prev_dx)
                 if abs(ys) > 1e-30:  # curvature condition; skip a non-informative (near-zero) pair
@@ -268,7 +273,7 @@ class LBFGSStrategy:
             a = rho * float(s_vec @ q)
             q = q - a * y_vec
             alphas.append(a)
-        z = system.solve_secant(state, q)  # H0 z = q (one secant solve)
+        z = require_secant_system(system).solve_secant(state, q)  # H0 z = q (one secant solve)
         for (s_vec, y_vec, rho), a in zip(pairs, reversed(alphas), strict=True):
             b = rho * float(y_vec @ z)
             z = z + (a - b) * s_vec
@@ -283,6 +288,7 @@ class LBFGSStrategy:
         converged = False
         ran = 0
         watch = _StagnationWatch(rtol_energy_pct)
+        require_secant_system(system)
         pairs: list[tuple] = []  # (s = dx, y = dr, rho = 1/(y.s)) limited-memory secant pairs
         prev_r = None
         prev_dx = None
@@ -296,6 +302,7 @@ class LBFGSStrategy:
             x_prev = x
             r = system.residual(x, state)
             if prev_r is not None:
+                assert prev_dx is not None
                 y = r - prev_r
                 ys = float(y @ prev_dx)
                 if abs(ys) > 1e-30:  # curvature condition; skip a non-informative pair

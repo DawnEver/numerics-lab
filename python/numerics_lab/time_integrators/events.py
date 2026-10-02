@@ -86,6 +86,9 @@ __all__ = ['EventfulTransientSolution', 'integrate_transient_with_events']
 #: sample per step, ~200 per nominal cell -- the dense-but-genuine event stream the locator
 #: resolves, not chatter).
 _MAX_EVENTS_PER_CELL = 512
+# A temporary performance cache, never a solve/acceptance threshold. Oversized trials are simply
+# recomputed; large field vectors must not make simultaneous event observers exhaust host memory.
+_EVENT_TRIAL_CACHE_BYTES = 64 * 1024**2
 
 
 @dataclass
@@ -133,6 +136,10 @@ def _rollback(checkpoint: _Checkpoint, solution: TransientSolution) -> tuple[Int
     del solution.states[checkpoint.n_points :]
     if solution.state_rates is not None:
         del solution.state_rates[max(0, checkpoint.n_points - 1) :]
+    if solution.rate_state_overrides is not None:
+        for index in tuple(solution.rate_state_overrides):
+            if index >= max(0, checkpoint.n_points - 1):
+                del solution.rate_state_overrides[index]
     restored = _take_checkpoint(checkpoint.state, checkpoint.prev_dt, solution)
     return restored.state, restored.prev_dt
 
@@ -285,7 +292,7 @@ def integrate_transient_with_events(
         msg = f'time_tol must be finite and positive, got {time_tol!r}'
         raise ValueError(msg)
     bracket_tol = dt * 1.0e-6 if time_tol is None else time_tol
-    solution = EventfulTransientSolution(times=[study.t0], states=[u0], state_rates=[])
+    solution = EventfulTransientSolution(times=[study.t0], states=[u0], state_rates=[], rate_state_overrides={})
     g_prev = [float(g(u0, study.t0)) for g in event_fns]
     prev_dt: float | None = None
     breakpoints = tuple(time_breakpoints)
@@ -508,6 +515,13 @@ def integrate_transient_with_events(
             # on hbridge_deadtime 2026-08-07: the S4's OFF edge at 37.4 us was lost and the
             # switch stayed ON through the whole dead-time, changing the circuit.
             candidates: list[tuple[float, int]] = []
+            # Every observer below queries the SAME deep-owned checkpoint/history, spacing,
+            # integrator and unchanged problem. Exact candidate time therefore determines the
+            # whole trial form. This cache lives only in this search: accepting a state or firing
+            # any physical handler starts a new search, so neither lineage nor actuator state can
+            # leak across an event. Failed/nonfinite trials are not exact answers to reuse.
+            trials: dict[float, tuple[NDArray, bool, NDArray]] = {}
+            trial_bytes = 0
             for i in crossed:
                 if g_new[i] == 0.0:
                     candidates.append((t_step, i))
@@ -516,21 +530,43 @@ def integrate_transient_with_events(
                 else:
 
                     def _probe(mid_t: float, i: int = i, t_from: float = t_from, checkpoint=checkpoint) -> float:
-                        trial_state, trial_prev_dt = _rollback(checkpoint, solution)
-                        _ps, u_mid, ok, _rate = step_from(trial_state, trial_prev_dt, mid_t - t_from, mid_t)
+                        nonlocal trial_bytes
+                        if mid_t in trials:
+                            u_mid, ok, _rate = trials[mid_t]
+                        else:
+                            trial_state, trial_prev_dt = _rollback(checkpoint, solution)
+                            _ps, u_mid, ok, _rate = step_from(trial_state, trial_prev_dt, mid_t - t_from, mid_t)
+                            size = u_mid.nbytes + _rate.nbytes
+                            if (
+                                ok
+                                and np.isfinite(u_mid).all()
+                                and np.isfinite(_rate).all()
+                                and size <= _EVENT_TRIAL_CACHE_BYTES
+                            ):
+                                while trials and trial_bytes + size > _EVENT_TRIAL_CACHE_BYTES:
+                                    old_state, _old_ok, old_rate = trials.pop(next(iter(trials)))
+                                    trial_bytes -= old_state.nbytes + old_rate.nbytes
+                                snapshot, rate = u_mid.copy(), _rate.copy()
+                                snapshot.setflags(write=False)
+                                rate.setflags(write=False)
+                                trials[mid_t] = snapshot, ok, rate
+                                trial_bytes += size
                         if adaptive and not ok:
                             msg = (
                                 f'event probe at t={mid_t:g} did not converge; its event sign cannot '
                                 'locate a physical switch. Reduce the step or repair the nonlinear solve.'
                             )
                             raise RuntimeError(msg)
-                        return float(event_fns[i](u_mid, mid_t))
+                        return float(event_fns[i](u_mid.copy(), mid_t))
 
                     lo_t, hi_t = _locate_bracket(
                         t_from, float(g_prev[i]), t_step, float(g_new[i]), _probe, tol=bracket_tol
                     )
                     t_star_i = 0.5 * (lo_t + hi_t)
                     candidates.append((t_star_i, i))
+            # No observer may retain a trial across an accepted state or physical reset. Landing
+            # is a fresh canonical solve, with its own accepted rate and convergence verdict.
+            trials.clear()
 
             # The suppression's SECOND half, where the landing INSTANT is known: a crossing
             # located within the tolerance of the function's last firing is the same instant's
@@ -571,11 +607,19 @@ def integrate_transient_with_events(
                     'before advancing a physical handler.'
                 )
                 raise RuntimeError(msg)
+            residual_state = u_star.copy() if on_event is not None and t_star > t_from else None
             for _root, i in simultaneous:
                 solution.events.append((i, t_star))
                 if on_event is not None:
                     on_event(i, t_star, u_star)
                 last_fired[i] = t_star
+            if residual_state is not None and not np.array_equal(residual_state, u_star, equal_nan=True):
+                assert solution.state_rates is not None
+                assert solution.rate_state_overrides is not None
+                rate_index = len(solution.state_rates) - 1
+                if rate_index >= 0 and rate_index not in solution.rate_state_overrides:
+                    residual_state.flags.writeable = False
+                    solution.rate_state_overrides[rate_index] = residual_state
             # RESTART the history at the event: the toggle invalidates the pre-event derivative
             # history, so the first post-event step must not read it (see the module docstring for
             # the kink-rounding measurement). The landing step's v/a carry over for second-order
