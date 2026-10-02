@@ -38,6 +38,7 @@ from numpy.typing import NDArray
 from motronics.contracts.spec.analysis_formulation import (
     DerivativeWeights,
     FactorReusableProblem,
+    HistoryProblem,
     SemiDiscreteProblem,
 )
 from motronics.contracts.spec.study_spec import TransientStudy
@@ -51,7 +52,7 @@ from motronics.gauss.time_integrators._integrators import (
     NewmarkIntegrator,
     get_integrator,
 )
-from motronics.gauss.time_integrators._step import HeldFactor, _solve_step
+from motronics.gauss.time_integrators._step import HeldFactor, _solve_step, directional_line_search
 from motronics.gauss.time_integrators.factor_reuse import FactorCache
 
 logger = logging.getLogger(__name__)
@@ -65,6 +66,7 @@ __all__ = [
     'GeneralizedAlphaIntegrator',
     'NewmarkIntegrator',
     'bdf2_variable_form',
+    'directional_line_search',
     'get_integrator',
     'integrate_transient',
 ]
@@ -124,6 +126,7 @@ def integrate_transient(
     factor_cache: FactorCache | None = None,
     backtrack_band: float | None = 1.5,
     backtrack_cap: int = 4,
+    line_search: str = 'backtrack',
     gmin_stages: tuple[float, ...] | None = None,
     adaptive: bool = False,
     atol: float = 1e-6,
@@ -232,6 +235,8 @@ def integrate_transient(
                 solution.states.append(u_new)
                 assert solution.state_rates is not None
                 solution.state_rates.append(form.u_dot(u_new))
+                if isinstance(problem, HistoryProblem):
+                    problem.commit_history(u_new, t_new)
                 h_prev = h
                 if err > 0.0:
                     h = min(h_hi, max(h_lo, h * min(2.0, 1.2 * (atol / err) ** (1.0 / 3.0))))
@@ -262,6 +267,7 @@ def integrate_transient(
             factor_cache=factor_cache,
             backtrack_band=backtrack_band,
             backtrack_cap=backtrack_cap,
+            line_search=line_search,
             gmin_stages=gmin_stages,
             held=held,
         )
@@ -287,6 +293,11 @@ def integrate_transient(
         solution.states.append(u_new)
         assert solution.state_rates is not None
         solution.state_rates.append(form.u_dot(u_new))
+        # THE STEP JOINED THE TRAJECTORY, so its material history is the one the next step starts
+        # from -- including a step labelled non-converged: the march continues from `u_new`, and a
+        # history left at the previous step would be a trajectory the material never followed.
+        if isinstance(problem, HistoryProblem):
+            problem.commit_history(u_new, t_new)
     if held is not None:
         logger.info('held-factor march: factorizations=%d solves=%d', held.factorizations, held.solves)
     return solution
