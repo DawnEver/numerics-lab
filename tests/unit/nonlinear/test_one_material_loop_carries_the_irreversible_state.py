@@ -10,12 +10,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from motronics.gauss.nonlinear import (
-    AssembledState,
-    DampedPicardStrategy,
-    _has_converged,
-    _StagnationWatch,
-)
+from motronics.gauss.nonlinear import AssembledState, DampedPicardStrategy
+from motronics.gauss.nonlinear._seam import _has_converged, _StagnationWatch
 from motronics.gauss.nonlinear.material_state import (
     CompositeUpdate,
     MaterialCoeffs,

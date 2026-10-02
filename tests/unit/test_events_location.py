@@ -22,11 +22,23 @@ from __future__ import annotations
 import itertools
 
 import numpy as np
+import pytest
 from tests.unit.gauss._helpers import _RampWithToggle
 
 from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
 from motronics.gauss.time_integrators import integrate_transient
 from motronics.gauss.time_integrators.events import integrate_transient_with_events
+
+
+@pytest.mark.parametrize('time_tol', [0.0, -1e-9, np.nan, np.inf])
+def test_event_bracket_width_must_be_finite_and_positive(time_tol: float) -> None:
+    """A zero-width event bracket cannot terminate a switched field-circuit march."""
+    problem = _RampWithToggle(level=1.0)
+    study = TransientStudy(t0=0.0, t1=2.0, dt=0.3, integrator=IntegratorKind.BDF2)
+    with pytest.raises(ValueError, match='time_tol.*finite and positive'):
+        integrate_transient_with_events(
+            problem, study, np.array([0.0]), event_fns=(problem.event_fn,), time_tol=time_tol
+        )
 
 
 def test_a_march_without_events_overshoots_the_turning_level() -> None:

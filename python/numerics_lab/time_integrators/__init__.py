@@ -51,6 +51,7 @@ from motronics.gauss.time_integrators.factor_reuse import FactorCache, apply_fac
 
 logger = logging.getLogger(__name__)
 
+
 __all__ = [
     'HELD_STALL_RATIO',
     'INTEGRATOR_REGISTRY',
@@ -70,6 +71,13 @@ __all__ = [
     'residual_floor',
     'residual_floor_of_magnitude',
 ]
+
+
+def _full_fixed_steps(study: TransientStudy) -> int:
+    """Count full cells, treating a floating-point near-integer as an integer."""
+    ratio = (study.t1 - study.t0) / study.dt
+    nearest = round(ratio)
+    return nearest if abs(ratio - nearest) <= 1e-10 else int(np.floor(ratio))
 
 
 #: Safety factor on the estimated roundoff floor, DELIBERATELY the same 64 as the DC operating
@@ -829,11 +837,17 @@ def integrate_transient(
                 # with the contract's label rather than spun forever)
                 h = max(h_lo, h / 2.0)
         return solution
-    n_steps = round((study.t1 - study.t0) / dt)
+    n_full = _full_fixed_steps(study)
     solution = TransientSolution(times=[study.t0], states=[u0])
-    for k in range(n_steps):
-        t_new = study.t0 + (k + 1) * dt
-        form = integrator.prepare(state, dt, t_new)
+    has_remainder = study.t1 - (study.t0 + n_full * dt) > 1e-12 * max(dt, abs(study.t1 - study.t0))
+    for k in range(n_full + int(has_remainder)):
+        final_partial = k == n_full
+        t_new = study.t1 if final_partial else study.t0 + (k + 1) * dt
+        step_dt = t_new - state.t if final_partial else dt
+        if final_partial and integrator.name == 'bdf2' and len(state.us) >= 2:
+            form = _bdf2_variable_form(state, step_dt, dt, t_new)
+        else:
+            form = integrator.prepare(state, step_dt, t_new)
         u_new, converged, _iterations, residual, on_floor = _solve_step(
             problem,
             form,
@@ -865,7 +879,7 @@ def integrate_transient(
                 f'{residual:.3e}',
                 f'{tol:.3e}',
             )
-        state = integrator.advance(state, u_new, dt, t_new)
+        state = integrator.advance(state, u_new, step_dt, t_new)
         solution.times.append(t_new)
         solution.states.append(u_new)
     if held is not None:

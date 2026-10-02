@@ -21,7 +21,7 @@ from scipy.sparse import csr_matrix
 
 from motronics.contracts.spec.analysis_formulation import DerivativeWeights
 from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
-from motronics.gauss.time_integrators import _default_solve, integrate_transient
+from motronics.gauss.time_integrators import _default_solve, factor_reuse, integrate_transient
 from motronics.gauss.time_integrators.events import integrate_transient_with_events
 from motronics.gauss.time_integrators.factor_reuse import FactorCache
 
@@ -184,3 +184,21 @@ def test_a_none_key_never_caches() -> None:
     cache.solve(None, lambda: m, np.ones(2))
     assert cache.factorizations == 2
     assert cache.reuses == 0
+
+
+def test_a_repaired_miss_also_repairs_later_hits(monkeypatch) -> None:
+    """Reuse must not replay an inaccurate back-substitution on another RHS."""
+    matrix = csr_matrix(np.diag([1.0, 1.0e-15]))
+
+    class InaccurateFactor:
+        def solve(self, rhs):
+            return np.array([rhs[0], rhs[1] * 1.0e15 * (1.0 + 1.0e-4)])
+
+    monkeypatch.setattr(factor_reuse, 'factor_matrix', lambda _matrix: InaccurateFactor())
+    cache = FactorCache()
+    first = cache.solve('same', lambda: matrix, np.array([1.0, 1.0]))
+    second = cache.solve('same', lambda: matrix, np.array([2.0, 2.0]))
+
+    assert np.allclose(first, [1.0, 1.0e15], rtol=1.0e-12)
+    assert np.allclose(second, [2.0, 2.0e15], rtol=1.0e-12)
+    assert cache.factorizations == 1 and cache.reuses == 1
