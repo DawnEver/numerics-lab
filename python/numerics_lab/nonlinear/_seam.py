@@ -182,13 +182,6 @@ class FactorizableSystem(Protocol):
     def factorize(self, matrix, /) -> Callable[[np.ndarray], np.ndarray]: ...
 
 
-class ResidualMarchSystem(NonlinearSystem, Protocol):
-    """The residual march's actual step schedule and acceptance rule."""
-
-    def step_length(self, iteration: int, /) -> float: ...
-    def residual_settled(self, state: AssembledState, /) -> bool: ...
-
-
 @runtime_checkable
 class ResidualStoppingStrategy(Protocol):
     """Optional declared stopping rule; absence means the energy rule."""
