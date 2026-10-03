@@ -71,8 +71,11 @@ def _extension_or_reason():
         return None, f'{_ENV}=0'
     if _native_gauss is None:
         return None, f'motronics_native.gauss is not importable ({_NATIVE_IMPORT_ERROR})'
-    cls = vars(_native_gauss).get('DirectFactorization')
-    if cls is None or 'refactor' not in vars(cls):
+    # A STALE BUILD lacks the class or its `refactor`: both are plain attribute reads that raise.
+    try:
+        cls = _native_gauss.DirectFactorization
+        _ = cls.refactor
+    except AttributeError:
         return None, 'the installed motronics_native predates DirectFactorization.refactor'
     return cls, None
 
