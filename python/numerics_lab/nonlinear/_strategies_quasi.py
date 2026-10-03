@@ -192,20 +192,6 @@ class BFGSStrategy:
     def __init__(self, m: int = 20) -> None:
         self.m = m  # cap the stored (s, y, rho) secant pairs (full BFGS keeps the whole history)
 
-    def _apply_inverse(self, system, state, r, pairs):
-        # H r via the L-BFGS two-loop recursion over the stored pairs, H0 r = one secant solve.
-        q = r.copy()
-        alphas = []
-        for s_vec, y_vec, rho in reversed(pairs):
-            a = rho * float(s_vec @ q)
-            q = q - a * y_vec
-            alphas.append(a)
-        z = require_secant_system(system).solve_secant(state, q)
-        for (s_vec, y_vec, rho), a in zip(pairs, reversed(alphas), strict=True):
-            b = rho * float(y_vec @ z)
-            z = z + (a - b) * s_vec
-        return z
-
     def solve(
         self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
     ) -> IterationResult:
@@ -236,7 +222,7 @@ class BFGSStrategy:
                     pairs.append((prev_dx.copy(), y, 1.0 / ys))
                     if len(pairs) > self.m:
                         pairs.pop(0)
-            dx = -self._apply_inverse(system, state, r, pairs)
+            dx = -_two_loop_inverse(system, state, r, pairs)
             x = x + dx
             prev_r, prev_dx = r, dx
             increment = increment_ratio(x_prev, x)
@@ -249,7 +235,7 @@ class BFGSStrategy:
         return IterationResult(x=x, state=state, iterations=ran, converged=converged)
 
 
-class LBFGSStrategy:
+class LBFGSStrategy(BFGSStrategy):
     """Quasi-Newton (limited-memory BFGS) -- the two-loop recursion on a bounded secant history (sec 1).
 
     Identical inverse-Hessian model to :class:`BFGSStrategy` but capping the stored history to the last
@@ -263,60 +249,24 @@ class LBFGSStrategy:
     name = 'l-bfgs'
 
     def __init__(self, m: int = 8) -> None:
-        self.m = m  # limited-memory depth (the last m secant pairs)
+        super().__init__(m)  # limited-memory depth (the last m secant pairs)
 
-    def _two_loop(self, system, state, r, pairs):
-        # Standard L-BFGS two-loop recursion: backward pass accumulates alphas, H0 apply, forward pass.
-        q = r.copy()
-        alphas = []
-        for s_vec, y_vec, rho in reversed(pairs):
-            a = rho * float(s_vec @ q)
-            q = q - a * y_vec
-            alphas.append(a)
-        z = require_secant_system(system).solve_secant(state, q)  # H0 z = q (one secant solve)
-        for (s_vec, y_vec, rho), a in zip(pairs, reversed(alphas), strict=True):
-            b = rho * float(y_vec @ z)
-            z = z + (a - b) * s_vec
-        return z
 
-    def solve(
-        self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
-    ) -> IterationResult:
-        x = system.initial_guess()
-        state: AssembledState | None = None
-        last_energy: float | None = None
-        converged = False
-        ran = 0
-        watch = _StagnationWatch(rtol_energy_pct)
-        require_secant_system(system)
-        pairs: list[tuple] = []  # (s = dx, y = dr, rho = 1/(y.s)) limited-memory secant pairs
-        prev_r = None
-        prev_dx = None
-        for i in range(max_iter):
-            ran = i + 1
-            state = system.assemble(x)
-            if converged:
-                break
-            err = _energy_error_pct(state.total_energy, last_energy)
-            last_energy = state.total_energy
-            x_prev = x
-            r = system.residual(x, state)
-            if prev_r is not None:
-                assert prev_dx is not None
-                y = r - prev_r
-                ys = float(y @ prev_dx)
-                if abs(ys) > 1e-30:  # curvature condition; skip a non-informative pair
-                    pairs.append((prev_dx.copy(), y, 1.0 / ys))
-                    if len(pairs) > self.m:
-                        pairs.pop(0)
-            dx = -self._two_loop(system, state, r, pairs)
-            x = x + dx
-            prev_r, prev_dx = r, dx
-            increment = increment_ratio(x_prev, x)
-            converged = _has_converged(
-                err, x_prev, x, rtol_energy_pct, material_change=state.material_change
-            ) or watch.observe(err, increment, state.material_change)
-            if system.is_linear:
-                converged = True
-            system.on_iteration(i, state, err, 1.0, increment)
-        return IterationResult(x=x, state=state, iterations=ran, converged=converged)
+def _two_loop_inverse(system, state, r, pairs):
+    """``H r`` by the L-BFGS two-loop recursion over the stored ``(s, y, rho)`` pairs.
+
+    THE ONE RECURSION both BFGS strategies use: the backward pass accumulates the alphas, ``H0`` is
+    one secant solve of ``system_matrix``, and the forward pass applies the corrections -- the dense
+    BFGS inverse update applied matrix-free, so no dense ``H`` is ever formed.
+    """
+    q = r.copy()
+    alphas = []
+    for s_vec, y_vec, rho in reversed(pairs):
+        a = rho * float(s_vec @ q)
+        q = q - a * y_vec
+        alphas.append(a)
+    z = require_secant_system(system).solve_secant(state, q)  # H0 z = q (one secant solve)
+    for (s_vec, y_vec, rho), a in zip(pairs, reversed(alphas), strict=True):
+        b = rho * float(y_vec @ z)
+        z = z + (a - b) * s_vec
+    return z
