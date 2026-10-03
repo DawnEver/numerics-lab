@@ -84,6 +84,10 @@ class MaterialCoeffs:
     br: np.ndarray | None = None
     mu_recoil: np.ndarray | None = None
 
+    def by_name(self) -> dict[str, np.ndarray | None]:
+        """Every coefficient keyed by its field name -- read field by field, never reflected."""
+        return {'nu': self.nu, 'dnu_db2': self.dnu_db2, 'br': self.br, 'mu_recoil': self.mu_recoil}
+
 
 #: The coefficient names, derived from the dataclass so a new one cannot be forgotten by the composite.
 COEFFICIENT_NAMES: tuple[str, ...] = tuple(f.name for f in fields(MaterialCoeffs))
@@ -119,7 +123,8 @@ def _blend(prev: np.ndarray | None, target: np.ndarray | None, alpha: float) -> 
 
 def relax_linear(previous: MaterialCoeffs, target: MaterialCoeffs, alpha: float) -> MaterialCoeffs:
     """The default :meth:`MaterialUpdate.relax`: every set coefficient blended by one global ``alpha``."""
-    return MaterialCoeffs(**{k: _blend(vars(previous)[k], vars(target)[k], alpha) for k in COEFFICIENT_NAMES})
+    prev, tgt = previous.by_name(), target.by_name()
+    return MaterialCoeffs(**{k: _blend(prev[k], tgt[k], alpha) for k in COEFFICIENT_NAMES})
 
 
 class CompositeUpdate:
@@ -145,8 +150,9 @@ class CompositeUpdate:
         for member, s in zip(self.members, state, strict=True):
             s_new, coeffs = member.evaluate(s, fields, temperature)
             trial.append(s_new)
+            values = coeffs.by_name()
             for k in COEFFICIENT_NAMES:
-                v = vars(coeffs)[k]
+                v = values[k]
                 if v is None:
                     continue
                 if k in merged:

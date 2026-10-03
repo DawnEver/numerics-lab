@@ -136,10 +136,11 @@ def test_the_event_march_refactors_on_the_toggle_and_stays_bit_identical() -> No
     problem = _LinearSpring([[2.0, 0.1], [0.1, 1.0]])
     study = _study()
     cache = FactorCache()
-    kwargs = {
-        'event_fns': (lambda _u, t: t - 0.5,),
-        'on_event': lambda _i, _t, _u: setattr(problem, 'k_scale', 3.0),
-    }
+
+    def toggle(_i, _t, _u) -> None:
+        problem.k_scale = 3.0
+
+    kwargs = {'event_fns': (lambda _u, t: t - 0.5,), 'on_event': toggle}
     plain = integrate_transient_with_events(problem, study, np.array([1.0, 0.5]), **kwargs)
     problem.k_scale = 1.0
     cached = integrate_transient_with_events(problem, study, np.array([1.0, 0.5]), factor_cache=cache, **kwargs)
