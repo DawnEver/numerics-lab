@@ -67,10 +67,11 @@ from motronics.gauss.time_integrators import (
     _bdf2_variable_form,
     _default_solve,
     _full_fixed_steps,
+    _solve_step,
     get_integrator,
 )
 from motronics.gauss.time_integrators._forms import IntegratorState, TransientSolution
-from motronics.gauss.time_integrators._step import HeldFactor, _solve_step
+from motronics.gauss.time_integrators._step import HeldFactor
 
 logger = logging.getLogger(__name__)
 

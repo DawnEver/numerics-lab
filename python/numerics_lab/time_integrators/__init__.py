@@ -30,6 +30,7 @@ mesh, no material, no solver.
 from __future__ import annotations
 
 import logging
+from functools import wraps
 
 import numpy as np
 import scipy.sparse as sp
@@ -43,6 +44,7 @@ from motronics.contracts.spec.analysis_formulation import (
 )
 from motronics.contracts.spec.study_spec import TransientStudy
 from motronics.gauss.linear import solve_linear_system
+from motronics.gauss.time_integrators import _step
 from motronics.gauss.time_integrators._forms import IntegratorState, StepForm, TransientSolution
 from motronics.gauss.time_integrators._integrators import (
     INTEGRATOR_REGISTRY,
@@ -52,7 +54,7 @@ from motronics.gauss.time_integrators._integrators import (
     NewmarkIntegrator,
     get_integrator,
 )
-from motronics.gauss.time_integrators._step import HeldFactor, _solve_step, directional_line_search
+from motronics.gauss.time_integrators._step import HeldFactor, directional_line_search
 from motronics.gauss.time_integrators.factor_reuse import FactorCache
 
 logger = logging.getLogger(__name__)
@@ -110,6 +112,12 @@ def _default_solve(matrix: object, rhs: NDArray[np.floating]) -> NDArray[np.floa
     if m.ndim == 0:  # scalar jacobian (1-DOF problem written as a plain number)
         return b / float(m)
     return np.linalg.solve(m, b)
+
+
+@wraps(_step._solve_step)
+def _solve_step(*args, **kwargs):
+    """The package's step seam; the implicit algorithm has one owner in ``_step``."""
+    return _step._solve_step(*args, **kwargs)
 
 
 def integrate_transient(
