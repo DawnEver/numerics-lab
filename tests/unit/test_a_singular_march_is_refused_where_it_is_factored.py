@@ -63,6 +63,7 @@ import types
 from pathlib import Path
 
 import pytest
+from tests.bound_names import binds, bound
 
 import motronics.__main__ as cli
 import motronics.gauss.linear as gauss_linear
@@ -201,8 +202,12 @@ def solve_counts(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
     # The name is rebound in every module that IMPORTED it: `from x import y` binds `y` into the
     # importer at import time, so patching only the definition site would count zero and read as
     # "nothing calls the seam" -- which happens to be the finding, and would then be unfalsifiable.
-    for module in list(sys.modules.values()):
-        if isinstance(module, types.ModuleType) and vars(module).get('solve_linear_system') is seam:
+    for module_name, module in list(sys.modules.items()):
+        if (
+            isinstance(module, types.ModuleType)
+            and binds(module_name, 'solve_linear_system')
+            and bound(module_name, 'solve_linear_system') is seam
+        ):
             monkeypatch.setattr(module, 'solve_linear_system', counted_seam)
     return counts
 
