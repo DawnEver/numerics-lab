@@ -1,9 +1,9 @@
 //! Newton-family, quasi-Newton and continuation iteration strategies.
 
 use super::{
-    energy_error_pct, has_converged, has_converged_residual, increment_ratio, norm,
-    DampedPicardStrategy, IterationResult, IterationStrategy, NonlinearError, NonlinearSystem,
-    ResultOf, SolveOptions, StagnationWatch, StateOf, StopRule,
+    energy_error_pct, has_converged, has_converged_residual, increment_ratio, local_change,
+    newton_linear_tolerance, norm, DampedPicardStrategy, IterationResult, IterationStrategy,
+    NonlinearError, NonlinearSystem, ResultOf, SolveOptions, StagnationWatch, StateOf, StopRule,
 };
 
 /// `a + s * b`, elementwise.
@@ -166,6 +166,9 @@ impl NewtonStrategy {
         let mut stale = false;
         for i in 0..opts.max_iter {
             ran = i + 1;
+            let previous_local = system.local_values(&state)?;
+            system
+                .set_linear_tolerance(reference * newton_linear_tolerance(r_norm / reference)?)?;
             // FULL NEWTON refreshes every iteration; the held (modified) one when its tangent is
             // `k` old or the last step stalled -- the Python `NewtonStrategy.solve`, rule for rule.
             let fresh = held.is_none() || self.refactor_every.is_none_or(|k| age >= k) || stale;
@@ -179,7 +182,7 @@ impl NewtonStrategy {
             let x_prev = x.clone();
             let (mut lam, mut accepted, mut full_trial, mut full_norm) =
                 self.search(system, &x, &dx, r_norm)?;
-            if !fresh && !(accepted.is_some() && lam == 1.0) {
+            if !(fresh || accepted.is_some() && lam == 1.0) {
                 // A held tangent that needs a line search is no longer a Newton model here:
                 // refresh and retake the step.
                 held = Some(Self::tangent_of(name, system, &x, &state)?);
@@ -214,6 +217,11 @@ impl NewtonStrategy {
                 || watch.observe(err, increment);
             if system.is_linear() {
                 converged = true;
+            }
+            let current_local = system.local_values(&state)?;
+            if !system.is_linear() && (!previous_local.is_empty() || !current_local.is_empty()) {
+                converged =
+                    converged && local_change(&previous_local, &current_local)? < rtol / 100.0;
             }
             system.on_iteration(i, &state, err, lam, increment);
             if converged {

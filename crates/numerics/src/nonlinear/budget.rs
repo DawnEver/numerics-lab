@@ -128,6 +128,14 @@ impl<S: NonlinearSystem, C: Fn() -> f64> NonlinearSystem for TimeBudgetedSystem<
         self.inner.rhs_norm(state)
     }
 
+    fn local_values(&self, state: &StateOf<Self>) -> Result<super::LocalFields, NonlinearError> {
+        self.inner.local_values(state)
+    }
+
+    fn set_linear_tolerance(&mut self, atol: f64) -> Result<(), NonlinearError> {
+        self.inner.set_linear_tolerance(atol)
+    }
+
     fn tangent(
         &mut self,
         x: &[f64],

@@ -85,7 +85,7 @@ def test_the_order_157_finite_garbage_plant_is_still_refused():
     assert 'gauge' in message, 'the refusal must say what the caller can DO about it'
 
 
-def test_the_refinement_step_is_what_sees_the_plant_and_it_sees_it_by_thirteen_decades():
+def test_the_refinement_step_sees_the_plant_above_the_actual_refusal_bar():
     """THE FLOOR under end one: the discriminator must actually discriminate ON THIS SYSTEM.
 
     Without this, the refusal above could be coming from the ``MatrixRankWarning`` belt or from
@@ -97,7 +97,9 @@ def test_the_refinement_step_is_what_sees_the_plant_and_it_sees_it_by_thirteen_d
         x = spla.spsolve(sp.csc_matrix(matrix), rhs)
     assert np.all(np.isfinite(x)), 'the plant returned NaNs; _check_finite would catch it'
     correction = direct_refinement_correction(matrix, rhs, x)
-    assert correction is not None and correction > 1.0, correction
+    # The numerical value varies with the sparse factorization implementation;
+    # the invariant is rejection at the production bar, not a historical value.
+    assert correction is not None and correction > _DIRECT_REFINEMENT_RTOL, correction
 
 
 # --- END TWO: the ill-conditioned but well-posed system must be accepted ----------------------

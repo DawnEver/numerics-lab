@@ -4,6 +4,7 @@
 mod constraints;
 mod direct;
 mod dirichlet;
+mod iccg;
 mod krylov;
 mod precond;
 mod seam;

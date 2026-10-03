@@ -19,7 +19,7 @@ fn the_registry_covers_the_roadmap_backends() {
         );
         LinearSolver::resolve(Some(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
     }
-    assert_eq!(KNOWN_PRECONDITIONERS, ["ilu", "jacobi", "ssor"]);
+    assert_eq!(KNOWN_PRECONDITIONERS, ["ic0", "ilu", "jacobi", "ssor"]);
 }
 
 #[test]
@@ -45,7 +45,7 @@ fn requires_symmetric_tags_cg_and_minres_and_nothing_else() {
     for name in KNOWN_LINEAR_SOLVERS {
         assert_eq!(
             requires_symmetric(name),
-            name == "cg" || name == "minres",
+            name == "cg" || name == "iccg" || name == "minres",
             "{name} carries the wrong symmetry tag"
         );
     }

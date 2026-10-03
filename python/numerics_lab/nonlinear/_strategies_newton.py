@@ -17,7 +17,6 @@ from motronics.gauss.nonlinear import (
     _RTOL_ENERGY_PCT,
     AssembledState,
     IterationResult,
-    IterationStrategy,
     NewtonTangentUnavailable,
     NonlinearSystem,
     _energy_error_pct,
@@ -25,7 +24,13 @@ from motronics.gauss.nonlinear import (
     _StagnationWatch,
     increment_ratio,
 )
-from motronics.gauss.nonlinear._strategies_picard import DampedPicardStrategy
+from motronics.gauss.nonlinear._strategies_outer import ContinuationStrategy, ResidualMarchStrategy
+from motronics.gauss.nonlinear.local import (
+    free_residual_norm,
+    local_change,
+    newton_linear_tolerance,
+    residual_reference,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,36 +50,6 @@ __all__ = [
 ]
 
 
-def _free_residual_norm(system, x, state) -> float:
-    """``system.residual_norm`` when the system defines it, else the Protocol's default ``||r||``.
-
-    A duck-typed system inherits nothing from a ``Protocol``, so the default body has to be
-    spelled where it is consumed.
-    """
-    try:
-        norm_of = system.residual_norm
-    except AttributeError:
-        return float(np.linalg.norm(system.residual(x, state)))
-    return float(norm_of(x, state))
-
-
-def _residual_reference(system, state, seed_norm: float) -> float:
-    """The scale the relative residual is taken against: ``max(||r(x_0)||, ||rhs||)``.
-
-    The seed residual alone is the right-hand side only for a ZERO seed. A warm start near the
-    root (a sweep's previous position) has a small seed residual, and a bar relative to it would
-    demand a tighter answer the better the guess -- so a system that knows its free-DOF source norm
-    exposes it as ``rhs_norm(state)`` and the larger of the two is used, which is the rule the 3-D
-    H(curl) march already applies (``ref = max(||f_f||, ||R_f^0||)``). A system without the hook
-    is judged against its seed residual, exact for the zero seed every such system starts from.
-    """
-    try:
-        rhs_norm = system.rhs_norm
-    except AttributeError:
-        return seed_norm
-    return max(seed_norm, float(rhs_norm(state)))
-
-
 class NewtonStrategy:
     """Newton-Raphson with a backtracking line search -- THE Newton every family runs.
 
@@ -92,7 +67,7 @@ class NewtonStrategy:
     Jacobian-free directional derivative of its own pipeline); this class owns everything else.
 
     CONVERGENCE IS JUDGED ON THE EQUATION, not on a proxy for it: the relative residual
-    ``||r(x_k)|| / max(||r(x_0)||, ||rhs||)`` (:func:`_residual_reference`) AND the increment, both below ``rtol = rtol_energy_pct / 100``, through the one rule
+    ``||r(x_k)|| / max(||r(x_0)||, ||rhs||)`` (:func:`residual_reference`) AND the increment, both below ``rtol = rtol_energy_pct / 100``, through the one rule
     :func:`_has_converged`. The energy change is still computed, for the log and for the
     stagnation break that stops a solve parked on its arithmetic floor.
 
@@ -175,7 +150,7 @@ class NewtonStrategy:
         for _bt in range(self.max_backtracks + 1):
             trial = x + lam * dx
             trial_state = system.assemble(trial)
-            trial_norm = _free_residual_norm(system, trial, trial_state)
+            trial_norm = free_residual_norm(system, trial, trial_state)
             if full_step is None:
                 full_step = (trial, trial_state, trial_norm)
             if np.isfinite(trial_norm) and trial_norm <= (1.0 - self.armijo * lam) * r_norm:
@@ -193,8 +168,8 @@ class NewtonStrategy:
             # back its pre-initialised fields, never an assembly nobody asked for.
             return IterationResult(x=x, state=None, iterations=0, converged=False)
         state = system.assemble(x)
-        r_norm = _free_residual_norm(system, x, state)
-        reference = _residual_reference(system, state, r_norm)
+        r_norm = free_residual_norm(system, x, state)
+        reference = residual_reference(system, state, r_norm)
         if r_norm == 0.0 or not np.isfinite(reference):
             # A seed that already satisfies the equation (an unexcited model, a warm start AT the
             # root) is the solution; a non-finite seed residual is refused by the caller's guards.
@@ -208,6 +183,13 @@ class NewtonStrategy:
         stale = False
         for i in range(max_iter):
             ran = i + 1
+            previous_local = state.local_values
+            try:
+                set_tolerance = system.set_linear_tolerance
+            except AttributeError:
+                set_tolerance = None
+            if set_tolerance is not None:
+                set_tolerance(newton_linear_tolerance(r_norm / reference) * reference)
             # FULL NEWTON REFRESHES EVERY ITERATION; the modified one when its factor is ``k`` old,
             # or the last held step contracted the residual by less than ``stall_ratio``.
             fresh = held is None or self.refactor_every is None or age >= self.refactor_every or stale
@@ -248,6 +230,8 @@ class NewtonStrategy:
             ) or watch.observe(err, increment, state.material_change)
             if system.is_linear:
                 converged = True
+            if not system.is_linear and (previous_local or state.local_values):
+                converged = converged and local_change(previous_local, state.local_values) < rtol_energy_pct / 100.0
             system.on_iteration(i, state, err, lam, increment)
             if converged:
                 break
@@ -776,125 +760,3 @@ class NewtonKrylovStrategy:
                 converged = True
             system.on_iteration(i, state, err, 1.0, increment)
         return IterationResult(x=x, state=state, iterations=ran, converged=converged)
-
-
-class ResidualMarchStrategy:
-    """A Newton / secant march judged on the RESIDUAL against the system's own arithmetic floor.
-
-    For an equation whose convergence is a statement about its residual rather than an energy --
-    the 3-D H(curl) curl-curl system, whose ``R = K(nu(B)) A - f`` is the measured quantity and
-    whose floor is ``eps * || |J| . |u| ||`` -- the system itself decides when the residual is
-    settled (:meth:`residual_settled`) and how long each step is (:meth:`step_length`); the
-    strategy owns only the march: assemble, ask, solve ``tangent dx = -r``, step. It is not in
-    ``ITERATION_REGISTRY`` because no energy-judged system can answer :meth:`residual_settled`.
-    """
-
-    name = 'residual-march'
-
-    def solve(
-        self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
-    ) -> IterationResult:
-        del rtol_energy_pct  # the system's own residual rule decides
-        x = system.initial_guess()
-        state: AssembledState | None = None
-        converged = False
-        ran = 0
-        for i in range(max_iter):
-            ran = i + 1
-            state = system.assemble(x)
-            system.on_iteration(i, state, 0.0, system.step_length(i), 0.0)
-            if system.residual_settled(state):
-                converged = True
-                break
-            dx = system.solve_system(system.tangent(x, state), -system.residual(x, state))
-            x = x + system.step_length(i) * dx
-        return IterationResult(x=x, state=state, iterations=ran, converged=converged)
-
-
-class ContinuationStrategy:
-    """Load / source stepping: solve a ramp ``0 < lam_1 < ... < lam_n = 1`` of the source (sec 1).
-
-    An OUTER driver for strong-saturation / large-current operating points where a single solve of the
-    full source diverges. It scales the source (conductor current + magnet Br) by ``lam`` via the
-    equation's ``scale_source`` hook, solving each sub-problem with an INNER strategy seeded by the
-    previous solution (natural continuation). The last sub-solve (``lam=1``) is the full problem, so
-    the converged field is the true solution. Degrades to a single full-source inner solve when the
-    equation cannot rescale its source (``scale_source`` raises ``NotImplementedError``).
-    """
-
-    name = 'continuation'
-
-    def __init__(self, steps: int = 4, inner: IterationStrategy | None = None) -> None:
-        self.steps = max(1, steps)
-        self.inner = inner or DampedPicardStrategy()
-
-    def solve(
-        self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
-    ) -> IterationResult:
-        lambdas = [(k + 1) / self.steps for k in range(self.steps)]
-        result: IterationResult | None = None
-        seed: np.ndarray | None = None
-        for lam in lambdas:
-            try:
-                sub = system if lam == 1.0 and self.steps == 1 else system.scale_source(lam)
-            except NotImplementedError:
-                # The equation cannot rescale its source: solve the full problem directly (no ramp).
-                return self.inner.solve(system, max_iter=max_iter, rtol_energy_pct=rtol_energy_pct)
-            if seed is not None:
-                sub = _SeededSystem(sub, seed)
-            result = self.inner.solve(sub, max_iter=max_iter, rtol_energy_pct=rtol_energy_pct)
-            seed = result.x
-        # ``result.state`` came from the scaled sub-system; re-assemble on the FULL system at the
-        # converged iterate so the returned payload/energy are the true (lam=1) fields.
-        final_state = system.assemble(result.x)
-        return IterationResult(x=result.x, state=final_state, iterations=result.iterations, converged=result.converged)
-
-
-class _SeededSystem:
-    """Wrap a :class:`NonlinearSystem` to start from a supplied iterate (continuation warm start).
-
-    Delegates every method to the wrapped system except :meth:`initial_guess`, which returns the seed
-    (the previous continuation step's converged field) so each sub-solve starts near its solution.
-    """
-
-    def __init__(self, base: NonlinearSystem, seed: np.ndarray) -> None:
-        self._base = base
-        self._seed = seed
-
-    def initial_guess(self) -> np.ndarray:
-        return self._seed
-
-    @property
-    def unwrapped(self) -> NonlinearSystem:
-        return self._base
-
-    @property
-    def is_linear(self) -> bool:
-        return bool(self._base.is_linear)
-
-    def assemble(self, x, /):
-        return self._base.assemble(x)
-
-    def solve_linear(self, state, /):
-        return self._base.solve_linear(state)
-
-    def residual(self, x, state, /):
-        return self._base.residual(x, state)
-
-    def residual_norm(self, x, state, /):
-        return self._base.residual_norm(x, state)
-
-    def tangent(self, x, state, /):
-        return self._base.tangent(x, state)
-
-    def solve_system(self, matrix, rhs, /):
-        return self._base.solve_system(matrix, rhs)
-
-    def solve_secant(self, state, rhs, /):
-        return self._base.solve_secant(state, rhs)
-
-    def on_iteration(self, i, state, err, alpha, increment, /):
-        return self._base.on_iteration(i, state, err, alpha, increment)
-
-    def scale_source(self, lam, /):
-        return self._base.scale_source(lam)

@@ -151,6 +151,29 @@ fn every_solved_fixture_agrees_with_the_python_on_every_backend() {
 }
 
 #[test]
+fn iccg_and_auto_agree_with_committed_python_direct_answers() {
+    // This compares solutions, not a live Python ICCG trajectory or a JMAG result.
+    let g = golden();
+    let mut iccg_cases = 0;
+    for (name, case) in g["cases"].as_object().expect("cases") {
+        if case["refused_by_the_singular_guard"] == Value::Bool(true) {
+            continue;
+        }
+        let a = matrix_of(case);
+        let b = floats(&case["rhs"]);
+        let want = floats(&case["solutions"]["direct"]);
+        let auto = solve_linear_system(&a, &b, Some("auto"), None, None).unwrap();
+        agree(&auto, &want, KRYLOV_AGREEMENT_RTOL, &format!("{name}.auto"));
+        if gauss::linear::Preconditioner::build("ic0", &a).is_ok() {
+            let iccg = solve_linear_system(&a, &b, Some("iccg"), None, None).unwrap();
+            agree(&iccg, &want, KRYLOV_AGREEMENT_RTOL, &format!("{name}.iccg"));
+            iccg_cases += 1;
+        }
+    }
+    assert!(iccg_cases > 0, "no committed Python operator exercises IC0");
+}
+
+#[test]
 fn the_ported_direct_backend_satisfies_the_system_it_was_given() {
     // The axis that does NOT reference the Python at all: whatever faer's pivots do, `A x = b`
     // must hold. This is the property a caller depends on, and the one the Python's `direct`

@@ -234,7 +234,11 @@ def test_the_symmetry_tag_is_frozen_alongside_the_solutions() -> None:
     """`requires_symmetric` is a DECLARATION the Rust side mirrors; freeze it, not just the numbers."""
     golden = _load()
     assert golden['requires_symmetric'] == {name: name in ('cg', 'minres') for name in _SOLVERS}
-    assert set(PRECONDITIONER_REGISTRY) == set(_PRECONDITIONERS)
+    # The committed equivalence corpus remains immutable; the new Python
+    # preconditioners have dedicated IC0/AMG mathematical-policy tests.
+    assert set(PRECONDITIONER_REGISTRY) == set(_PRECONDITIONERS) | {'ic0', 'amg'}
+    assert requires_symmetric('iccg')
+    assert not requires_symmetric('auto')
     assert set(_SOLVERS) <= set(LINEAR_SOLVER_REGISTRY)
 
 

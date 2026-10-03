@@ -82,6 +82,8 @@ class AssembledState:
         material_change: relative change of the IRREVERSIBLE material state this assembly's trial
             implies (`gauss.nonlinear.material_state`); ``0`` for a system whose materials are all
             reversible. The material term of :func:`_has_converged`.
+        local_values: snapshots of per-element fields, one array per independently
+            dimensioned quantity (B, voltage, current); Newton checks the worst element.
 
     """
 
@@ -89,6 +91,7 @@ class AssembledState:
     total_energy: float
     payload: object = None
     material_change: float = 0.0
+    local_values: tuple[np.ndarray, ...] = ()
 
 
 @dataclass
@@ -690,9 +693,10 @@ def increment_ratio(x: np.ndarray, x_next: np.ndarray, /) -> float:
     return dx_norm / x_scale
 
 
-#: THE STRATEGY CLASSES LIVE IN TWO SIBLING MODULES, split 2026-08-22 because this file crossed
-#: the 800-line band: `_strategies_picard.py` (Picard family) and `_strategies_newton.py`
-#: (Newton family + continuation). Each imports the protocols and helpers above FROM THIS MODULE
+#: THE STRATEGY CLASSES LIVE IN SIBLING MODULES, split because the parent files crossed
+#: the 800-line band: `_strategies_picard.py` (Picard family), `_strategies_newton.py`
+#: (Newton family), and `_strategies_outer.py` (residual march and continuation). Each imports
+#: the protocols and helpers above FROM THIS MODULE
 #: (a circular import that works because they are defined before this import runs); the public
 #: API here is unchanged -- every name in ``__all__`` still resolves off this module.
 from motronics.gauss.nonlinear._strategies_newton import (  # noqa: E402

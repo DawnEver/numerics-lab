@@ -34,6 +34,64 @@ pub struct DirichletGroup {
     pub indices: Vec<u32>,
 }
 
+/// Exact identity equations may be lifted without changing the free operator.
+/// This undoes row-only pinning's artificial asymmetry, not physical asymmetry.
+pub fn lift_identity_rows(
+    matrix: &Csr,
+    rhs: &[f64],
+) -> Result<(Csr, Vec<f64>, Vec<usize>), SparseError> {
+    let (n, cols) = matrix.shape();
+    if n != cols {
+        return Err(SparseError::NotSquare {
+            n_rows: n,
+            n_cols: cols,
+        });
+    }
+    if rhs.len() != n {
+        return Err(SparseError::ShapeMismatch {
+            expected: n,
+            got: rhs.len(),
+        });
+    }
+    let mut pinned = vec![false; n];
+    for (row, pin) in pinned.iter_mut().enumerate() {
+        let mut diagonal = false;
+        let mut identity = true;
+        for k in matrix.indptr()[row] as usize..matrix.indptr()[row + 1] as usize {
+            let col = matrix.indices()[k] as usize;
+            let value = matrix.values()[k];
+            if col == row {
+                diagonal = value == 1.0;
+            } else if value != 0.0 {
+                identity = false;
+            }
+        }
+        *pin = diagonal && identity;
+    }
+    let ids: Vec<_> = pinned
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &pin)| pin.then_some(i))
+        .collect();
+    if ids.is_empty() {
+        return Ok((matrix.clone(), rhs.to_vec(), ids));
+    }
+    let mut lifted = rhs.to_vec();
+    let mut coo = Coo::new(n, n);
+    for (row, lifted_value) in lifted.iter_mut().enumerate() {
+        for k in matrix.indptr()[row] as usize..matrix.indptr()[row + 1] as usize {
+            let col = matrix.indices()[k] as usize;
+            let value = matrix.values()[k];
+            if pinned[col] && row != col {
+                *lifted_value -= value * rhs[col];
+            } else {
+                coo.push(row as u32, col as u32, value)?;
+            }
+        }
+    }
+    Ok((coo.to_csr()?, lifted, ids))
+}
+
 /// Pin `rhs[i] = value + bias` for every index in every group, and turn each pinned row of the
 /// COO triplets into the identity row.
 ///
