@@ -48,6 +48,7 @@ from scipy.sparse.linalg import (
     spsolve,
 )
 
+from motronics.gauss.linear.amg import amg_preconditioner
 from motronics.gauss.linear.dirichlet import apply_dirichlet_csr, apply_dirichlet_triplets
 
 #: ``errors`` (2026-09-17) -- THE SEAM'S OWN ERROR TYPE, and a TRUE LEAF. Both the backends above
@@ -61,6 +62,7 @@ from motronics.gauss.linear.gauge import (
     gauge_pin_orphan_rows,
     orphan_rows,
 )
+from motronics.gauss.linear.ic0 import ic0_preconditioner, iccg_system
 from motronics.gauss.linear.native_direct import native_solve
 from motronics.gauss.linear.pin_rows import pin_rows
 
@@ -113,6 +115,7 @@ __all__ = [
     'gauge_pin_floating_constant',
     'gauge_pin_orphan_rows',
     'get_linear_solver',
+    'ic0_preconditioner',
     'make_preconditioner',
     'move_is_this_systems_conditioning',
     'orphan_rows',
@@ -244,20 +247,27 @@ def _krylov(fn: Callable):
     handle those quirks so every backend shares one call site.
     """
 
-    def _solve(matrix, rhs, *, x0=None, M=None):
-        b = np.asarray(rhs, dtype=float).ravel()
+    def _solve(matrix, rhs, *, x0=None, M=None, rtol=_KRYLOV_RTOL, atol=_KRYLOV_ATOL, max_iterations=None):
+        dtype = np.result_type(
+            matrix.dtype, np.asarray(rhs).dtype, np.float64 if x0 is None else np.asarray(x0).dtype, np.float64
+        )
+        b = np.asarray(rhs, dtype=dtype).ravel()
         n = b.shape[0]
         kw = {
-            'x0': None if x0 is None else np.asarray(x0, dtype=float).ravel(),
-            'rtol': _KRYLOV_RTOL,
-            'maxiter': _KRYLOV_MAXITER_FACTOR * max(n, 1),
+            'x0': None if x0 is None else np.asarray(x0, dtype=dtype).ravel(),
+            'rtol': rtol,
+            'maxiter': _KRYLOV_MAXITER_FACTOR * max(n, 1) if max_iterations is None else max_iterations,
         }
         if fn is qmr:
             kw['M1'] = M  # qmr takes a left preconditioner M1 (M2 defaults to identity)
         else:
             kw['M'] = M
         if fn is not minres:
-            kw['atol'] = _KRYLOV_ATOL  # minres has no atol argument
+            kw['atol'] = atol  # minres has no atol argument
+        if fn is gmres and max_iterations is not None:
+            # scipy's gmres maxiter counts RESTART CYCLES unless a 'legacy' callback is present, in
+            # which case it caps INNER iterations -- the unit an explicit budget is stated in.
+            kw.update(callback=lambda _residual: None, callback_type='legacy')
         x, info = fn(matrix, b, **kw)
         if info != 0:
             kind = 'did not converge' if info > 0 else 'illegal input / breakdown'
@@ -291,15 +301,24 @@ def _pardiso(matrix, rhs, **_iterative_only):
 # secant stiffness is SPD-ish); gmres/bicgstab/qmr handle general (non-symmetric, e.g. eddy-current).
 # 'pardiso' joins when pypardiso is installed (the optional MKL entry above).
 LINEAR_SOLVER_REGISTRY: dict[str, LinearSolver] = {
+    'auto': lambda matrix, rhs, **kwargs: solve_linear_system(
+        matrix,
+        rhs,
+        linear_solver='auto',
+        x0=kwargs.get('x0'),
+        rtol=kwargs.get('rtol', _KRYLOV_RTOL),
+        atol=kwargs.get('atol', _KRYLOV_ATOL),
+    ),
     'direct': _direct,
     'direct-symmetric': _direct_symmetric,
     'cg': _krylov(cg),
+    'iccg': _krylov(cg),
     'minres': _krylov(minres),
     'gmres': _krylov(gmres),
     'bicgstab': _krylov(bicgstab),
     'qmr': _krylov(qmr),
 }
-_SYMMETRIC_SOLVERS = frozenset({'cg', 'minres'})
+_SYMMETRIC_SOLVERS = frozenset({'cg', 'iccg', 'minres'})
 if _pardiso_spsolve is not None:
     LINEAR_SOLVER_REGISTRY['pardiso'] = _pardiso
 
@@ -310,7 +329,7 @@ def _jacobi_preconditioner(matrix) -> LinearOperator:
     The cheapest useful preconditioner: scales each row by its diagonal. A zero/NaN diagonal entry
     (a pinned identity row is 1, so this is rare) is left as 1 so ``M`` stays finite.
     """
-    diag = np.asarray(matrix.diagonal(), dtype=float)
+    diag = np.asarray(matrix.diagonal())
     inv = np.where(np.abs(diag) > 0.0, 1.0 / diag, 1.0)
     n = diag.shape[0]
     return LinearOperator((n, n), matvec=lambda v: inv * v)
@@ -327,8 +346,8 @@ def _ilu_preconditioner(matrix) -> LinearOperator:
     return LinearOperator((n, n), matvec=ilu.solve)
 
 
-# name -> builder(matrix) -> LinearOperator. AMG (pyamg) is an optional dep -- the hook is here
-# (add 'amg' when pyamg is present) but no hard dependency is introduced. 'ssor' is the nodal
+# name -> builder(matrix) -> LinearOperator. AMG is a real SPD nodal Galerkin V-cycle
+# (not the 3D A-phi electromagnetic decoupling solver). 'ssor' is the nodal
 # auxiliary accelerator (symmetric, strengthens CG on the SPD Poisson-type nodal operator); its
 # implementation lives in the physics-blind ``gauss.linear.ssor`` module (pure algebra on the
 # matrix triangles), imported at module level -- no cycle back into any physics package.
@@ -336,6 +355,8 @@ PRECONDITIONER_REGISTRY: dict[str, Callable[[object], LinearOperator]] = {
     'jacobi': _jacobi_preconditioner,
     'ilu': _ilu_preconditioner,
     'ssor': ssor_preconditioner,
+    'ic0': ic0_preconditioner,
+    'amg': amg_preconditioner,
 }
 
 
@@ -351,10 +372,18 @@ def get_linear_solver(name: str | None) -> LinearSolver:
         raise KeyError(msg) from e
 
 
-def make_preconditioner(name: str | None, matrix) -> LinearOperator | None:
+def make_preconditioner(name: str | LinearOperator | None, matrix) -> LinearOperator | None:
     """Build a preconditioner :class:`LinearOperator` for ``matrix``; ``None`` -> no preconditioner."""
     if name is None:
         return None
+    if isinstance(name, LinearOperator):
+        if name.shape != matrix.shape:
+            msg = 'explicit preconditioner shape must match the linear operator'
+            raise ValueError(msg)
+        if name.dtype is None or np.dtype(name.dtype).kind not in 'fciu':
+            msg = 'explicit preconditioner requires a numeric dtype'
+            raise ValueError(msg)
+        return name
     try:
         builder = PRECONDITIONER_REGISTRY[name]
     except KeyError as e:
@@ -368,8 +397,11 @@ def solve_linear_system(
     rhs: np.ndarray,
     *,
     linear_solver: str | None = None,
-    preconditioner: str | None = None,
+    preconditioner: str | LinearOperator | None = None,
     x0: np.ndarray | None = None,
+    rtol: float = _KRYLOV_RTOL,
+    atol: float = _KRYLOV_ATOL,
+    max_iterations: int | None = None,
 ) -> np.ndarray:
     """Solve ``matrix @ x = rhs`` with the named backend, guarding a non-finite result.
 
@@ -378,10 +410,48 @@ def solve_linear_system(
     guard is uniform across backends (the MEC singular-system guard, generalized), so a singular
     system or a Krylov breakdown raises :class:`LinearSolveError` instead of propagating NaNs.
     """
+    if not np.isfinite(rtol) or rtol <= 0 or not np.isfinite(atol) or atol < 0:
+        msg = 'linear tolerance requires finite rtol > 0 and atol >= 0'
+        raise ValueError(msg)
     name = linear_solver or 'direct'
-    backend = get_linear_solver(linear_solver)
-    M = make_preconditioner(preconditioner, matrix) if linear_solver not in (None, 'direct') else None
-    x = reject_nonfinite_solution(np.asarray(backend(matrix, rhs, x0=x0, M=M)), name)
+    if max_iterations is not None:
+        if (
+            isinstance(max_iterations, (bool, np.bool_))
+            or not isinstance(max_iterations, (int, np.integer))
+            or max_iterations <= 0
+        ):
+            msg = 'linear iteration budget requires a positive nonboolean integer'
+            raise ValueError(msg)
+        if name not in ('cg', 'bicgstab', 'gmres', 'minres', 'qmr', 'iccg'):
+            msg = 'linear iteration budget requires an explicit iterative backend'
+            raise ValueError(msg)
+    if name in ('auto', 'iccg'):
+        matrix, rhs, x0 = iccg_system(matrix, rhs, x0)
+    M = None
+    if name == 'auto':
+        # Select by admissibility, not an unmeasured size/speed crossover.
+        # IC0 breakdown or iterative failure falls back to the guarded direct solve.
+        name = 'direct'
+        try:
+            M = make_preconditioner('ic0', matrix)
+            name = 'iccg'
+        except ValueError:
+            pass
+    if name == 'iccg' and preconditioner not in (None, 'ic0'):
+        msg = 'ICCG requires the IC0 preconditioner'
+        raise ValueError(msg)
+    backend = get_linear_solver(name)
+    if M is None and name not in ('direct', 'direct-symmetric', 'pardiso'):
+        M = make_preconditioner('ic0' if name == 'iccg' else preconditioner, matrix)
+    try:
+        tolerances = {} if name in ('direct', 'direct-symmetric', 'pardiso') else {'rtol': rtol, 'atol': atol}
+        if max_iterations is not None:
+            tolerances['max_iterations'] = int(max_iterations)
+        x = reject_nonfinite_solution(np.asarray(backend(matrix, rhs, x0=x0, M=M, **tolerances)), name)
+    except LinearSolveError:
+        if linear_solver != 'auto' or name == 'direct':
+            raise
+        return solve_linear_system(matrix, rhs, linear_solver='direct')
     # Direct-solve residual guard (suspenders to _direct's MatrixRankWarning belt): a singular
     # factorization can return a FINITE vector that does not satisfy A x = b. Reject a large
     # relative residual so such a solve raises rather than reporting garbage as ``status=ok``.
