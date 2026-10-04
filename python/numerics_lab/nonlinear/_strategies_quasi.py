@@ -29,6 +29,25 @@ __all__ = [
 ]
 
 
+def _two_loop(system, state, r, pairs):
+    """H r by the L-BFGS two-loop recursion over the stored secant pairs; H0 r = one secant solve.
+
+    ONE body for BFGS and L-BFGS: they differ only in how many pairs they keep, so the recursion
+    that applies them is the same and a fix to it must reach both.
+    """
+    q = r.copy()
+    alphas = []
+    for s_vec, y_vec, rho in reversed(pairs):
+        a = rho * float(s_vec @ q)
+        q = q - a * y_vec
+        alphas.append(a)
+    z = require_secant_system(system).solve_secant(state, q)  # H0 z = q
+    for (s_vec, y_vec, rho), a in zip(pairs, reversed(alphas), strict=True):
+        b = rho * float(y_vec @ z)
+        z = z + (a - b) * s_vec
+    return z
+
+
 class AndersonStrategy:
     """Anderson acceleration of the Picard fixed-point map (roadmap sec 1).
 
@@ -192,20 +211,6 @@ class BFGSStrategy:
     def __init__(self, m: int = 20) -> None:
         self.m = m  # cap the stored (s, y, rho) secant pairs (full BFGS keeps the whole history)
 
-    def _apply_inverse(self, system, state, r, pairs):
-        # H r via the L-BFGS two-loop recursion over the stored pairs, H0 r = one secant solve.
-        q = r.copy()
-        alphas = []
-        for s_vec, y_vec, rho in reversed(pairs):
-            a = rho * float(s_vec @ q)
-            q = q - a * y_vec
-            alphas.append(a)
-        z = require_secant_system(system).solve_secant(state, q)
-        for (s_vec, y_vec, rho), a in zip(pairs, reversed(alphas), strict=True):
-            b = rho * float(y_vec @ z)
-            z = z + (a - b) * s_vec
-        return z
-
     def solve(
         self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
     ) -> IterationResult:
@@ -236,7 +241,7 @@ class BFGSStrategy:
                     pairs.append((prev_dx.copy(), y, 1.0 / ys))
                     if len(pairs) > self.m:
                         pairs.pop(0)
-            dx = -self._apply_inverse(system, state, r, pairs)
+            dx = -_two_loop(system, state, r, pairs)
             x = x + dx
             prev_r, prev_dx = r, dx
             increment = increment_ratio(x_prev, x)
@@ -264,20 +269,6 @@ class LBFGSStrategy:
 
     def __init__(self, m: int = 8) -> None:
         self.m = m  # limited-memory depth (the last m secant pairs)
-
-    def _two_loop(self, system, state, r, pairs):
-        # Standard L-BFGS two-loop recursion: backward pass accumulates alphas, H0 apply, forward pass.
-        q = r.copy()
-        alphas = []
-        for s_vec, y_vec, rho in reversed(pairs):
-            a = rho * float(s_vec @ q)
-            q = q - a * y_vec
-            alphas.append(a)
-        z = require_secant_system(system).solve_secant(state, q)  # H0 z = q (one secant solve)
-        for (s_vec, y_vec, rho), a in zip(pairs, reversed(alphas), strict=True):
-            b = rho * float(y_vec @ z)
-            z = z + (a - b) * s_vec
-        return z
 
     def solve(
         self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
@@ -309,7 +300,7 @@ class LBFGSStrategy:
                     pairs.append((prev_dx.copy(), y, 1.0 / ys))
                     if len(pairs) > self.m:
                         pairs.pop(0)
-            dx = -self._two_loop(system, state, r, pairs)
+            dx = -_two_loop(system, state, r, pairs)
             x = x + dx
             prev_r, prev_dx = r, dx
             increment = increment_ratio(x_prev, x)
