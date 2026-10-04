@@ -200,6 +200,12 @@ class NewtonStrategy:
             # root) is the solution; a non-finite seed residual is refused by the caller's guards.
             return IterationResult(x=x, state=state, iterations=1, converged=r_norm == 0.0)
         last_energy: float | None = state.total_energy
+        # THE TRACE STARTS AT THE SEED (user ruling 2026-10-04): `on_iteration` reports the state an
+        # iteration STARTS from, beside the step taken out of it -- the Picard-family convention --
+        # so the first hook call carries the seed (rel = 1 from A = 0), and the closing state, which
+        # no hook call sees, is the caller's to record from the result. `start_err` is that state's
+        # own energy change against its predecessor, `inf` for the seed.
+        start_state, start_err = state, np.inf
         converged = False
         ran = 0
         watch = _StagnationWatch(rtol_energy_pct)
@@ -254,7 +260,8 @@ class NewtonStrategy:
             ) or watch.observe(err, increment, state.material_change)
             if system.is_linear:
                 converged = True
-            system.on_iteration(i, state, err, lam, increment)
+            system.on_iteration(i, start_state, start_err, lam, increment)
+            start_state, start_err = state, err
             if converged:
                 break
         # ONE line per solve, the numbers a tolerance or strategy ruling is judged by: the relative
