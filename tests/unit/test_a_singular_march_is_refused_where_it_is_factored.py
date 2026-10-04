@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import sys
 import textwrap
+import types
 from pathlib import Path
 
 import pytest
@@ -201,7 +202,7 @@ def solve_counts(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
     # importer at import time, so patching only the definition site would count zero and read as
     # "nothing calls the seam" -- which happens to be the finding, and would then be unfalsifiable.
     for module in list(sys.modules.values()):
-        if module is not None and getattr(module, 'solve_linear_system', None) is seam:
+        if isinstance(module, types.ModuleType) and vars(module).get('solve_linear_system') is seam:
             monkeypatch.setattr(module, 'solve_linear_system', counted_seam)
     return counts
 
