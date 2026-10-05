@@ -16,6 +16,7 @@ from motronics.gauss.linear import (
     PRECONDITIONER_REGISTRY,
     LinearSolveError,
     get_linear_solver,
+    native_direct,
     solve_linear_system,
 )
 
@@ -195,3 +196,23 @@ def test_the_symmetric_ordering_fills_less_than_colamd_on_a_2d_stiffness():
     symmetric = splu(A, permc_spec='MMD_AT_PLUS_A', diag_pivot_thresh=0.0, options={'SymmetricMode': True})
     fill_ratio = (colamd.L.nnz + colamd.U.nnz) / (symmetric.L.nnz + symmetric.U.nnz)
     assert fill_ratio > 1.5, fill_ratio
+
+
+def test_the_symmetric_direct_backend_takes_the_native_cholesky_first(monkeypatch):
+    """``direct-symmetric`` answers through the pattern-cached native factor when it can (a verified
+    symmetric operator: faer Cholesky), and through symmetric-mode SuperLU when it is switched off --
+    the same answer to round-off either way.
+    """
+    if not native_direct.native_available():
+        pytest.xfail('the optional native extension is not importable here')
+    n = 30
+    lap = sp.diags([-np.ones(n - 1), 4.0 * np.ones(n), -np.ones(n - 1)], [-1, 0, 1])
+    A = (sp.kron(sp.eye(n), lap) + sp.kron(sp.diags([-np.ones(n - 1), -np.ones(n - 1)], [-1, 1]), sp.eye(n))).tocsc()
+    b = np.random.default_rng(5).normal(size=n * n)
+    before = native_direct.DIRECT_SOLVES['faer-cholesky']
+    x = solve_linear_system(A, b, linear_solver='direct-symmetric')
+    assert native_direct.DIRECT_SOLVES['faer-cholesky'] == before + 1
+    monkeypatch.setenv('MOTRONICS_DIRECT_NATIVE', '0')
+    y = solve_linear_system(A, b, linear_solver='direct-symmetric')
+    assert native_direct.DIRECT_SOLVES['faer-cholesky'] == before + 1  # the planted control: SuperLU answered
+    np.testing.assert_allclose(x, y, rtol=0, atol=1e-12 * np.abs(y).max())

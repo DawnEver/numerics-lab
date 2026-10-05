@@ -6,48 +6,74 @@ protocol these implement.
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 
 import numpy as np
 import scipy.sparse as sp
-from scipy.sparse.linalg import LinearOperator, gmres, splu
+from scipy.sparse.linalg import LinearOperator, aslinearoperator, gmres, splu
 
 from motronics.gauss.linear import reject_nonfinite_solution
 from motronics.gauss.linear.native_direct import native_factor
-from motronics.gauss.nonlinear import (
+from motronics.gauss.nonlinear._seam import (
     _RTOL_ENERGY_PCT,
     AssembledState,
+    FactorizableSystem,
     IterationResult,
+    IterationStrategy,
     NewtonTangentUnavailable,
     NonlinearSystem,
+    ResidualReferencedSystem,
+    SourceScalableSystem,
     _energy_error_pct,
     _has_converged,
     _StagnationWatch,
     increment_ratio,
+    require_secant_system,
+    unwrap_system,
 )
-from motronics.gauss.nonlinear._strategies_outer import ContinuationStrategy, ResidualMarchStrategy
-from motronics.gauss.nonlinear.local import (
-    free_residual_norm,
-    local_change,
-    newton_linear_tolerance,
-    residual_reference,
-)
+from motronics.gauss.nonlinear._strategies_picard import DampedPicardStrategy
+from motronics.gauss.nonlinear.local import local_change, newton_linear_tolerance
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     'HELD_FACTOR_REFACTOR_EVERY',
-    'AndersonStrategy',
-    'BFGSStrategy',
-    'BroydenStrategy',
     'ContinuationStrategy',
     'HeldFactorNewtonStrategy',
-    'LBFGSStrategy',
     'ModifiedNewtonStrategy',
     'NewtonKrylovStrategy',
     'NewtonLineSearchStrategy',
     'NewtonStrategy',
-    'ResidualMarchStrategy',
 ]
+
+
+def _free_residual_norm(system, x, state) -> float:
+    """``system.residual_norm`` when the system defines it, else the Protocol's default ``||r||``.
+
+    A duck-typed system inherits nothing from a ``Protocol``, so the default body has to be
+    spelled where it is consumed.
+    """
+    try:
+        norm_of = system.residual_norm
+    except AttributeError:
+        return float(np.linalg.norm(system.residual(x, state)))
+    return float(norm_of(x, state))
+
+
+def _residual_reference(system, state, seed_norm: float) -> float:
+    """The scale the relative residual is taken against: ``max(||r(x_0)||, ||rhs||)``.
+
+    The seed residual alone is the right-hand side only for a ZERO seed. A warm start near the
+    root (a sweep's previous position) has a small seed residual, and a bar relative to it would
+    demand a tighter answer the better the guess -- so a system that knows its free-DOF source norm
+    exposes it as ``rhs_norm(state)`` and the larger of the two is used, which is the rule the 3-D
+    H(curl) march already applies (``ref = max(||f_f||, ||R_f^0||)``). A system without the hook
+    is judged against its seed residual, exact for the zero seed every such system starts from.
+    """
+    inner = unwrap_system(system)
+    if not isinstance(inner, ResidualReferencedSystem):
+        return seed_norm
+    return max(seed_norm, float(inner.rhs_norm(state)))
 
 
 class NewtonStrategy:
@@ -67,7 +93,7 @@ class NewtonStrategy:
     Jacobian-free directional derivative of its own pipeline); this class owns everything else.
 
     CONVERGENCE IS JUDGED ON THE EQUATION, not on a proxy for it: the relative residual
-    ``||r(x_k)|| / max(||r(x_0)||, ||rhs||)`` (:func:`residual_reference`) AND the increment, both below ``rtol = rtol_energy_pct / 100``, through the one rule
+    ``||r(x_k)|| / max(||r(x_0)||, ||rhs||)`` (:func:`_residual_reference`) AND the increment, both below ``rtol = rtol_energy_pct / 100``, through the one rule
     :func:`_has_converged`. The energy change is still computed, for the log and for the
     stagnation break that stops a solve parked on its arithmetic floor.
 
@@ -100,6 +126,9 @@ class NewtonStrategy:
         stall_ratio: float = 0.5,
     ) -> None:
         self.max_backtracks = int(max_backtracks)
+        if self.max_backtracks < 0:
+            msg = f'max_backtracks must be nonnegative, got {max_backtracks!r}'
+            raise ValueError(msg)
         self.shrink = float(shrink)
         self.armijo = float(armijo)
         #: ``None`` is full Newton: a fresh tangent and factor every iteration. An integer ``k`` is
@@ -132,12 +161,8 @@ class NewtonStrategy:
         self.factorizations += 1
         if self.refactor_every is None:
             return lambda rhs: system.solve_system(jac, rhs)
-        try:
-            factorize = system.factorize
-        except AttributeError:
-            factorize = None
-        if factorize is not None:
-            return factorize(jac)
+        if isinstance(system, FactorizableSystem):
+            return system.factorize(jac)
         lu = _lu_factorize(jac)
         if lu is None:
             return lambda rhs: system.solve_system(jac, rhs)
@@ -150,12 +175,13 @@ class NewtonStrategy:
         for _bt in range(self.max_backtracks + 1):
             trial = x + lam * dx
             trial_state = system.assemble(trial)
-            trial_norm = free_residual_norm(system, trial, trial_state)
+            trial_norm = _free_residual_norm(system, trial, trial_state)
             if full_step is None:
                 full_step = (trial, trial_state, trial_norm)
             if np.isfinite(trial_norm) and trial_norm <= (1.0 - self.armijo * lam) * r_norm:
                 return lam, True, trial, trial_state, trial_norm, full_step
             lam *= self.shrink
+        assert full_step is not None  # nonnegative max_backtracks always tries the full step
         return lam, False, trial, trial_state, trial_norm, full_step
 
     def solve(
@@ -168,13 +194,19 @@ class NewtonStrategy:
             # back its pre-initialised fields, never an assembly nobody asked for.
             return IterationResult(x=x, state=None, iterations=0, converged=False)
         state = system.assemble(x)
-        r_norm = free_residual_norm(system, x, state)
-        reference = residual_reference(system, state, r_norm)
+        r_norm = _free_residual_norm(system, x, state)
+        reference = _residual_reference(system, state, r_norm)
         if r_norm == 0.0 or not np.isfinite(reference):
             # A seed that already satisfies the equation (an unexcited model, a warm start AT the
             # root) is the solution; a non-finite seed residual is refused by the caller's guards.
             return IterationResult(x=x, state=state, iterations=1, converged=r_norm == 0.0)
         last_energy: float | None = state.total_energy
+        # THE TRACE STARTS AT THE SEED (user ruling 2026-10-04): `on_iteration` reports the state an
+        # iteration STARTS from, beside the step taken out of it -- the Picard-family convention --
+        # so the first hook call carries the seed (rel = 1 from A = 0), and the closing state, which
+        # no hook call sees, is the caller's to record from the result. `start_err` is that state's
+        # own energy change against its predecessor, `inf` for the seed.
+        start_state, start_err = state, np.inf
         converged = False
         ran = 0
         watch = _StagnationWatch(rtol_energy_pct)
@@ -196,6 +228,7 @@ class NewtonStrategy:
             if fresh:
                 held, age, stale = self._held_solver(system, x, state), 0, False
             rhs = -system.residual(x, state)
+            assert held is not None  # the first iteration and every stale factor refresh above
             dx = held(rhs)
             x_prev = x
             lam, accepted, trial, trial_state, trial_norm, full_step = self._search(system, x, dx, r_norm)
@@ -219,11 +252,16 @@ class NewtonStrategy:
             x, state, r_norm = trial, trial_state, trial_norm
             err = _energy_error_pct(state.total_energy, last_energy)
             last_energy = state.total_energy
-            increment = increment_ratio(x_prev, x)
+            # THE RULE IS ASKED ABOUT THE FULL CORRECTION `dx`, not the damped `lam dx`: a line
+            # search that exhausted its backtracks takes a shrink**k-scaled step, and read as an
+            # iterate that stopped moving that is a `converged=True` far from the root -- measured
+            # 2026-09-27 on ipm_v_e45h fea,tri (two identical 1.45e-5 increments, then "converged").
+            x_full = x_prev + dx
+            increment = increment_ratio(x_prev, x_full)
             converged = _has_converged(
                 err,
                 x_prev,
-                x,
+                x_full,
                 rtol_energy_pct,
                 material_change=state.material_change,
                 residual_ratio=r_norm / reference,
@@ -232,7 +270,8 @@ class NewtonStrategy:
                 converged = True
             if not system.is_linear and (previous_local or state.local_values):
                 converged = converged and local_change(previous_local, state.local_values) < rtol_energy_pct / 100.0
-            system.on_iteration(i, state, err, lam, increment)
+            system.on_iteration(i, start_state, start_err, lam, increment)
+            start_state, start_err = state, err
             if converged:
                 break
         # ONE line per solve, the numbers a tolerance or strategy ruling is judged by: the relative
@@ -246,76 +285,6 @@ class NewtonStrategy:
             self.factorizations,
             state.total_energy,
         )
-        return IterationResult(x=x, state=state, iterations=ran, converged=converged)
-
-
-class AndersonStrategy:
-    """Anderson acceleration of the Picard fixed-point map (roadmap sec 1).
-
-    The Picard map is ``g(x) = solve_linear(assemble(x))`` and its fixed-point residual is
-    ``f(x) = g(x) - x``. Plain/damped Picard mixes only the LAST iterate; Anderson mixes the last
-    ``m`` iterates by the least-squares combination of their residuals that minimises the mixed
-    residual, giving multi-secant (quasi-Newton-like) acceleration while using ONLY ``assemble`` +
-    ``solve_linear`` -- so it drops onto BOTH MEC and FEA with no tangent. Converges to the SAME
-    fixed point damped-Picard reaches, in fewer iterations on a contractive map.
-
-    Bookkeeping matches the Picard strategies (assemble-at-top, one-step-delayed break on the
-    energy-change test) so the returned state is the converged iterate's and the reference-energy
-    gate holds. ``beta`` is the mixing (relaxation) factor; ``m`` the history depth.
-    """
-
-    name = 'anderson'
-
-    def __init__(self, m: int = 5, beta: float = 1.0) -> None:
-        self.m = m
-        self.beta = beta
-
-    def solve(
-        self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
-    ) -> IterationResult:
-        x = system.initial_guess()
-        state: AssembledState | None = None
-        last_energy: float | None = None
-        converged = False
-        ran = 0
-        watch = _StagnationWatch(rtol_energy_pct)
-        x_hist: list[np.ndarray] = []  # past g(x_k) images
-        f_hist: list[np.ndarray] = []  # past residuals f_k = g(x_k) - x_k
-        for i in range(max_iter):
-            ran = i + 1
-            state = system.assemble(x)
-            if converged:
-                break
-            err = _energy_error_pct(state.total_energy, last_energy)
-            last_energy = state.total_energy
-            x_prev = x
-            gx = system.solve_linear(state)  # one Picard image g(x_k)
-            f = gx - x  # fixed-point residual
-            x_hist.append(gx)
-            f_hist.append(f)
-            if len(f_hist) > self.m + 1:
-                x_hist.pop(0)
-                f_hist.pop(0)
-            if system.is_linear or len(f_hist) == 1:
-                # First step (no history to mix) or a linear system (one solve is exact): plain
-                # substitution, identical first iterate to damped-Picard at alpha=1.
-                x = gx
-            else:
-                # Least-squares Anderson mix: minimise || f_k - dF @ gamma || over the m residual
-                # differences, then x <- (X_k @ w) with the relaxed combination of the g-images.
-                dF = np.column_stack([f_hist[j + 1] - f_hist[j] for j in range(len(f_hist) - 1)])
-                dX = np.column_stack([x_hist[j + 1] - x_hist[j] for j in range(len(x_hist) - 1)])
-                gamma, *_ = np.linalg.lstsq(dF, f, rcond=None)
-                x = gx - dX @ gamma
-                if self.beta != 1.0:
-                    x = x + (self.beta - 1.0) * (f - dF @ gamma)
-            increment = increment_ratio(x_prev, x)
-            converged = _has_converged(
-                err, x_prev, x, rtol_energy_pct, material_change=state.material_change
-            ) or watch.observe(err, increment, state.material_change)
-            if system.is_linear:
-                converged = True
-            system.on_iteration(i, state, err, self.beta, increment)
         return IterationResult(x=x, state=state, iterations=ran, converged=converged)
 
 
@@ -435,223 +404,6 @@ class ModifiedNewtonStrategy:
         return IterationResult(x=x, state=state, iterations=ran, converged=converged)
 
 
-class BroydenStrategy:
-    """Quasi-Newton (Broyden good) -- an approximate inverse Jacobian from residual history (sec 1).
-
-    Builds the Newton direction from a low-rank secant approximation of the inverse Jacobian, updated
-    each step from the ``(dx, df)`` pair (``df = r(x_{k+1}) - r(x_k)``) -- so it needs only
-    ``residual`` and an initial linear apply, positioning between Picard and Newton where the exact
-    ``tangent`` is unavailable (returns ``None``). The initial inverse-Jacobian action is one solve of
-    the secant ``system_matrix`` (available on every equation); subsequent steps apply the accumulated
-    rank-1 Sherman-Morrison updates with no further factorization. Converges to the same root; same
-    delayed-break energy bookkeeping.
-    """
-
-    name = 'quasi-newton'
-
-    def __init__(self, m: int = 10) -> None:
-        self.m = m  # cap the stored rank-1 update pairs
-
-    def _apply_inverse(self, system, state, r, updates):
-        # H0^{-1} r via one secant solve, then the stored rank-1 Broyden updates.
-        v = system.solve_secant(state, r)
-        for s_vec, denom, u in updates:
-            v = v + (s_vec @ v) / denom * u
-        return v
-
-    def solve(
-        self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
-    ) -> IterationResult:
-        x = system.initial_guess()
-        state: AssembledState | None = None
-        last_energy: float | None = None
-        converged = False
-        ran = 0
-        watch = _StagnationWatch(rtol_energy_pct)
-        updates: list[tuple] = []  # (s_row_vector, denom, u_column) rank-1 inverse-Jacobian updates
-        prev_r = None
-        prev_dx = None
-        for i in range(max_iter):
-            ran = i + 1
-            state = system.assemble(x)
-            if converged:
-                break
-            err = _energy_error_pct(state.total_energy, last_energy)
-            last_energy = state.total_energy
-            x_prev = x
-            r = system.residual(x, state)
-            if prev_r is not None:
-                # Broyden "good" inverse update: H <- H + ((dx - H df) / (dx.H df)) dx.H, applied as a
-                # stored rank-1 pair so future applies stay matrix-free.
-                df = r - prev_r
-                h_df = self._apply_inverse(system, state, df, updates)
-                denom = float(prev_dx @ h_df)
-                if abs(denom) > 1e-30:
-                    u = (prev_dx - h_df) / denom
-                    updates.append((prev_dx.copy(), 1.0, u))
-                    if len(updates) > self.m:
-                        updates.pop(0)
-            dx = -self._apply_inverse(system, state, r, updates)
-            x = x + dx
-            prev_r, prev_dx = r, dx
-            increment = increment_ratio(x_prev, x)
-            converged = _has_converged(
-                err, x_prev, x, rtol_energy_pct, material_change=state.material_change
-            ) or watch.observe(err, increment, state.material_change)
-            if system.is_linear:
-                converged = True
-            system.on_iteration(i, state, err, 1.0, increment)
-        return IterationResult(x=x, state=state, iterations=ran, converged=converged)
-
-
-class BFGSStrategy:
-    """Quasi-Newton (full BFGS) -- a SYMMETRIC low-rank inverse-Jacobian from secant pairs (sec 1).
-
-    Broyden's update is the general (unsymmetric) secant; BFGS is its symmetric-positive-definite
-    sibling, the right choice for the SPD-ish magnetostatic root ``r(x) = S(x) x - b`` whose true
-    tangent is symmetric. It maintains ``H ~ J^{-1}`` by the classic rank-2 BFGS inverse update from
-    each ``(s = dx, y = r_{k+1} - r_k)`` pair, applied matrix-free through the stored history on top of
-    an initial ``H0`` action = one secant solve of ``system_matrix`` (the same seed Broyden uses). Needs
-    only ``residual`` + that one linear apply -- no exact ``tangent``. Converges to the same root; same
-    delayed-break energy bookkeeping. ``m`` caps the stored pairs (full BFGS = the whole history).
-
-    The BFGS inverse-Hessian action is computed by the L-BFGS two-loop recursion over the retained
-    pairs (mathematically identical to the dense ``H <- (I - rho s y^T) H (I - rho y s^T) + rho s s^T``
-    update, applied matrix-free so no dense ``H`` is ever formed); the limited-memory sibling
-    :class:`LBFGSStrategy` uses the SAME recursion but caps the history much shorter.
-    """
-
-    name = 'bfgs'
-
-    def __init__(self, m: int = 20) -> None:
-        self.m = m  # cap the stored (s, y, rho) secant pairs (full BFGS keeps the whole history)
-
-    def _apply_inverse(self, system, state, r, pairs):
-        # H r via the L-BFGS two-loop recursion over the stored pairs, H0 r = one secant solve.
-        q = r.copy()
-        alphas = []
-        for s_vec, y_vec, rho in reversed(pairs):
-            a = rho * float(s_vec @ q)
-            q = q - a * y_vec
-            alphas.append(a)
-        z = system.solve_secant(state, q)
-        for (s_vec, y_vec, rho), a in zip(pairs, reversed(alphas), strict=True):
-            b = rho * float(y_vec @ z)
-            z = z + (a - b) * s_vec
-        return z
-
-    def solve(
-        self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
-    ) -> IterationResult:
-        x = system.initial_guess()
-        state: AssembledState | None = None
-        last_energy: float | None = None
-        converged = False
-        ran = 0
-        watch = _StagnationWatch(rtol_energy_pct)
-        pairs: list[tuple] = []  # (s = dx, y = dr, rho = 1/(y.s)) BFGS secant pairs
-        prev_r = None
-        prev_dx = None
-        for i in range(max_iter):
-            ran = i + 1
-            state = system.assemble(x)
-            if converged:
-                break
-            err = _energy_error_pct(state.total_energy, last_energy)
-            last_energy = state.total_energy
-            x_prev = x
-            r = system.residual(x, state)
-            if prev_r is not None:
-                y = r - prev_r
-                ys = float(y @ prev_dx)
-                if abs(ys) > 1e-30:  # curvature condition; skip a non-informative (near-zero) pair
-                    pairs.append((prev_dx.copy(), y, 1.0 / ys))
-                    if len(pairs) > self.m:
-                        pairs.pop(0)
-            dx = -self._apply_inverse(system, state, r, pairs)
-            x = x + dx
-            prev_r, prev_dx = r, dx
-            increment = increment_ratio(x_prev, x)
-            converged = _has_converged(
-                err, x_prev, x, rtol_energy_pct, material_change=state.material_change
-            ) or watch.observe(err, increment, state.material_change)
-            if system.is_linear:
-                converged = True
-            system.on_iteration(i, state, err, 1.0, increment)
-        return IterationResult(x=x, state=state, iterations=ran, converged=converged)
-
-
-class LBFGSStrategy:
-    """Quasi-Newton (limited-memory BFGS) -- the two-loop recursion on a bounded secant history (sec 1).
-
-    Identical inverse-Hessian model to :class:`BFGSStrategy` but capping the stored history to the last
-    ``m`` ``(s, y)`` pairs, so the per-step cost and memory stay O(m*n) regardless of iteration count --
-    the form used for large systems where keeping the full history is prohibitive. The initial ``H0``
-    action is one secant ``system_matrix`` solve (the same seed the other quasi-Newtons use), so it
-    needs only ``residual`` + that one linear apply and no exact ``tangent``. Converges to the same root
-    as full BFGS / Newton on the SPD-ish magnetostatic problem; same delayed-break energy bookkeeping.
-    """
-
-    name = 'l-bfgs'
-
-    def __init__(self, m: int = 8) -> None:
-        self.m = m  # limited-memory depth (the last m secant pairs)
-
-    def _two_loop(self, system, state, r, pairs):
-        # Standard L-BFGS two-loop recursion: backward pass accumulates alphas, H0 apply, forward pass.
-        q = r.copy()
-        alphas = []
-        for s_vec, y_vec, rho in reversed(pairs):
-            a = rho * float(s_vec @ q)
-            q = q - a * y_vec
-            alphas.append(a)
-        z = system.solve_secant(state, q)  # H0 z = q (one secant solve)
-        for (s_vec, y_vec, rho), a in zip(pairs, reversed(alphas), strict=True):
-            b = rho * float(y_vec @ z)
-            z = z + (a - b) * s_vec
-        return z
-
-    def solve(
-        self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
-    ) -> IterationResult:
-        x = system.initial_guess()
-        state: AssembledState | None = None
-        last_energy: float | None = None
-        converged = False
-        ran = 0
-        watch = _StagnationWatch(rtol_energy_pct)
-        pairs: list[tuple] = []  # (s = dx, y = dr, rho = 1/(y.s)) limited-memory secant pairs
-        prev_r = None
-        prev_dx = None
-        for i in range(max_iter):
-            ran = i + 1
-            state = system.assemble(x)
-            if converged:
-                break
-            err = _energy_error_pct(state.total_energy, last_energy)
-            last_energy = state.total_energy
-            x_prev = x
-            r = system.residual(x, state)
-            if prev_r is not None:
-                y = r - prev_r
-                ys = float(y @ prev_dx)
-                if abs(ys) > 1e-30:  # curvature condition; skip a non-informative pair
-                    pairs.append((prev_dx.copy(), y, 1.0 / ys))
-                    if len(pairs) > self.m:
-                        pairs.pop(0)
-            dx = -self._two_loop(system, state, r, pairs)
-            x = x + dx
-            prev_r, prev_dx = r, dx
-            increment = increment_ratio(x_prev, x)
-            converged = _has_converged(
-                err, x_prev, x, rtol_energy_pct, material_change=state.material_change
-            ) or watch.observe(err, increment, state.material_change)
-            if system.is_linear:
-                converged = True
-            system.on_iteration(i, state, err, 1.0, increment)
-        return IterationResult(x=x, state=state, iterations=ran, converged=converged)
-
-
 class NewtonLineSearchStrategy(NewtonStrategy):
     """The registry name ``newton-linesearch``, kept for callers that spell it -- and it IS ``newton``.
 
@@ -747,7 +499,7 @@ class NewtonKrylovStrategy:
                         r_pert = system.residual(_x + eps * v, system.assemble(_x + eps * v))
                         return (r_pert - _r) / eps
 
-                    op = LinearOperator((n, n), matvec=matvec)
+                    op = aslinearoperator(SimpleNamespace(shape=(n, n), matvec=matvec))
                 dx, info = gmres(op, -r, rtol=1e-8, atol=0.0, maxiter=4 * max(n, 1))
                 if info != 0 or not np.all(np.isfinite(dx)):
                     dx = system.solve_linear(state) - x  # Krylov breakdown -> Picard substitution
@@ -760,3 +512,101 @@ class NewtonKrylovStrategy:
                 converged = True
             system.on_iteration(i, state, err, 1.0, increment)
         return IterationResult(x=x, state=state, iterations=ran, converged=converged)
+
+
+class ContinuationStrategy:
+    """Load / source stepping: solve a ramp ``0 < lam_1 < ... < lam_n = 1`` of the source (sec 1).
+
+    An OUTER driver for strong-saturation / large-current operating points where a single solve of the
+    full source diverges. It scales the source (conductor current + magnet Br) by ``lam`` via the
+    equation's ``scale_source`` hook, solving each sub-problem with an INNER strategy seeded by the
+    previous solution (natural continuation). The last sub-solve (``lam=1``) is the full problem, so
+    the converged field is the true solution. Degrades to a single full-source inner solve when the
+    equation cannot rescale its source (``scale_source`` raises ``NotImplementedError``).
+    """
+
+    name = 'continuation'
+
+    def __init__(self, steps: int = 4, inner: IterationStrategy | None = None) -> None:
+        self.steps = max(1, steps)
+        self.inner = inner or DampedPicardStrategy()
+
+    def solve(
+        self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
+    ) -> IterationResult:
+        if not isinstance(unwrap_system(system), SourceScalableSystem):
+            return self.inner.solve(system, max_iter=max_iter, rtol_energy_pct=rtol_energy_pct)
+        if not isinstance(system, SourceScalableSystem):
+            msg = 'the nonlinear wrapper does not delegate scale_source'
+            raise TypeError(msg)
+        lambdas = [(k + 1) / self.steps for k in range(self.steps)]
+        result: IterationResult | None = None
+        seed: np.ndarray | None = None
+        for lam in lambdas:
+            try:
+                sub = system if lam == 1.0 and self.steps == 1 else system.scale_source(lam)
+            except NotImplementedError:
+                # The equation cannot rescale its source: solve the full problem directly (no ramp).
+                return self.inner.solve(system, max_iter=max_iter, rtol_energy_pct=rtol_energy_pct)
+            if seed is not None:
+                sub = _SeededSystem(sub, seed)
+            result = self.inner.solve(sub, max_iter=max_iter, rtol_energy_pct=rtol_energy_pct)
+            seed = result.x
+        # ``result.state`` came from the scaled sub-system; re-assemble on the FULL system at the
+        # converged iterate so the returned payload/energy are the true (lam=1) fields.
+        assert result is not None  # steps is at least one
+        final_state = system.assemble(result.x)
+        return IterationResult(x=result.x, state=final_state, iterations=result.iterations, converged=result.converged)
+
+
+class _SeededSystem:
+    """Wrap a :class:`NonlinearSystem` to start from a supplied iterate (continuation warm start).
+
+    Delegates every method to the wrapped system except :meth:`initial_guess`, which returns the seed
+    (the previous continuation step's converged field) so each sub-solve starts near its solution.
+    """
+
+    def __init__(self, base: NonlinearSystem, seed: np.ndarray) -> None:
+        self._base = base
+        self._seed = seed
+
+    def initial_guess(self) -> np.ndarray:
+        return self._seed
+
+    @property
+    def unwrapped(self) -> NonlinearSystem:
+        return self._base
+
+    @property
+    def is_linear(self) -> bool:
+        return bool(self._base.is_linear)
+
+    def assemble(self, x, /):
+        return self._base.assemble(x)
+
+    def solve_linear(self, state, /):
+        return self._base.solve_linear(state)
+
+    def residual(self, x, state, /):
+        return self._base.residual(x, state)
+
+    def residual_norm(self, x, state, /):
+        return self._base.residual_norm(x, state)
+
+    def tangent(self, x, state, /):
+        return self._base.tangent(x, state)
+
+    def solve_system(self, matrix, rhs, /):
+        return self._base.solve_system(matrix, rhs)
+
+    def solve_secant(self, state, rhs, /):
+        return require_secant_system(self._base).solve_secant(state, rhs)
+
+    def on_iteration(self, i, state, err, alpha, increment, /):
+        return self._base.on_iteration(i, state, err, alpha, increment)
+
+    def scale_source(self, lam, /):
+        if isinstance(self._base, SourceScalableSystem):
+            return self._base.scale_source(lam)
+        msg = 'the wrapped equation cannot scale_source'
+        raise NotImplementedError(msg)

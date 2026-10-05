@@ -48,8 +48,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from motronics.gauss.nonlinear import _STAGNATION_WINDOW as _K
 from motronics.gauss.nonlinear import AssembledState, get_strategy
+from motronics.gauss.nonlinear._seam import _STAGNATION_WINDOW as _K
 
 _DRIVABLE = ['picard', 'picard-damped']
 _ENERGY = 100.0

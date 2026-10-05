@@ -15,7 +15,7 @@ from typing import Literal
 
 import numpy as np
 
-from motronics.gauss.nonlinear import (
+from motronics.gauss.nonlinear._seam import (
     _ALPHA_CALM_STEPS,
     _ALPHA_GROW,
     _ALPHA_MIN,

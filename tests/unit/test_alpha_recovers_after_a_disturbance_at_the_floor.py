@@ -21,7 +21,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from motronics.gauss.nonlinear import _ALPHA_MIN, AssembledState, get_strategy
+from motronics.gauss.nonlinear import AssembledState, get_strategy
+from motronics.gauss.nonlinear._seam import _ALPHA_MIN
 
 pytestmark = pytest.mark.unit
 

@@ -26,8 +26,10 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from tests.bound_names import bound
 
-from motronics.gauss.nonlinear import IterationBudgetExceeded, _TimeBudgetedSystem, with_time_budget
+from motronics.gauss.nonlinear import IterationBudgetExceeded, with_time_budget
+from motronics.gauss.nonlinear._seam import _TimeBudgetedSystem
 
 pytestmark = pytest.mark.unit
 
@@ -135,7 +137,7 @@ def test_every_declared_expensive_call_is_actually_budgeted() -> None:
     for name, args in args_for.items():
         budgeted = with_time_budget(_Counting(), seconds=1.0, clock=_elapsed([0.0, 99.0]))
         with pytest.raises(IterationBudgetExceeded, match=name):
-            getattr(budgeted, name)(*args)
+            bound(_TimeBudgetedSystem.__module__, f'_TimeBudgetedSystem.{name}')(budgeted, *args)
 
 
 def test_the_error_carries_the_numbers_a_reader_has_to_act_on() -> None:

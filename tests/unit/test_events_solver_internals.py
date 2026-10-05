@@ -11,6 +11,9 @@ adaptive-step/refine accuracy tests in ``test_events_step_control.py``.
 
 from __future__ import annotations
 
+from importlib import import_module
+from unittest.mock import patch
+
 import numpy as np
 import pytest
 from tests.unit.gauss._helpers import _RampWithToggle
@@ -28,7 +31,8 @@ def test_the_relative_tolerance_labels_a_scale_stalled_step_converged() -> None:
     at 1e-1 from a 1e3-scale start is a 1e-4-relative residual -- converged with
     tol_rel = 1e-4, exhausted without it.
     """
-    from motronics.gauss.time_integrators import IntegratorState, _solve_step
+    from motronics.gauss.time_integrators._forms import IntegratorState
+    from motronics.gauss.time_integrators._step import _solve_step
     from motronics.gauss.time_integrators.events import _bdf2_variable_form
 
     class _Stalled:
@@ -37,8 +41,10 @@ def test_the_relative_tolerance_labels_a_scale_stalled_step_converged() -> None:
         further).
         """
 
+        calls = 0
+
         def residual(self, u_arg, u_dot, u_ddot, t):
-            self.calls = getattr(self, 'calls', 0) + 1
+            self.calls += 1
             norm = 1.0e3 if self.calls == 1 else 1.0e-1
             return np.array([norm])
 
@@ -73,7 +79,8 @@ def test_the_backtracking_line_search_halves_an_overshooting_step() -> None:
     converged trajectory. The bare Newton (``backtrack_cap = 0``) takes the full step and
     the divergence runs away.
     """
-    from motronics.gauss.time_integrators import IntegratorState, _solve_step
+    from motronics.gauss.time_integrators._forms import IntegratorState
+    from motronics.gauss.time_integrators._step import _solve_step
     from motronics.gauss.time_integrators.events import _bdf2_variable_form
 
     class _Quadratic:
@@ -135,7 +142,8 @@ def test_the_stall_polish_switches_to_the_tangent_and_converges() -> None:
     finishes the convergence the chord cannot (the bridge's toggle step: 60-exhausted
     at the ~1e-3-relative floor vs 16 iterations to 4e-5).
     """
-    from motronics.gauss.time_integrators import IntegratorState, _solve_step
+    from motronics.gauss.time_integrators._forms import IntegratorState
+    from motronics.gauss.time_integrators._step import _solve_step
     from motronics.gauss.time_integrators.events import _bdf2_variable_form
 
     class _CouplingChordBase:
@@ -208,7 +216,8 @@ def test_a_polish_whose_step_the_line_search_cannot_accept_hands_back_to_the_new
     never be accepted by the line search. Held to it, the step exhausts; handed back, the Newton
     that was already on its way finishes.
     """
-    from motronics.gauss.time_integrators import IntegratorState, _solve_step
+    from motronics.gauss.time_integrators._forms import IntegratorState
+    from motronics.gauss.time_integrators._step import _solve_step
     from motronics.gauss.time_integrators.events import _bdf2_variable_form
 
     class _SlowFarField:
@@ -253,7 +262,7 @@ def test_a_polish_whose_step_the_line_search_cannot_accept_hands_back_to_the_new
         assert converged, f'band {band}: the step exhausted at residual {residual:g} after {iterations} iterations'
 
 
-def test_a_discarded_bisection_probe_does_not_count_as_a_nonconverged_STEP() -> None:
+def test_a_discarded_bisection_probe_does_not_count_as_a_nonconverged_STEP(monkeypatch) -> None:
     """``converged`` must mean what it says: every step OF THE SOLUTION met the tolerance.
 
     The event locator bisects by RE-STEPPING from a checkpoint and throwing the result away
@@ -284,18 +293,48 @@ def test_a_discarded_bisection_probe_does_not_count_as_a_nonconverged_STEP() -> 
 
     problem = _NonlinearRampWithToggle(level=0.35)
     study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
-    # A starved ceiling on a nonlinear problem: steps DO exhaust, so the bisection's discarded
-    # probes exhaust too -- which is the situation the tag has to classify correctly.
+    events = import_module('motronics.gauss.time_integrators.events')
+    solve_step, locate = events._solve_step, events._locate_bracket
+    discarded_probe = False
+    probe_failures = []
+
+    def classified_solve(problem, form, *args, **kwargs):
+        result = solve_step(problem, form, *args, **kwargs)
+        if discarded_probe or form.t_eval >= 0.9:
+            # Explicit independent solver verdicts: discarded locator probes
+            # fail, as does a non-event fixed step. The physical event landing
+            # itself must be accepted; a starved landing cannot fire a switch.
+            if discarded_probe:
+                probe_failures.append(form.t_eval)
+            u, _ok, iterations, residual, floor = result
+            return u, False, iterations, residual, floor
+        return result
+
+    def classified_locator(lo_t, g_lo, hi_t, g_hi, probe, *, tol):
+        def failed_probe(t):
+            nonlocal discarded_probe
+            discarded_probe = True
+            try:
+                return probe(t)
+            finally:
+                discarded_probe = False
+
+        return locate(lo_t, g_lo, hi_t, g_hi, failed_probe, tol=tol)
+
+    monkeypatch.setattr(events, '_solve_step', classified_solve)
+    monkeypatch.setattr(events, '_locate_bracket', classified_locator)
     sol = integrate_transient_with_events(
         problem,
         study,
         np.array([0.0]),
         event_fns=[problem.event_fn],
         on_event=lambda _i, _t, _u: problem.toggle(),
-        max_newton=1,
+        max_newton=100,
         tol=1.0e-12,
     )
     assert problem.toggles == 1, 'the event must actually fire (else the probe path never runs)'
+    assert probe_failures, 'the locator must genuinely discard failed solve verdicts'
+    assert sol.nonconverged_probe_times
     assert sol.nonconverged_times, 'the starved ceiling must exhaust somewhere (the precondition)'
     landed = set(sol.times)
     stray = [t for t in sol.nonconverged_times if t not in landed]
@@ -303,3 +342,80 @@ def test_a_discarded_bisection_probe_does_not_count_as_a_nonconverged_STEP() -> 
         f'nonconverged_times must contain only times that LANDED in the solution; '
         f'{len(stray)} of {len(sol.nonconverged_times)} are discarded bisection probes: {stray[:5]}'
     )
+
+
+def test_an_adaptive_march_does_not_locate_a_switch_from_an_unsolved_probe() -> None:
+    """A rejected Newton iterate has no physical event sign for a field-circuit switch."""
+
+    class _UnsolvableBetweenGridPoints(_RampWithToggle):
+        def residual(self, u, u_dot, u_ddot, t):
+            if abs(t / 0.3 - round(t / 0.3)) > 1e-8:
+                return np.array([1.0])
+            return super().residual(u, u_dot, u_ddot, t)
+
+    problem = _UnsolvableBetweenGridPoints(level=1.0)
+    study = TransientStudy(t0=0.0, t1=1.5, dt=0.3, integrator=IntegratorKind.BDF2)
+    with pytest.raises(RuntimeError, match='event probe.*converge'):
+        integrate_transient_with_events(
+            problem,
+            study,
+            np.array([0.0]),
+            event_fns=(problem.event_fn,),
+            on_event=lambda _i, _t, _u: problem.toggle(),
+            adaptive=True,
+            max_newton=2,
+        )
+
+
+def test_an_adaptive_march_does_not_fire_a_switch_from_an_unsolved_landing() -> None:
+    """Even an exact root time cannot authorize a switch if its state did not solve."""
+
+    class _UnsolvableAtCrossing(_RampWithToggle):
+        def residual(self, u, u_dot, u_ddot, t):
+            if abs(t - 1.0) < 1e-8:
+                return np.array([1.0])
+            return super().residual(u, u_dot, u_ddot, t)
+
+    problem = _UnsolvableAtCrossing(level=1.0)
+    study = TransientStudy(t0=0.0, t1=1.5, dt=0.3, integrator=IntegratorKind.BDF2)
+    with (
+        patch('motronics.gauss.time_integrators.events._locate_bracket', return_value=(1.0, 1.0)),
+        pytest.raises(RuntimeError, match='event landing.*converge'),
+    ):
+        integrate_transient_with_events(
+            problem,
+            study,
+            np.array([0.0]),
+            event_fns=(problem.event_fn,),
+            on_event=lambda _i, _t, _u: problem.toggle(),
+            adaptive=True,
+            max_newton=2,
+        )
+    assert problem.toggles == 0
+
+
+def test_the_event_root_is_solved_once_not_once_for_ranking_and_again_for_landing() -> None:
+    """The ranked candidates need times only; a second root solve changes no decision."""
+
+    class _CountRoot(_RampWithToggle):
+        def __init__(self) -> None:
+            super().__init__(level=1.0)
+            self.root_residuals = 0
+
+        def residual(self, u, u_dot, u_ddot, t):
+            if abs(t - 1.0) < 1e-8:
+                self.root_residuals += 1
+            return super().residual(u, u_dot, u_ddot, t)
+
+    problem = _CountRoot()
+    study = TransientStudy(t0=0.0, t1=1.5, dt=0.3, integrator=IntegratorKind.BDF2)
+    with patch('motronics.gauss.time_integrators.events._locate_bracket', return_value=(1.0, 1.0)):
+        solution = integrate_transient_with_events(
+            problem,
+            study,
+            np.array([0.0]),
+            event_fns=(problem.event_fn,),
+            on_event=lambda _i, _t, _u: problem.toggle(),
+        )
+    assert len(solution.events) == 1
+    assert problem.root_residuals == 2, 'a redundant candidate solve reassembled the field at the same event root'

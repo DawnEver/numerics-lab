@@ -35,6 +35,7 @@ from collections import Counter, OrderedDict
 import numpy as np
 import scipy.sparse as sp
 
+from motronics.gauss.linear.dirichlet import lift_dirichlet_rhs
 from motronics.gauss.linear.errors import LinearSolveError
 
 try:
@@ -69,8 +70,11 @@ def _extension_or_reason():
         return None, f'{_ENV}=0'
     if _native_gauss is None:
         return None, f'motronics_native.gauss is not importable ({_NATIVE_IMPORT_ERROR})'
-    cls = vars(_native_gauss).get('DirectFactorization')
-    if cls is None or 'refactor' not in vars(cls):
+    # A STALE BUILD lacks the class or its `refactor`: both are plain attribute reads that raise.
+    try:
+        cls = _native_gauss.DirectFactorization
+        _ = cls.refactor
+    except AttributeError:
         return None, 'the installed motronics_native predates DirectFactorization.refactor'
     return cls, None
 
@@ -90,11 +94,14 @@ def _fallback(reason: str) -> None:
 class _Entry:
     """One analysed pattern and the generation of its last refactor."""
 
-    __slots__ = ('factorization', 'generation')
+    __slots__ = ('factorization', 'generation', 'indices', 'indptr', 'shape')
 
-    def __init__(self, factorization) -> None:
+    def __init__(self, factorization, csr) -> None:
         self.factorization = factorization
         self.generation = 0
+        self.shape = csr.shape
+        self.indptr = csr.indptr.copy()
+        self.indices = csr.indices.copy()
 
 
 def _canonical(matrix):
@@ -118,20 +125,29 @@ def _refactor(cls, csr) -> tuple[_Entry, str]:
     indices = np.asarray(csr.indices, dtype=np.int64)
     key = (csr.shape[0], indptr.tobytes(), indices.tobytes())
     entry = _cache.get(key)
+    if entry is not None and (
+        entry.shape != csr.shape
+        or not np.array_equal(entry.indptr, indptr)
+        or not np.array_equal(entry.indices, indices)
+    ):
+        entry = None
     if entry is not None:
         _cache.move_to_end(key)
         try:
             kind = entry.factorization.refactor(csr.data)
         except ValueError as exc:
-            raise _singular(exc, csr.shape[0]) from exc
-        entry.generation += 1
-        return entry, kind
+            if 'PatternChanged' not in str(exc):
+                raise _singular(exc, csr.shape[0]) from exc
+            entry = None  # defensive support for an extension that also validates its pattern
+        else:
+            entry.generation += 1
+            return entry, kind
     try:
         factorization = cls(csr.shape[0], csr.shape[1], indptr, indices, csr.data)
         kind = factorization.refactor(csr.data)
     except ValueError as exc:
         raise _singular(exc, csr.shape[0]) from exc
-    entry = _Entry(factorization)
+    entry = _Entry(factorization, csr)
     entry.generation = 1
     _cache[key] = entry
     while len(_cache) > _CACHE_SIZE:
@@ -162,6 +178,7 @@ def native_solve(matrix, rhs) -> np.ndarray | None:
     """
     cls, reason = _extension_or_reason()
     if cls is None:
+        assert reason is not None
         _fallback(reason)
         return None
     csr = _canonical(matrix)
@@ -191,18 +208,27 @@ class NativeFactor:
     refactorised the shared storage first re-factorises these values, never answers from theirs.
     """
 
-    def __init__(self, cls, csr, entry: _Entry, kind: str) -> None:
+    def __init__(self, cls, csr, entry: _Entry, kind: str, *, original=None, pinned=None, free=None) -> None:
         self._cls = cls
         self._csr = csr
         self._entry = entry
         self._generation = entry.generation
         self.kind = kind
+        self._original = original
+        self._pinned = pinned
+        self._free = free
 
     def solve(self, b) -> np.ndarray:
         if self._entry.generation != self._generation:
             self._entry, self.kind = _refactor(self._cls, self._csr)
             self._generation = self._entry.generation
         DIRECT_SOLVES[f'faer-{self.kind}'] += 1
+        if self._original is not None:
+            assert self._pinned is not None and self._free is not None
+            b = np.asarray(b, dtype=float)
+            lifted = lift_dirichlet_rhs(self._original, b, self._pinned, b[self._pinned])
+            lifted[self._free] = _back_substitute(self._entry.factorization, lifted[self._free], self._csr.shape[0])
+            return lifted
         return _back_substitute(self._entry.factorization, b, self._csr.shape[0])
 
 
@@ -210,6 +236,7 @@ def native_factor(matrix) -> NativeFactor | None:
     """Factorise ``matrix`` natively for repeated back-substitution, or ``None`` (logged)."""
     cls, reason = _extension_or_reason()
     if cls is None:
+        assert reason is not None
         _fallback(reason)
         return None
     csr = _canonical(matrix)
@@ -219,5 +246,17 @@ def native_factor(matrix) -> NativeFactor | None:
     # The held factor keeps its values across other solves, so they must not alias a buffer the
     # caller may go on to mutate.
     csr = csr.copy() if csr is matrix else csr
+    # Exact algebraic unit rows specify their unknown directly. Eliminating them is a solve
+    # coordinate change, not a change to the full residual or a declaration that it is symmetric.
+    lengths = np.diff(csr.indptr)
+    candidates = np.flatnonzero(lengths == 1)
+    slots = csr.indptr[candidates]
+    pinned = candidates[(csr.indices[slots] == candidates) & (csr.data[slots] == 1.0)]
+    if 0 < pinned.size < csr.shape[0]:
+        free = np.setdiff1d(np.arange(csr.shape[0]), pinned, assume_unique=True)
+        reduced = csr[free][:, free].tocsr()
+        if (reduced != reduced.T).nnz == 0:
+            entry, kind = _refactor(cls, reduced)
+            return NativeFactor(cls, reduced, entry, kind, original=csr, pinned=pinned, free=free)
     entry, kind = _refactor(cls, csr)
     return NativeFactor(cls, csr, entry, kind)

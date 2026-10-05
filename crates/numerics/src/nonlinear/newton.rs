@@ -158,6 +158,10 @@ impl NewtonStrategy {
             });
         }
         let mut last_energy = Some(state.total_energy);
+        // THE TRACE STARTS AT THE SEED (user ruling 2026-10-04): `on_iteration` reports the state an
+        // iteration STARTS from, beside the step out of it -- the Python `NewtonStrategy.solve`.
+        // `start_err` is that state's own energy change against its predecessor, `inf` for the seed.
+        let mut start_err = f64::INFINITY;
         let mut converged = false;
         let mut ran = 0;
         let mut watch = StagnationWatch::new(rtol);
@@ -208,22 +212,23 @@ impl NewtonStrategy {
                     Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
                 );
             x = next;
-            state = next_state;
             r_norm = next_norm;
-            let err = energy_error_pct(state.total_energy, last_energy);
-            last_energy = Some(state.total_energy);
+            let err = energy_error_pct(next_state.total_energy, last_energy);
+            last_energy = Some(next_state.total_energy);
             let increment = increment_ratio(&x_prev, &x);
             converged = has_converged_residual(&x_prev, &x, rtol, r_norm / reference)
                 || watch.observe(err, increment);
             if system.is_linear() {
                 converged = true;
             }
-            let current_local = system.local_values(&state)?;
+            let current_local = system.local_values(&next_state)?;
             if !system.is_linear() && (!previous_local.is_empty() || !current_local.is_empty()) {
                 converged =
                     converged && local_change(&previous_local, &current_local)? < rtol / 100.0;
             }
-            system.on_iteration(i, &state, err, lam, increment);
+            system.on_iteration(i, &state, start_err, lam, increment);
+            state = next_state;
+            start_err = err;
             if converged {
                 break;
             }

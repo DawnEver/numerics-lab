@@ -219,7 +219,16 @@ def _direct_symmetric(matrix, rhs, **_iterative_only):
     takes 1.29 s against 0.64 s, with the answers 1.7e-13 apart (relative). Diagonal pivoting is
     safe only because the operator is SPD, which is why this is a separate NAME a caller chooses
     and not a change to ``direct``. Singular-guarded exactly like ``direct``.
+
+    THE NATIVE PATH FIRST, as ``direct`` takes it: the pattern-cached faer factor, a Cholesky when the
+    values are verified exactly symmetric. MEASURED 2026-10-02 on a spm_slotted sdm Newton tangent
+    (n = 31,212, nnz = 286,760): 0.07 s against symmetric-mode SuperLU's 0.31 s, the answers 7.8e-14
+    apart (relative); SuperLU's factor was 115 s of a two-position sdm sweep's profile. The SuperLU
+    half below stays the fallback, counted and warned by :mod:`~motronics.gauss.linear.native_direct`.
     """
+    native = native_solve(matrix, rhs)
+    if native is not None:
+        return native
     with warnings.catch_warnings():
         warnings.simplefilter('error', MatrixRankWarning)
         try:

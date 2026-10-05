@@ -1,10 +1,9 @@
-//! Shared convergence, stagnation and increment-trend rules used by all iteration strategies.
-
-use std::collections::VecDeque;
+//! THE CONVERGENCE RULE every strategy stops on: the norms, the energy and residual tests, and
+//! the two watches (stagnation, a rising increment) that end a run which is no longer converging.
+//! Split out of `mod.rs` on 2026-09-29, which crossed the 800-line band.
 
 use super::{STAGNATION_MAX_MIN_RATIO, STAGNATION_WINDOW};
-
-// -- The convergence rule ---------------------------------------------------------------------
+use std::collections::VecDeque;
 
 /// Euclidean norm.
 #[must_use]

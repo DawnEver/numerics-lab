@@ -85,11 +85,18 @@ def test_the_order_157_finite_garbage_plant_is_still_refused():
     assert 'gauge' in message, 'the refusal must say what the caller can DO about it'
 
 
-def test_the_refinement_step_sees_the_plant_above_the_actual_refusal_bar():
+def test_the_refinement_step_is_what_sees_the_plant_and_it_sees_it_by_five_decades():
     """THE FLOOR under end one: the discriminator must actually discriminate ON THIS SYSTEM.
 
     Without this, the refusal above could be coming from the ``MatrixRankWarning`` belt or from
     ``_check_finite``, and the refinement step would be untested decoration.
+
+    Measured 2026-10-03 under scipy 1.18.1: the correction is 0.21875 (it was 4.7-5.0 when this was
+    first pinned at ``> 1.0``, under an older scipy whose SuperLU returned different garbage;
+    ``refinement.py`` and the golden are unchanged). The CLAIM is the gap to the bar, not the
+    garbage's size: 0.21875 sits log10(0.21875 / 1e-6) = 5.3 decades above
+    ``_DIRECT_REFINEMENT_RTOL``, so the plant is still refused. The floor 1e-2 keeps a 1.3-decade
+    margin under today's value and still demands four decades over the bar.
     """
     matrix, rhs = _lipo_m6_singular()
     with warnings.catch_warnings():
@@ -97,9 +104,8 @@ def test_the_refinement_step_sees_the_plant_above_the_actual_refusal_bar():
         x = spla.spsolve(sp.csc_matrix(matrix), rhs)
     assert np.all(np.isfinite(x)), 'the plant returned NaNs; _check_finite would catch it'
     correction = direct_refinement_correction(matrix, rhs, x)
-    # The numerical value varies with the sparse factorization implementation;
-    # the invariant is rejection at the production bar, not a historical value.
-    assert correction is not None and correction > _DIRECT_REFINEMENT_RTOL, correction
+    assert correction is not None and correction > 1e-2, correction
+    assert correction > 1e4 * _DIRECT_REFINEMENT_RTOL, correction
 
 
 # --- END TWO: the ill-conditioned but well-posed system must be accepted ----------------------

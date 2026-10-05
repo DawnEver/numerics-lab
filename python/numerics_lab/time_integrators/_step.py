@@ -1,4 +1,8 @@
-"""One implicit-step Newton solve, factor holding, continuation and line searches."""
+"""ONE implicit step: the Newton solve with its held factor, the stall rule and the gmin continuation.
+
+Split out of the package `__init__` on 2026-09-29, which keeps `integrate_transient` -- the march
+this step is the unit of.
+"""
 
 from __future__ import annotations
 
@@ -12,12 +16,44 @@ from motronics.contracts.spec.analysis_formulation import (
     AlternativeJacobianProblem,
     DerivativeWeights,
     FactorReusableProblem,
+    ResidualFloorProblem,
     SemiDiscreteProblem,
 )
 from motronics.gauss.linear import reject_nonfinite_solution
-from motronics.gauss.time_integrators._forms import StepForm, _roundoff_floor, residual_floor
+from motronics.gauss.time_integrators._forms import StepForm, residual_floor
 from motronics.gauss.time_integrators.factor_reuse import FactorCache, apply_factor, factor_matrix
 from motronics.gauss.time_integrators.local_convergence import LocalIterationCheck
+
+__all__ = [
+    'HELD_STALL_RATIO',
+    'HeldFactor',
+]
+
+
+def _roundoff_floor(problem, tangent, u: NDArray[np.floating], form) -> float | None:
+    """The residual scale below which a converged solve cannot go, or ``None`` if unknowable.
+
+    The problem's own `residual_roundoff_floor` is preferred: it is a statement about that
+    system's cancellation, which no generic derivation can see. :func:`residual_floor` is the
+    fallback and needs only the tangent. A non-finite reading from either is discarded rather
+    than compared -- a floor that is not a number cannot bound anything.
+    """
+    if isinstance(problem, ResidualFloorProblem):
+        # `None` IS AN ANSWER HERE -- "this problem cannot bound its own cancellation" -- and it
+        # must fall through to the generic fallback rather than be accepted. It was not expressible
+        # before: `float(...)` would have raised on it, so `mna_solves.transient_residual_floor`
+        # said "no floor" by returning `0.0`, which is finite, was accepted, and suppressed the
+        # fallback entirely while comparing every real residual against zero.
+        declared = problem.residual_roundoff_floor(u, form)
+        if declared is not None:
+            floor = float(declared)
+            if np.isfinite(floor):
+                return floor
+    if tangent is None:
+        return None
+    floor = float(residual_floor(tangent, u))
+    return floor if np.isfinite(floor) else None
+
 
 #: The stall-polish's ratio threshold (MANUAL-627 (i)): a per-iteration residual ratio
 #: above this marks the direction stalled. Calibrated on the GaN bridge's toggle steps:
@@ -25,6 +61,7 @@ from motronics.gauss.time_integrators.local_convergence import LocalIterationChe
 #: jump 8-260, drop 0.004) trips twice consecutively (the creep + the jump) -- 0.9
 #: separates them; a monotone creep (0.968 per iteration, MANUAL-627 (d)) also trips.
 _STALL_RATIO = 0.9
+
 
 #: A held (modified-Newton) factor is refreshed when its last step contracted the residual by less
 #: than this -- the same bar the stationary ``newton-held-factor`` uses (``stall_ratio``).

@@ -16,12 +16,16 @@ import pytest
 
 from motronics.contracts.spec.analysis_formulation import SemiDiscreteProblem
 from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
+from motronics.gauss import time_integrators
 from motronics.gauss.time_integrators import (
     INTEGRATOR_REGISTRY,
     BDF1Integrator,
     BDF2Integrator,
     GeneralizedAlphaIntegrator,
     NewmarkIntegrator,
+    _forms,
+    _step,
+    events,
     get_integrator,
     integrate_transient,
 )
@@ -65,10 +69,84 @@ class OscillatorProblem:
         return weights.alpha0.real * self.k + weights.alpha2.real * self.m
 
 
+def test_the_public_march_uses_the_single_step_owner_and_canonical_state(monkeypatch):
+    calls = []
+    original = _step._solve_step
+
+    def observe(*args, **kwargs):
+        calls.append(args[1])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(_step, '_solve_step', observe)
+    study = TransientStudy(t0=0.0, t1=0.2, dt=0.1, integrator=IntegratorKind.BDF2)
+    result = integrate_transient(DecayProblem(1.0), study, np.array([1.0]))
+    assert len(calls) == 2
+    assert all(isinstance(form, time_integrators.StepForm) for form in calls)
+    assert time_integrators.StepForm is _forms.StepForm
+    assert time_integrators.IntegratorState is _forms.IntegratorState
+    assert time_integrators.TransientSolution is _forms.TransientSolution
+    assert time_integrators.HeldFactor is _step.HeldFactor
+    assert result.converged
+
+
+def test_the_existing_public_step_patch_seam_still_drives_the_march(monkeypatch):
+    calls = []
+    original = time_integrators._solve_step
+
+    def observe(*args, **kwargs):
+        calls.append(args[2].copy())
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(time_integrators, '_solve_step', observe)
+    result = integrate_transient(DecayProblem(1.0), TransientStudy(t0=0.0, t1=0.2, dt=0.1), np.array([1.0]))
+    assert len(calls) == 2
+    np.testing.assert_array_equal(calls[0], [1.0])
+    np.testing.assert_array_equal(calls[1], result.states[1])
+
+
+@pytest.mark.parametrize('patch_target', [_step, events])
+def test_event_marches_reach_the_same_step_owner_and_keep_the_event_patch_seam(monkeypatch, patch_target):
+    study = TransientStudy(t0=0.0, t1=0.2, dt=0.1, integrator=IntegratorKind.BDF2)
+    kwargs = {'time_breakpoints': [0.15]}
+    expected = events.integrate_transient_with_events(DecayProblem(1.0), study, np.array([1.0]), **kwargs)
+    calls = []
+    original = patch_target._solve_step
+
+    def observe(*args, **options):
+        calls.append(args[1])
+        return original(*args, **options)
+
+    monkeypatch.setattr(patch_target, '_solve_step', observe)
+    actual = events.integrate_transient_with_events(DecayProblem(1.0), study, np.array([1.0]), **kwargs)
+    assert len(calls) == 3
+    assert all(isinstance(form, _forms.StepForm) for form in calls)
+    np.testing.assert_array_equal(actual.times, expected.times)
+    np.testing.assert_array_equal(actual.states, expected.states)
+    assert actual.converged == expected.converged
+
+
 def test_fake_problem_satisfies_protocol() -> None:
     """The tiny fakes structurally implement the runtime-checkable SemiDiscreteProblem Protocol."""
     assert isinstance(DecayProblem(1.0), SemiDiscreteProblem)
     assert isinstance(OscillatorProblem(1.0), SemiDiscreteProblem)
+
+
+@pytest.mark.parametrize('kind', [IntegratorKind.BDF1, IntegratorKind.BDF2, IntegratorKind.NEWMARK])
+def test_fixed_grid_lands_a_partial_final_step_at_the_declared_end(kind: IntegratorKind) -> None:
+    """Every fixed-grid scheme must use the true partial cell, not an approximate step count."""
+    study = TransientStudy(t0=0.0, t1=1.0, dt=0.3, integrator=kind)
+    problem = OscillatorProblem(1.0) if kind == IntegratorKind.NEWMARK else DecayProblem(1.0)
+    solution = integrate_transient(problem, study, np.array([1.0]))
+    assert solution.times == pytest.approx([0.0, 0.3, 0.6, 0.9, 1.0])
+    assert np.all(np.isfinite(solution.states))
+    if kind == IntegratorKind.BDF2:
+        # Unequal final and previous spacings require the nonuniform BDF2
+        # derivative, not the uniform weights evaluated at 0.1 s.
+        h, previous = 0.1, 0.3
+        a = (2 * h + previous) / (h * (h + previous))
+        history = -(h + previous) / (h * previous) * solution.states[-2][0]
+        history += h / (previous * (h + previous)) * solution.states[-3][0]
+        assert solution.states[-1][0] == pytest.approx(-history / (a + 1.0))
 
 
 # ---- DerivativeWeights: each integrator emits the textbook alpha triple -------------------

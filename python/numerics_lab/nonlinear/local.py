@@ -3,28 +3,6 @@
 import numpy as np
 
 
-def free_residual_norm(system, x, state) -> float:
-    """Free-DOF residual norm, or the protocol default for duck-typed equations."""
-    try:
-        norm_of = system.residual_norm
-    except AttributeError:
-        return float(np.linalg.norm(system.residual(x, state)))
-    return float(norm_of(x, state))
-
-
-def residual_reference(system, state, seed_norm: float) -> float:
-    """``max(||r(x_0)||, ||rhs||)``: a good warm seed must not tighten the target.
-
-    Without a source-norm hook the seed residual is the reference, exact for a
-    zero seed. The reference remains fixed across Newton iterations.
-    """
-    try:
-        rhs_norm = system.rhs_norm
-    except AttributeError:
-        return seed_norm
-    return max(seed_norm, float(rhs_norm(state)))
-
-
 def local_change(previous, current) -> float:
     """Worst relative change over independent field arrays (element axis first).
 

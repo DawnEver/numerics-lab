@@ -1,7 +1,8 @@
-"""Integrator state, affine step forms, trajectories and arithmetic-floor algebra.
+"""The time-integration CONTRACT: the state, the step form, the integrator protocol, the transient
+solution, and the round-off floor a residual is judged against.
 
-No imports from the package facade: both the concrete integrators and the march
-consume this leaf, so importing a concrete scheme never creates a cycle.
+Split out of the package `__init__` on 2026-09-29, as the leaf the integrators and the step solve
+are both built on.
 """
 
 from __future__ import annotations
@@ -13,9 +14,21 @@ import numpy as np
 import scipy.sparse as sp
 from numpy.typing import NDArray
 
-from motronics.contracts.spec.analysis_formulation import DerivativeWeights, ResidualFloorProblem
-from motronics.gauss.linear import solve_linear_system
+from motronics.contracts.spec.analysis_formulation import (
+    DerivativeWeights,
+)
 from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint
+
+__all__ = [
+    'ITimeIntegrator',
+    'IntegratorState',
+    'StepForm',
+    'TransientSolution',
+    'residual_floor',
+    'residual_floor_of_magnitude',
+    'seeded_bdf2_state',
+]
+
 
 #: Safety factor on the estimated roundoff floor, DELIBERATELY the same 64 as the DC operating
 #: point's ``laplace.circuit.core.mna_solves._FLOOR_SAFETY``, and for the same stated reason: the
@@ -24,6 +37,7 @@ from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint
 #: and still sits ORDERS below any residual a stalled-but-wrong Newton shows -- measured
 #: 2026-09-12 at 1e8x on the planted stall, against a 64x allowance.
 _FLOOR_SAFETY = 64.0
+
 
 #: The machine epsilon the floor is written in (double precision -- the marcher is ``float64``).
 _EPS = float(np.finfo(float).eps)
@@ -158,10 +172,6 @@ class ITimeIntegrator(Protocol):
     ) -> IntegratorState: ...
 
 
-#: THE CONCRETE INTEGRATORS AND THEIR REGISTRY live in `_integrators.py`, split 2026-08-22
-#: because this file crossed the 800-line band. It imports :class:`IntegratorState`,
-#: :class:`ITimeIntegrator` and :class:`StepForm` FROM THIS MODULE (a circular import that works
-#: because they are defined above this import); the public API is unchanged.
 @dataclass
 class TransientSolution:
     """The time march: parallel ``times`` and ``states`` including the initial condition.
@@ -183,6 +193,12 @@ class TransientSolution:
 
     times: list[float] = field(default_factory=list)
     states: list[NDArray[np.floating]] = field(default_factory=list)
+    #: Actual residual-evaluation rates at committed times[1:], with no invented t0 rate.
+    #: None means a producer did not record them; it is NOT an all-zero derivative.
+    state_rates: list[NDArray[np.floating]] | None = None
+    #: Sparse pre-handler residual states keyed by accepted rate index. None is unrecorded;
+    #: an empty dict verifies that every published state retains its residual-side value.
+    rate_state_overrides: dict[int, NDArray[np.floating]] | None = None
     worst_step_residual: float = 0.0
     nonconverged_times: list[float] = field(default_factory=list)
     #: Exhausted steps that were DISCARDED by an event rollback (bisection probes). Diagnostic
@@ -227,64 +243,6 @@ class TransientSolution:
         the tag to read when deciding whether ``max_newton`` is set high enough.
         """
         return self.converged and not self.floor_converged_times
-
-
-def _roundoff_floor(problem, tangent, u: NDArray[np.floating], form) -> float | None:
-    """The residual scale below which a converged solve cannot go, or ``None`` if unknowable.
-
-    The problem's own `residual_roundoff_floor` is preferred: it is a statement about that
-    system's cancellation, which no generic derivation can see. :func:`residual_floor` is the
-    fallback and needs only the tangent. A non-finite reading from either is discarded rather
-    than compared -- a floor that is not a number cannot bound anything.
-    """
-    if isinstance(problem, ResidualFloorProblem):
-        # `None` IS AN ANSWER HERE -- "this problem cannot bound its own cancellation" -- and it
-        # must fall through to the generic fallback rather than be accepted. It was not expressible
-        # before: `float(...)` would have raised on it, so `mna_solves.transient_residual_floor`
-        # said "no floor" by returning `0.0`, which is finite, was accepted, and suppressed the
-        # fallback entirely while comparing every real residual against zero.
-        declared = problem.residual_roundoff_floor(u, form)
-        if declared is not None:
-            floor = float(declared)
-            if np.isfinite(floor):
-                return floor
-    if tangent is None:
-        return None
-    floor = float(residual_floor(tangent, u))
-    return floor if np.isfinite(floor) else None
-
-
-def _bdf2_variable_form(state: IntegratorState, dt: float, h: float, t_new: float) -> StepForm:
-    """The variable-spacing BDF2 step form; ``h`` is the previous step's size.
-
-    Fixed-weight BDF2 assumes uniform history spacing; a step whose size differs from its
-    history's spacing needs the derivative of the quadratic through the unevenly spaced
-    points (the events module docstring names the O(1) wrong-equation trap this closes).
-    """
-    u_n, u_nm1 = state.us[-1], state.us[-2]
-    return StepForm(
-        weights=DerivativeWeights(alpha0=1.0, alpha1=(2.0 * dt + h) / (dt * (dt + h))),
-        h_u=np.zeros_like(u_n),
-        h_dot=-(dt + h) / (dt * h) * u_n + dt / (h * (dt + h)) * u_nm1,
-        h_ddot=np.zeros_like(u_n),
-        t_eval=t_new,
-    )
-
-
-#: The public spelling of the variable-step BDF2 form, for a CHECK that must replay the march's own
-#: weights (`hamilton.coupling.terminal_balance`). One function, two names, never two formulas.
-bdf2_variable_form = _bdf2_variable_form
-
-
-def _default_solve(matrix: object, rhs: NDArray[np.floating]) -> NDArray[np.floating]:
-    """Solve ``matrix @ x = rhs`` for a dense ndarray or a scipy-sparse jacobian (physics-blind)."""
-    b = np.asarray(rhs, dtype=float)
-    if sp.issparse(matrix):
-        return np.asarray(solve_linear_system(sp.csc_matrix(matrix), b))
-    m = np.asarray(matrix, dtype=float)
-    if m.ndim == 0:  # scalar jacobian (1-DOF problem written as a plain number)
-        return b / float(m)
-    return np.linalg.solve(m, b)
 
 
 def seeded_bdf2_state(state, history, integrator, restart, dt):

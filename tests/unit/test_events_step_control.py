@@ -216,7 +216,8 @@ def test_an_event_inside_a_quadratic_ramp_costs_no_accuracy_at_all() -> None:
     problem = _Quadratic()
     study = TransientStudy(t0=0.0, t1=2.0, dt=0.3, integrator=IntegratorKind.BDF2)
     # The form itself, on an exact history, steps a quadratic exactly (direct check, u(0.75)).
-    from motronics.gauss.time_integrators import IntegratorState, _solve_step
+    from motronics.gauss.time_integrators._forms import IntegratorState
+    from motronics.gauss.time_integrators._step import _solve_step
     from motronics.gauss.time_integrators.events import _bdf2_variable_form
 
     state = IntegratorState(us=[np.array([0.045]), np.array([0.18])], t=0.6)
@@ -231,13 +232,16 @@ def test_an_event_inside_a_quadratic_ramp_costs_no_accuracy_at_all() -> None:
     # march's own truncation scale -- no O(1) corruption from the landing/remainder steps. The two
     # marches solve slightly different discrete recurrences once the grid shifts, so bit-equality
     # is NOT the expectation; same-scale true error is.
+    def fire(_i, _t, _u) -> None:
+        problem.fired = True
+
     plain = integrate_transient(problem, study, np.array([0.0]))
     eventful = integrate_transient_with_events(
         problem,
         study,
         np.array([0.0]),
         event_fns=(problem.event_fn,),
-        on_event=lambda _i, _t, _u: setattr(problem, 'fired', True),
+        on_event=fire,
     )
     assert len(eventful.events) == 1
 
@@ -253,12 +257,16 @@ def test_an_event_inside_a_quadratic_ramp_costs_no_accuracy_at_all() -> None:
     # An event landing exactly ON the grid: identical steps, identical trajectory to round-off.
     on_grid = _Quadratic()
     on_grid.event_fn = lambda u, _t: -1.0 if on_grid.fired else float(u[0]) - 0.24  # marched u(0.6) = 0.24
+
+    def fire_on_grid(_i, _t, _u) -> None:
+        on_grid.fired = True
+
     grid_march = integrate_transient_with_events(
         on_grid,
         study,
         np.array([0.0]),
         event_fns=(on_grid.event_fn,),
-        on_event=lambda _i, _t, _u: setattr(on_grid, 'fired', True),
+        on_event=fire_on_grid,
     )
     assert len(grid_march.events) == 1
     # Same grid, up to the locator's own tolerance: an event EXACTLY on a grid point

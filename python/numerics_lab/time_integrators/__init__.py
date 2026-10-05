@@ -31,9 +31,11 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from functools import wraps
 from numbers import Integral, Real
 
 import numpy as np
+import scipy.sparse as sp
 from numpy.typing import NDArray
 
 from motronics.contracts.spec.analysis_formulation import (
@@ -43,19 +45,9 @@ from motronics.contracts.spec.analysis_formulation import (
     SemiDiscreteProblem,
 )
 from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.time_integrators._forms import _FLOOR_SAFETY as _FLOOR_SAFETY
-from motronics.gauss.time_integrators._forms import (
-    IntegratorState,
-    ITimeIntegrator,
-    StepForm,
-    TransientSolution,
-    _bdf2_variable_form,
-    _default_solve,
-    bdf2_variable_form,
-    residual_floor,
-    residual_floor_of_magnitude,
-    seeded_bdf2_state,
-)
+from motronics.gauss.linear import solve_linear_system
+from motronics.gauss.time_integrators import _step
+from motronics.gauss.time_integrators._forms import IntegratorState, StepForm, TransientSolution, seeded_bdf2_state
 from motronics.gauss.time_integrators._integrators import (
     INTEGRATOR_REGISTRY,
     BDF1Integrator,
@@ -64,15 +56,7 @@ from motronics.gauss.time_integrators._integrators import (
     NewmarkIntegrator,
     get_integrator,
 )
-from motronics.gauss.time_integrators._step_solve import _GMIN_RETRY_STAGES as _GMIN_RETRY_STAGES
-from motronics.gauss.time_integrators._step_solve import _STALL_RATIO as _STALL_RATIO
-from motronics.gauss.time_integrators._step_solve import (
-    HELD_STALL_RATIO,
-    HeldFactor,
-    _solve_step,
-)
-from motronics.gauss.time_integrators._step_solve import _gmin_continue as _gmin_continue
-from motronics.gauss.time_integrators._step_solve import directional_line_search as directional_line_search
+from motronics.gauss.time_integrators._step import HeldFactor, directional_line_search
 from motronics.gauss.time_integrators._time_lattice import adaptive_lattice
 from motronics.gauss.time_integrators.checkpoint import (
     EECCheckpointState,
@@ -95,25 +79,65 @@ from motronics.gauss.time_integrators.periodic import (
 
 logger = logging.getLogger(__name__)
 
+
 __all__ = [
-    'HELD_STALL_RATIO',
     'INTEGRATOR_REGISTRY',
     'BDF1Integrator',
     'BDF2Integrator',
     'FactorCache',
     'GeneralizedAlphaIntegrator',
-    'HeldFactor',
-    'ITimeIntegrator',
-    'IntegratorState',
     'NewmarkIntegrator',
-    'StepForm',
-    'TransientSolution',
     'bdf2_variable_form',
+    'directional_line_search',
     'get_integrator',
     'integrate_transient',
-    'residual_floor',
-    'residual_floor_of_magnitude',
 ]
+
+
+def _full_fixed_steps(study: TransientStudy) -> int:
+    """Count full cells, treating a floating-point near-integer as an integer."""
+    ratio = (study.t1 - study.t0) / study.dt
+    nearest = round(ratio)
+    return nearest if abs(ratio - nearest) <= 1e-10 else int(np.floor(ratio))
+
+
+def _bdf2_variable_form(state: IntegratorState, dt: float, h: float, t_new: float) -> StepForm:
+    """The variable-spacing BDF2 step form; ``h`` is the previous step's size.
+
+    Fixed-weight BDF2 assumes uniform history spacing; a step whose size differs from its
+    history's spacing needs the derivative of the quadratic through the unevenly spaced
+    points (the events module docstring names the O(1) wrong-equation trap this closes).
+    """
+    u_n, u_nm1 = state.us[-1], state.us[-2]
+    return StepForm(
+        weights=DerivativeWeights(alpha0=1.0, alpha1=(2.0 * dt + h) / (dt * (dt + h))),
+        h_u=np.zeros_like(u_n),
+        h_dot=-(dt + h) / (dt * h) * u_n + dt / (h * (dt + h)) * u_nm1,
+        h_ddot=np.zeros_like(u_n),
+        t_eval=t_new,
+    )
+
+
+#: The public spelling of the variable-step BDF2 form, for a CHECK that must replay the march's own
+#: weights (`hamilton.coupling.terminal_balance`). One function, two names, never two formulas.
+bdf2_variable_form = _bdf2_variable_form
+
+
+def _default_solve(matrix: object, rhs: NDArray[np.floating]) -> NDArray[np.floating]:
+    """Solve ``matrix @ x = rhs`` for a dense ndarray or a scipy-sparse jacobian (physics-blind)."""
+    b = np.asarray(rhs, dtype=float)
+    if sp.issparse(matrix):
+        return np.asarray(solve_linear_system(sp.csc_matrix(matrix), b))
+    m = np.asarray(matrix, dtype=float)
+    if m.ndim == 0:  # scalar jacobian (1-DOF problem written as a plain number)
+        return b / float(m)
+    return np.linalg.solve(m, b)
+
+
+@wraps(_step._solve_step)
+def _solve_step(*args, **kwargs):
+    """The package's step seam; the implicit algorithm has one owner in ``_step``."""
+    return _step._solve_step(*args, **kwargs)
 
 
 def integrate_transient(
@@ -128,7 +152,7 @@ def integrate_transient(
     tol: float = 1e-12,
     tol_rel: float | None = None,
     factor_cache: FactorCache | None = None,
-    backtrack_band: float = 1.5,
+    backtrack_band: float | None = 1.5,
     backtrack_cap: int = 4,
     line_search: str = 'backtrack',
     gmin_stages: tuple[float, ...] | None = None,
@@ -330,7 +354,7 @@ def integrate_transient(
                 msg = 'adaptive bounds must contain at least one time lattice step'
                 raise ValueError(msg)
         t_end = study.t1
-        solution = TransientSolution(times=[study.t0], states=[u0])
+        solution = TransientSolution(times=[study.t0], states=[u0], state_rates=[], rate_state_overrides={})
         while state.t < t_end - 1e-14:
             h = min(h, t_end - state.t)
             t_new = state.t + h
@@ -402,6 +426,8 @@ def integrate_transient(
                 state = integrator.advance(state, u_new, h, t_new)
                 solution.times.append(t_new)
                 solution.states.append(u_new)
+                assert solution.state_rates is not None
+                solution.state_rates.append(form.u_dot(u_new))
                 if isinstance(problem, HistoryProblem):
                     problem.commit_history(u_new, t_new)
                 h_prev = h
@@ -422,8 +448,12 @@ def integrate_transient(
         if checkpoint_key is not None:
             solution.checkpoint = _checkpoint_of(problem, state, h_prev, checkpoint_key, integrator.name)
         return solution
-    n_steps = round((study.t1 - study.t0) / dt)
-    solution = TransientSolution(times=[study.t0], states=[u0])
+    n_steps = _full_fixed_steps(study)
+    # A SPAN THAT IS NOT A WHOLE NUMBER OF STEPS ends on one shorter step landing exactly on t1.
+    has_remainder = step_times is None and study.t1 - (study.t0 + n_steps * dt) > 1e-12 * max(
+        dt, abs(study.t1 - study.t0)
+    )
+    solution = TransientSolution(times=[study.t0], states=[u0], state_rates=[], rate_state_overrides={})
     if eec_period is not None:
         solution.correction_model = (
             'cycle_integrated_nonlinear_tangent' if eec_nonlinear_first_order else 'affine_cycle_mean'
@@ -435,7 +465,7 @@ def integrate_transient(
     targets = (
         step_times[1:]
         if step_times is not None
-        else [target_origin + (first_tick + k + 1) * dt for k in range(n_steps)]
+        else [target_origin + (first_tick + k + 1) * dt for k in range(n_steps)] + ([study.t1] if has_remainder else [])
     )
     next_correction = (
         (study.t0 + eec_period if saved_eec is None else saved_eec.next_correction_time)
@@ -489,7 +519,7 @@ def integrate_transient(
         )
 
     for t_new in targets:
-        dt = study.dt if step_times is None else t_new - state.t
+        dt = study.dt if step_times is None and not (has_remainder and t_new == targets[-1]) else t_new - state.t
         if integrator.name == 'bdf2' and len(state.us) >= 2 and dt != previous_dt:
             form = _bdf2_variable_form(state, dt, previous_dt, t_new)
         else:
@@ -531,6 +561,8 @@ def integrate_transient(
         state = integrator.advance(state, u_new, dt, t_new)
         solution.times.append(t_new)
         solution.states.append(u_new)
+        assert solution.state_rates is not None
+        solution.state_rates.append(form.u_dot(u_new))
         # THE STEP JOINED THE TRAJECTORY, so its material history is the one the next step starts
         # from -- including a step labelled non-converged: the march continues from `u_new`, and a
         # history left at the previous step would be a trajectory the material never followed.

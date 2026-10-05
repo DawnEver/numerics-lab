@@ -1,15 +1,17 @@
-//! The dense BORDER of a [`super::DirectFactorization`]: which indices are dense, and their
-//! elimination through a `k x k` Schur complement around the sparse [`super::Kernel`].
+//! The dense BORDER of a sparse direct factorisation: the dense rows/columns found, and their
+//! elimination through the `k x k` Schur complement so the supernodal kernel sees only the sparse
+//! block. Split out of `direct.rs` on 2026-09-29; see [`super::DirectFactorization`] for why.
 
+use super::{DirectFailure, FactorKind, Kernel};
 use contracts::sparse::{Coo, Csr};
 use faer::linalg::solvers::{PartialPivLu, Solve};
 use faer::Mat;
 
-use super::{DirectFailure, FactorKind, Kernel};
+// -- The dense border ---------------------------------------------------------------------------
 
 /// A row/column is DENSE when it stores more than this many entries AND more than
 /// [`DENSE_SQRT_FACTOR`]` * sqrt(n)`.
-const DENSE_FLOOR: usize = 64;
+pub(super) const DENSE_FLOOR: usize = 64;
 /// See [`DENSE_FLOOR`].
 const DENSE_SQRT_FACTOR: f64 = 10.0;
 /// More dense indices than this and the Schur block itself stops being small; the plain kernel

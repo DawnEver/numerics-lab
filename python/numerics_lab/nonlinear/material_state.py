@@ -37,7 +37,6 @@ import numpy as np
 __all__ = [
     'COEFFICIENT_NAMES',
     'CompositeUpdate',
-    'FrozenNu',
     'MaterialCoeffs',
     'MaterialFields',
     'MaterialLoop',
@@ -85,6 +84,10 @@ class MaterialCoeffs:
     br: np.ndarray | None = None
     mu_recoil: np.ndarray | None = None
 
+    def by_name(self) -> dict[str, np.ndarray | None]:
+        """Every coefficient keyed by its field name -- read field by field, never reflected."""
+        return {'nu': self.nu, 'dnu_db2': self.dnu_db2, 'br': self.br, 'mu_recoil': self.mu_recoil}
+
 
 #: The coefficient names, derived from the dataclass so a new one cannot be forgotten by the composite.
 COEFFICIENT_NAMES: tuple[str, ...] = tuple(f.name for f in fields(MaterialCoeffs))
@@ -120,7 +123,8 @@ def _blend(prev: np.ndarray | None, target: np.ndarray | None, alpha: float) -> 
 
 def relax_linear(previous: MaterialCoeffs, target: MaterialCoeffs, alpha: float) -> MaterialCoeffs:
     """The default :meth:`MaterialUpdate.relax`: every set coefficient blended by one global ``alpha``."""
-    return MaterialCoeffs(**{k: _blend(vars(previous)[k], vars(target)[k], alpha) for k in COEFFICIENT_NAMES})
+    prev, tgt = previous.by_name(), target.by_name()
+    return MaterialCoeffs(**{k: _blend(prev[k], tgt[k], alpha) for k in COEFFICIENT_NAMES})
 
 
 class CompositeUpdate:
@@ -146,8 +150,9 @@ class CompositeUpdate:
         for member, s in zip(self.members, state, strict=True):
             s_new, coeffs = member.evaluate(s, fields, temperature)
             trial.append(s_new)
+            values = coeffs.by_name()
             for k in COEFFICIENT_NAMES:
-                v = vars(coeffs)[k]
+                v = values[k]
                 if v is None:
                     continue
                 if k in merged:
@@ -210,39 +215,3 @@ def frozen_resolve(system, x_frozen: np.ndarray, /) -> np.ndarray:
     fields superpose to the converged one, which is the whole method.
     """
     return system.solve_linear(system.assemble(np.asarray(x_frozen)))
-
-
-class FrozenNu:
-    """A material update whose ``nu`` is FROZEN per point: the coefficients of one converged evaluation.
-
-    Built from any reversible update at a converged field (:meth:`from_update`), it ignores the
-    field it is later evaluated at -- the frozen-permeability material state as a
-    :class:`MaterialUpdate`, for a system that assembles from per-point coefficients.
-    """
-
-    irreversible = False
-
-    def __init__(self, nu: np.ndarray) -> None:
-        self.nu = np.asarray(nu, dtype=float).copy()
-
-    @classmethod
-    def from_update(cls, update: MaterialUpdate, fields: MaterialFields, temperature=None) -> FrozenNu:
-        _state, coeffs = update.evaluate(update.init_state(fields), fields, temperature)
-        if coeffs.nu is None:
-            msg = f'{type(update).__name__} sets no nu, so there is nothing to freeze'
-            raise ValueError(msg)
-        return cls(coeffs.nu)
-
-    def init_state(self, fields: MaterialFields, /) -> None:
-        del fields
-
-    def evaluate(self, state, fields: MaterialFields, temperature=None, /):
-        del fields, temperature
-        return state, MaterialCoeffs(nu=self.nu.copy())
-
-    def relax(self, previous: MaterialCoeffs, target: MaterialCoeffs, alpha: float, /) -> MaterialCoeffs:
-        return relax_linear(previous, target, alpha)
-
-    def change(self, committed, trial, /) -> float:
-        del committed, trial
-        return 0.0
