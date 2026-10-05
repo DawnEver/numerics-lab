@@ -62,6 +62,8 @@ class AssembledState:
     total_energy: float
     payload: object = None
     material_change: float = 0.0
+    #: Per-element independently dimensioned fields checked by the local Newton criterion.
+    local_values: tuple[np.ndarray, ...] = ()
 
 
 @dataclass

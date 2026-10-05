@@ -1,6 +1,6 @@
 """The native direct factorisation behind the ``direct`` backend -- faer, pattern-cached.
 
-``motronics_native.gauss.DirectFactorization`` (``rust/crates/gauss/src/linear/direct.rs``) is a
+``motronics_native.gauss.DirectFactorization`` (``rust/crates/gauss/src/linear/direct/mod.rs``) is a
 supernodal LU, or a supernodal Cholesky when the operator is verified EXACTLY symmetric, whose
 symbolic analysis is paid once per sparsity pattern and whose numeric storage is reused. A Newton
 loop reassembles one mesh, so its pattern is constant and only the values move; this module holds
@@ -11,9 +11,9 @@ WHY IT IS THE DEFAULT, measured (2026-09-26, the faer-bench sweep in
 the three levers ``direct.rs`` pulls, faer beats SciPy's SuperLU at every production size measured
 (5k to 129k unknowns), so there is no size threshold.
 
-THE PATTERN IS CHECKED, NEVER ASSUMED. The cache key is a CRC of ``indptr``/``indices``, which is a
-lookup, not a proof: Python compares the full pattern against owned copies before the extension's
-values-only refactor, and a different pattern re-analyses. A HELD factor (:class:`NativeFactor`, what
+THE PATTERN IS CHECKED, NEVER ASSUMED. The cache key contains the complete canonical
+``indptr``/``indices`` bytes: dictionary hash collisions still require exact byte equality.
+The native values-only refactor therefore always receives its analysed pattern. A HELD factor (:class:`NativeFactor`, what
 ``factor_matrix`` hands a held-factor Newton or a march cache) shares its analysis with later solves
 on the same pattern, so it records the generation it was factorised at and re-factorises its own
 values if another solve has since overwritten the shared storage -- a stale factor is never
@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import logging
 import os
-import zlib
 from collections import Counter, OrderedDict
 
 import numpy as np
@@ -124,7 +123,7 @@ def _refactor(cls, csr) -> tuple[_Entry, str]:
     """Refactorise ``csr`` into the cached analysis of its pattern (analysing it if new)."""
     indptr = np.asarray(csr.indptr, dtype=np.int64)
     indices = np.asarray(csr.indices, dtype=np.int64)
-    key = (csr.shape[0], csr.nnz, zlib.crc32(indptr.tobytes()), zlib.crc32(indices.tobytes()))
+    key = (csr.shape[0], indptr.tobytes(), indices.tobytes())
     entry = _cache.get(key)
     if entry is not None and (
         entry.shape != csr.shape
@@ -137,12 +136,9 @@ def _refactor(cls, csr) -> tuple[_Entry, str]:
         try:
             kind = entry.factorization.refactor(csr.data)
         except ValueError as exc:
-            if 'PatternChanged' not in str(exc):
-                raise _singular(exc, csr.shape[0]) from exc
-            entry = None  # defensive support for an extension that also validates its pattern
-        else:
-            entry.generation += 1
-            return entry, kind
+            raise _singular(exc, csr.shape[0]) from exc
+        entry.generation += 1
+        return entry, kind
     try:
         factorization = cls(csr.shape[0], csr.shape[1], indptr, indices, csr.data)
         kind = factorization.refactor(csr.data)

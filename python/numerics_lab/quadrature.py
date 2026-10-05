@@ -20,6 +20,7 @@ from typing import NamedTuple
 import numpy as np
 from numpy.typing import NDArray
 
+from motronics.contracts.ir.discrete_space import EvaluatedBasis
 from motronics.contracts.ir.spline_space_ir import Patch
 from motronics.gauss.contract import contract
 from motronics.gauss.spline_basis import BasisValues, SplineBasisError
@@ -33,6 +34,7 @@ __all__ = [
     'gradient_gram_triplets',
     'patch_quadrature',
     'scatter_to_patch',
+    'value_gram_triplets',
 ]
 
 
@@ -110,7 +112,11 @@ def scatter_to_patch(values: BasisValues, weighted: NDArray[np.float64]) -> NDAr
 
 
 def gradient_gram_triplets(
-    values: BasisValues, dof_ids: NDArray[np.intp], measure: NDArray[np.float64]
+    values: EvaluatedBasis,
+    dof_ids: NDArray[np.intp],
+    measure: NDArray[np.float64],
+    *,
+    diagonal: NDArray[np.float64] | None = None,
 ) -> tuple[NDArray[np.intp], NDArray[np.intp], NDArray[np.float64]]:
     """COO triplets of ``INT measure * grad N_i . grad N_j`` over one patch, built on the SUPPORT.
 
@@ -118,11 +124,13 @@ def gradient_gram_triplets(
     cell share a support, so this emits ``n_cells * n_support**2`` entries -- against the
     ``n_basis**2`` a dense patch block holds (11025 for 6 numbers per point on spm_slotted's
     carriers at refine (2, 2), and growing with the square of the refinement) and the
-    ``n_points * n_support**2`` a per-point scatter would emit. The cell is identified by the FIRST
-    column of the support, which is a bijection with the span indices that produced it.
+    ``n_points * n_support**2`` a per-point scatter would emit. A complete support tuple identifies
+    a block: distinct supports can share their first column outside tensor-product knot spans.
 
     ``measure`` carries whatever the caller integrates against -- a reluctivity, a conductivity, a
     bare area element. Nothing here knows which, which is why it lives in ``gauss``.
+    ``diagonal`` optionally scales each PHYSICAL gradient axis by a constant coefficient. None
+    and an all-ones vector take the original contraction unchanged, including its operation order.
 
     The sum over quadrature points is REASSOCIATED into per-cell partial sums. That is a last-bit
     change and not a modelling one, the same class as the BLAS reassociation ``gauss.contract``
@@ -131,11 +139,42 @@ def gradient_gram_triplets(
     if values.gradients is None:
         msg = 'a gradient Gram block was requested but the basis was evaluated at derivative order 0'
         raise SplineBasisError(msg)
-    key = values.columns[:, 0]
-    order = np.argsort(key, kind='stable')
-    key_sorted = key[order]
-    starts = np.flatnonzero(np.concatenate([[True], key_sorted[1:] != key_sorted[:-1]]))
-    gradients = values.gradients[order]
+    coefficients = None if diagonal is None else np.asarray(diagonal, dtype=float)
+    if coefficients is not None:
+        if coefficients.shape != (values.gradients.shape[2],):
+            msg = 'diagonal must carry one constant coefficient per physical gradient axis'
+            raise ValueError(msg)
+        if np.all(coefficients == 1.0):
+            coefficients = None
+    return _gram_triplets(values, dof_ids, measure, values.gradients, diagonal=coefficients)
+
+
+def value_gram_triplets(
+    values: EvaluatedBasis, dof_ids: NDArray[np.intp], measure: NDArray[np.float64]
+) -> tuple[NDArray[np.intp], NDArray[np.intp], NDArray[np.float64]]:
+    """COO triplets of ``INT measure * N_i * N_j``, without requesting any basis derivatives.
+
+    A capacity coefficient is already in ``measure``. Grouping, batching and global DOF emission
+    are the gradient Gram's mechanism, not a second assembly over patch-wide dense values.
+    """
+    return _gram_triplets(values, dof_ids, measure, values.values)
+
+
+def _gram_triplets(
+    values: EvaluatedBasis,
+    dof_ids: NDArray[np.intp],
+    measure: NDArray[np.float64],
+    samples: NDArray[np.float64],
+    *,
+    diagonal: NDArray[np.float64] | None = None,
+) -> tuple[NDArray[np.intp], NDArray[np.intp], NDArray[np.float64]]:
+    """Reduce support-local pair products over complete supports and emit global COO blocks."""
+    if values.columns.shape[0] == 0:
+        return np.empty(0, dtype=np.intp), np.empty(0, dtype=np.intp), np.empty(0, dtype=np.float64)
+    order = np.lexsort(values.columns.T[::-1])
+    columns_sorted = values.columns[order]
+    starts = np.flatnonzero(np.concatenate([[True], np.any(columns_sorted[1:] != columns_sorted[:-1], axis=1)]))
+    ordered_samples = samples[order]
     weights = np.asarray(measure, dtype=float)[order]
 
     # BATCHED OVER CELLS, because the per-point outer product is the one array here still
@@ -151,18 +190,23 @@ def gradient_gram_triplets(
     # the (4, 4) peak lives in the trimmed rule's own point accumulation, not here. Kept because a
     # bound proportional to nothing is what the rest of this module now provides, and quoted with
     # the refutation so nobody reads it as the fix for that peak.
-    bounds = np.append(starts, key_sorted.size)
+    bounds = np.append(starts, len(columns_sorted))
     blocks_by_batch = []
     batch_start = 0
     while batch_start < starts.size:
         batch_end = int(np.searchsorted(bounds, bounds[batch_start] + GRAM_BATCH_POINTS, side='right')) - 1
         batch_end = max(batch_end, batch_start + 1)
         lo, hi = int(bounds[batch_start]), int(bounds[batch_end])
-        outer = contract('qld,qmd,q->qlm', gradients[lo:hi], gradients[lo:hi], weights[lo:hi])
+        block_samples = ordered_samples[lo:hi]
+        if samples.ndim == 2:
+            outer = contract('ql,qm,q->qlm', block_samples, block_samples, weights[lo:hi])
+        else:
+            left = block_samples if diagonal is None else block_samples * diagonal
+            outer = contract('qld,qmd,q->qlm', left, block_samples, weights[lo:hi])
         blocks_by_batch.append(np.add.reduceat(outer, starts[batch_start:batch_end] - lo, axis=0))
         batch_start = batch_end
     blocks = np.concatenate(blocks_by_batch, axis=0)
-    support = np.asarray(dof_ids, dtype=np.intp)[values.columns[order][starts]]
+    support = np.asarray(dof_ids, dtype=np.intp)[columns_sorted[starts]]
     width = support.shape[1]
     return (
         np.repeat(support, width, axis=1).ravel(),

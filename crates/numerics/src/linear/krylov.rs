@@ -61,6 +61,8 @@ pub struct KrylovOutcome {
 /// Why a Krylov solve refused.
 #[derive(Debug, Clone, PartialEq)]
 pub enum KrylovFailure {
+    /// Nonfinite, negative absolute, or nonpositive relative tolerance.
+    InvalidTolerance,
     /// Ran out of iterations — the Python's `info > 0`.
     NotConverged {
         /// The residual it got to.
@@ -148,7 +150,29 @@ impl Method {
         x0: Option<&[f64]>,
         m: Option<&Preconditioner>,
     ) -> Result<KrylovOutcome, KrylovFailure> {
-        let st = State::new(a, b, x0)?;
+        self.solve_with_tolerances(a, b, x0, m, KRYLOV_RTOL, KRYLOV_ATOL)
+    }
+
+    /// Solve with explicit relative and absolute targets, including original-RHS-scaled Newton tolerances.
+    pub fn solve_with_tolerances(
+        self,
+        a: &Csr,
+        b: &[f64],
+        x0: Option<&[f64]>,
+        m: Option<&Preconditioner>,
+        rtol: f64,
+        atol: f64,
+    ) -> Result<KrylovOutcome, KrylovFailure> {
+        if !rtol.is_finite()
+            || rtol < 0.0
+            || !atol.is_finite()
+            || atol < 0.0
+            || (rtol == 0.0 && atol == 0.0)
+        {
+            return Err(KrylovFailure::InvalidTolerance);
+        }
+        let mut st = State::new(a, b, x0)?;
+        st.target = (rtol * st.b_norm).max(atol);
         match self {
             Self::Cg => cg(st, m),
             Self::Minres => minres(st, m),
@@ -168,6 +192,7 @@ struct State<'a> {
     n: usize,
     b_norm: f64,
     maxiter: usize,
+    target: f64,
 }
 
 impl<'a> State<'a> {
@@ -195,6 +220,7 @@ impl<'a> State<'a> {
             n: n_rows,
             b_norm: norm(b),
             maxiter: KRYLOV_MAXITER_FACTOR * n_rows.max(1),
+            target: (KRYLOV_RTOL * norm(b)).max(KRYLOV_ATOL),
         })
     }
 
@@ -203,7 +229,7 @@ impl<'a> State<'a> {
     /// A zero rhs makes the target zero, and `x = 0` satisfies it exactly — which is the right
     /// answer, not a degenerate one.
     fn tolerance(&self) -> f64 {
-        (KRYLOV_RTOL * self.b_norm).max(KRYLOV_ATOL)
+        self.target
     }
 
     fn residual_of(&self, x: &[f64]) -> Result<(Vec<f64>, f64), SparseError> {
@@ -281,7 +307,7 @@ fn cg(mut st: State, m: Option<&Preconditioner>) -> Result<KrylovOutcome, Krylov
     for k in 1..=st.maxiter {
         let ap = st.a.matvec(&p)?;
         let denom = dot(&p, &ap);
-        if denom == 0.0 {
+        if !denom.is_finite() || denom <= 0.0 {
             return Err(KrylovFailure::Breakdown {
                 quantity: "p^T A p",
                 iteration: k,

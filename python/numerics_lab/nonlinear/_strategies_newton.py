@@ -32,6 +32,10 @@ from motronics.gauss.nonlinear._seam import (
     unwrap_system,
 )
 from motronics.gauss.nonlinear._strategies_picard import DampedPicardStrategy
+from motronics.gauss.nonlinear.local import (
+    local_change,
+    newton_linear_tolerance,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +96,7 @@ class NewtonStrategy:
     Jacobian-free directional derivative of its own pipeline); this class owns everything else.
 
     CONVERGENCE IS JUDGED ON THE EQUATION, not on a proxy for it: the relative residual
-    ``||r(x_k)|| / max(||r(x_0)||, ||rhs||)`` (:func:`_residual_reference`) AND the increment, both below ``rtol = rtol_energy_pct / 100``, through the one rule
+    ``||r(x_k)|| / max(||r(x_0)||, ||rhs||)`` (:func:`residual_reference`) AND the increment, both below ``rtol = rtol_energy_pct / 100``, through the one rule
     :func:`_has_converged`. The energy change is still computed, for the log and for the
     stagnation break that stops a solve parked on its arithmetic floor.
 
@@ -214,6 +218,13 @@ class NewtonStrategy:
         stale = False
         for i in range(max_iter):
             ran = i + 1
+            previous_local = state.local_values
+            try:
+                set_tolerance = system.set_linear_tolerance
+            except AttributeError:
+                set_tolerance = None
+            if set_tolerance is not None:
+                set_tolerance(newton_linear_tolerance(r_norm / reference) * reference)
             # FULL NEWTON REFRESHES EVERY ITERATION; the modified one when its factor is ``k`` old,
             # or the last held step contracted the residual by less than ``stall_ratio``.
             fresh = held is None or self.refactor_every is None or age >= self.refactor_every or stale
@@ -260,6 +271,8 @@ class NewtonStrategy:
             ) or watch.observe(err, increment, state.material_change)
             if system.is_linear:
                 converged = True
+            if not system.is_linear and (previous_local or state.local_values):
+                converged = converged and local_change(previous_local, state.local_values) < rtol_energy_pct / 100.0
             system.on_iteration(i, start_state, start_err, lam, increment)
             start_state, start_err = state, err
             if converged:

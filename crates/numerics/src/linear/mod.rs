@@ -63,7 +63,9 @@ pub const DIRECT_RESIDUAL_RTOL: f64 = 1e-6;
 ///
 /// `direct` is the default. `cg`/`minres` assume a symmetric/SPD operator (the magnetostatic
 /// secant stiffness is SPD-ish); `gmres`/`bicgstab`/`qmr` handle general operators.
-pub const KNOWN_LINEAR_SOLVERS: [&str; 6] = ["bicgstab", "cg", "direct", "gmres", "minres", "qmr"];
+pub const KNOWN_LINEAR_SOLVERS: [&str; 8] = [
+    "auto", "bicgstab", "cg", "direct", "gmres", "iccg", "minres", "qmr",
+];
 
 /// A linear backend failed to produce a usable solution.
 ///
@@ -154,6 +156,10 @@ impl From<SparseError> for LinearSolveError {
 /// A resolved backend: the direct factorisation or one of the Krylov peers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinearSolver {
+    /// Admissibility-based ICCG with guarded direct fallback; no timing crossover claimed.
+    Auto,
+    /// CG with IC0, never ILU under another name.
+    Iccg,
     /// Sparse LU.
     Direct,
     /// One of the Krylov family.
@@ -168,6 +174,8 @@ impl LinearSolver {
     pub fn resolve(name: Option<&str>) -> Result<Self, LinearSolveError> {
         match name {
             None | Some("direct") => Ok(Self::Direct),
+            Some("auto") => Ok(Self::Auto),
+            Some("iccg") => Ok(Self::Iccg),
             Some(other) => Method::from_name(other).map(Self::Krylov).ok_or_else(|| {
                 LinearSolveError::UnknownSolver {
                     name: other.to_owned(),
@@ -181,6 +189,8 @@ impl LinearSolver {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Direct => "direct",
+            Self::Auto => "auto",
+            Self::Iccg => "iccg",
             Self::Krylov(m) => m.name(),
         }
     }
@@ -190,6 +200,8 @@ impl LinearSolver {
     pub const fn requires_symmetric(self) -> bool {
         match self {
             Self::Direct => false,
+            Self::Auto => false,
+            Self::Iccg => true,
             Self::Krylov(m) => m.requires_symmetric(),
         }
     }
@@ -235,8 +247,83 @@ pub fn solve_linear_system(
     preconditioner: Option<&str>,
     x0: Option<&[f64]>,
 ) -> Result<Vec<f64>, LinearSolveError> {
+    solve_linear_system_with_tolerances(
+        matrix,
+        rhs,
+        linear_solver,
+        preconditioner,
+        x0,
+        (KRYLOV_RTOL, KRYLOV_ATOL),
+    )
+}
+
+/// Linear seam with explicit (relative, absolute) Krylov tolerances.
+pub fn solve_linear_system_with_tolerances(
+    matrix: &Csr,
+    rhs: &[f64],
+    linear_solver: Option<&str>,
+    preconditioner: Option<&str>,
+    x0: Option<&[f64]>,
+    tolerances: (f64, f64),
+) -> Result<Vec<f64>, LinearSolveError> {
+    if !tolerances.0.is_finite()
+        || tolerances.0 < 0.0
+        || !tolerances.1.is_finite()
+        || tolerances.1 < 0.0
+        || (tolerances.0 == 0.0 && tolerances.1 == 0.0)
+    {
+        return Err(LinearSolveError::Krylov {
+            method: "tolerance",
+            cause: KrylovFailure::InvalidTolerance,
+        });
+    }
     let backend = LinearSolver::resolve(linear_solver)?;
     let x = match backend {
+        LinearSolver::Auto => {
+            if let Ok(x) =
+                solve_linear_system_with_tolerances(matrix, rhs, Some("iccg"), None, x0, tolerances)
+            {
+                return Ok(x);
+            }
+            return solve_linear_system(matrix, rhs, Some("direct"), None, x0);
+        }
+        LinearSolver::Iccg => {
+            if preconditioner.is_some_and(|name| name != "ic0") {
+                return Err(LinearSolveError::UnknownPreconditioner(
+                    PreconditionerError::Unknown {
+                        name: preconditioner.unwrap().to_owned(),
+                    },
+                ));
+            }
+            let (matrix, rhs, pinned) =
+                dirichlet::lift_identity_rows(matrix, rhs).map_err(LinearSolveError::Shape)?;
+            let mut seed = x0.map_or_else(|| vec![0.0; rhs.len()], <[f64]>::to_vec);
+            if seed.len() != rhs.len() {
+                return Err(LinearSolveError::Shape(SparseError::ShapeMismatch {
+                    expected: rhs.len(),
+                    got: seed.len(),
+                }));
+            }
+            for index in pinned {
+                seed[index] = rhs[index];
+            }
+            let m = Preconditioner::build("ic0", &matrix)
+                .map_err(LinearSolveError::UnknownPreconditioner)?;
+            Method::Cg
+                .solve_with_tolerances(
+                    &matrix,
+                    &rhs,
+                    Some(&seed),
+                    Some(&m),
+                    tolerances.0,
+                    tolerances.1,
+                )
+                .map_err(|cause| LinearSolveError::Krylov {
+                    method: "iccg",
+                    cause,
+                })?
+                .x
+        }
         LinearSolver::Direct => {
             // The Python builds no preconditioner for the direct path; an unknown NAME on that
             // path therefore goes unreported there. Resolving it here anyway means a typo is
@@ -257,7 +344,7 @@ pub fn solve_linear_system(
                 None => None,
             };
             method
-                .solve(matrix, rhs, x0, m.as_ref())
+                .solve_with_tolerances(matrix, rhs, x0, m.as_ref(), tolerances.0, tolerances.1)
                 .map_err(|cause| LinearSolveError::Krylov {
                     method: method.name(),
                     cause,

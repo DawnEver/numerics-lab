@@ -95,7 +95,7 @@ def test_every_assembled_solve_path_consults_the_one_owner():
         'hamilton/discretizations/fem/_solve.py',
         'hamilton/discretizations/fem/_newton.py',
         'hamilton/discretizations/fem/dwr.py',
-        'hamilton/error_estimate.py',
+        'hamilton/_error_dwr.py',
     }
 
     found = set()

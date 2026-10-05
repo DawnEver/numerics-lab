@@ -96,7 +96,7 @@ def test_registry_covers_the_roadmap_backends():
     # perf #3): the registry must never lose a roadmap backend.
     expected = {'direct', 'cg', 'minres', 'gmres', 'bicgstab', 'qmr'}
     assert expected <= set(LINEAR_SOLVER_REGISTRY)
-    assert set(PRECONDITIONER_REGISTRY) == {'jacobi', 'ilu', 'ssor'}
+    assert set(PRECONDITIONER_REGISTRY) == {'jacobi', 'ilu', 'ssor', 'ic0', 'amg'}
 
 
 def test_the_symmetric_direct_backend_is_the_direct_answer_on_an_spd_system():

@@ -315,7 +315,7 @@ def test_an_exhausted_newton_ceiling_labels_the_solution(caplog) -> None:
 
 
 def test_adaptive_stepping_keeps_accuracy_with_fewer_steps_on_the_smooth_tail() -> None:
-    """W6 adaptive dt (OTSF): the BDF2's LTE controller sizes the steps -- the march takes
+    """The BDF2 predictor-curvature controller sizes the steps -- the march takes
     the large steps on the smooth tail where the fixed march wastes them, at the same
     accuracy per tolerance. ``u_dot = -u`` has the exact ``u = e^{-t}``.
     """
@@ -330,7 +330,7 @@ def test_adaptive_stepping_keeps_accuracy_with_fewer_steps_on_the_smooth_tail() 
     problem = _Decay()
     study = TransientStudy(t0=0.0, t1=5.0, dt=1e-3, integrator=IntegratorKind.BDF2)
     fixed = integrate_transient(problem, study, np.array([1.0]))
-    # atol = 1e-6: the extrapolation-based LTE ~ u'' h^2 puts the controller's equilibrium at
+    # atol = 1e-6: the predictor discrepancy ~ u'' h^2 puts the controller's equilibrium at
     # h ~ sqrt(atol/u'') ~ 1e-3 -- the fixed march's own scale, so the comparison is fair.
     adaptive = integrate_transient(problem, study, np.array([1.0]), adaptive=True, atol=1e-6)
 
@@ -338,7 +338,7 @@ def test_adaptive_stepping_keeps_accuracy_with_fewer_steps_on_the_smooth_tail() 
         return max(abs(float(u[0]) - math.exp(-t)) for t, u in zip(sol.times, sol.states, strict=True))
 
     assert err(adaptive) <= max(err(fixed) * 10.0, 1e-8), (
-        f'adaptive true error {err(adaptive):g} vs fixed {err(fixed):g} -- the LTE controller '
+        f'adaptive true error {err(adaptive):g} vs fixed {err(fixed):g} -- the curvature controller '
         'must not trade accuracy for steps'
     )
     steps = np.diff(np.asarray(adaptive.times))
@@ -350,7 +350,7 @@ def test_adaptive_stepping_keeps_accuracy_with_fewer_steps_on_the_smooth_tail() 
 
 
 def test_adaptive_stepping_rejects_bdf1_with_a_named_error() -> None:
-    """The LTE controller is BDF2-specific (the second-order difference is its estimator)."""
+    """The implemented predictor-curvature controller is BDF2-specific."""
     study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF1)
 
     class _Decay:
