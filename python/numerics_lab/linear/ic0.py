@@ -2,7 +2,7 @@
 
 import numpy as np
 import scipy.sparse as sp
-from scipy.sparse.linalg import LinearOperator, spsolve_triangular
+from scipy.sparse.linalg import LinearOperator, splu
 
 from motronics.gauss.linear.dirichlet import apply_dirichlet_csr
 from motronics.gauss.linear.gauge import constraint_rows
@@ -74,10 +74,31 @@ def ic0_preconditioner(matrix) -> LinearOperator:
             values.append(row[j])
         pointers.append(len(indices))
     factor = sp.csr_matrix((values, indices, pointers), shape=a.shape)
-    transpose = factor.T.tocsr()
+    return IC0Operator(factor)
 
-    def apply(vector):
-        intermediate = spsolve_triangular(factor, vector, lower=True)
-        return spsolve_triangular(transpose, intermediate, lower=False)
 
-    return LinearOperator(a.shape, matvec=apply, rmatvec=apply, dtype=float)
+class IC0Operator(LinearOperator):
+    """``(L L.T)^-1`` applied by two PRE-FACTORED triangular sweeps.
+
+    ``spsolve_triangular`` re-validates, re-sorts and re-multiplies its operand on every call --
+    ~89 matvecs of work for two sweeps (ruling 30, `tests/unit/gauss/test_the_ic0_apply_is_factored_once.py`).
+    SuperLU on ``L`` itself, natural column order and diagonal pivots, IS ``L`` (no fill, no
+    permutation -- checked, never assumed); its plain solve sweeps ``L`` and its transposed solve
+    sweeps ``L.T``, both compiled, once set up.
+    """
+
+    def __init__(self, lower) -> None:
+        super().__init__(dtype=float, shape=lower.shape)
+        self.lower = lower
+        self._sweeps = splu(lower.tocsc(), permc_spec='NATURAL', diag_pivot_thresh=0.0, options={'SymmetricMode': True})
+        identity = np.arange(lower.shape[0])
+        if not (np.array_equal(self._sweeps.perm_r, identity) and np.array_equal(self._sweeps.perm_c, identity)):
+            msg = 'IC0 sweeps: SuperLU permuted the triangular factor'
+            raise ValueError(msg)
+
+    def _matvec(self, vector):
+        flat = np.asarray(vector, dtype=float).ravel()
+        return self._sweeps.solve(self._sweeps.solve(flat), trans='T')
+
+    def _rmatvec(self, vector):
+        return self._matvec(vector)
