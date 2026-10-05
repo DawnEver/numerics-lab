@@ -170,7 +170,7 @@ impl StagnationWatch {
 
 /// Consecutive steps of a RISING increment before the iterate is damped on the increment alone.
 ///
-/// Symmetric with [`ALPHA_CALM_STEPS`] on purpose: the same amount of evidence that licenses a
+/// Symmetric with [`super::ALPHA_CALM_STEPS`] on purpose: the same amount of evidence that licenses a
 /// recovery licenses a damping. One step is not enough - an increment jitters - and the measured
 /// blow-out rose monotonically for ten.
 pub const INCREMENT_RISE_STEPS: usize = 3;

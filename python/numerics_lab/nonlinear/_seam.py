@@ -55,6 +55,8 @@ class AssembledState:
         material_change: relative change of the IRREVERSIBLE material state this assembly's trial
             implies (`gauss.nonlinear.material_state`); ``0`` for a system whose materials are all
             reversible. The material term of :func:`_has_converged`.
+        local_values: snapshots of per-element fields, one array per independently
+            dimensioned quantity (B, voltage, current); Newton checks the worst element.
 
     """
 

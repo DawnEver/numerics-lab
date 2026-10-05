@@ -136,9 +136,12 @@ def _refactor(cls, csr) -> tuple[_Entry, str]:
         try:
             kind = entry.factorization.refactor(csr.data)
         except ValueError as exc:
-            raise _singular(exc, csr.shape[0]) from exc
-        entry.generation += 1
-        return entry, kind
+            if 'PatternChanged' not in str(exc):
+                raise _singular(exc, csr.shape[0]) from exc
+            entry = None  # defensive support for an extension that also validates its pattern
+        else:
+            entry.generation += 1
+            return entry, kind
     try:
         factorization = cls(csr.shape[0], csr.shape[1], indptr, indices, csr.data)
         kind = factorization.refactor(csr.data)

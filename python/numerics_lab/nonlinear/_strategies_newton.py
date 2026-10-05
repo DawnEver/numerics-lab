@@ -96,7 +96,7 @@ class NewtonStrategy:
     Jacobian-free directional derivative of its own pipeline); this class owns everything else.
 
     CONVERGENCE IS JUDGED ON THE EQUATION, not on a proxy for it: the relative residual
-    ``||r(x_k)|| / max(||r(x_0)||, ||rhs||)`` (:func:`residual_reference`) AND the increment, both below ``rtol = rtol_energy_pct / 100``, through the one rule
+    ``||r(x_k)|| / max(||r(x_0)||, ||rhs||)`` (:func:`_residual_reference`) AND the increment, both below ``rtol = rtol_energy_pct / 100``, through the one rule
     :func:`_has_converged`. The energy change is still computed, for the log and for the
     stagnation break that stops a solve parked on its arithmetic floor.
 
