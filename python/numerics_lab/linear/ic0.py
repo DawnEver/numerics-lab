@@ -7,6 +7,12 @@ from scipy.sparse.linalg import LinearOperator, splu
 from motronics.gauss.linear.dirichlet import apply_dirichlet_csr
 from motronics.gauss.linear.gauge import constraint_rows
 
+__all__ = [
+    'IC0Operator',
+    'ic0_preconditioner',
+    'iccg_system',
+]
+
 
 def iccg_system(matrix, rhs, x0):
     """Exactly lift identity equations; never average nonsymmetric physical entries.

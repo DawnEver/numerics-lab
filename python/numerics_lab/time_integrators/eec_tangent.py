@@ -6,6 +6,10 @@ from dataclasses import dataclass
 
 import scipy.sparse as sp
 
+__all__ = [
+    'CycleTangentCSR',
+]
+
 
 @dataclass(frozen=True)
 class CycleTangentCSR:

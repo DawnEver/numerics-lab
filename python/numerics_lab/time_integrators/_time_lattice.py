@@ -5,6 +5,11 @@ from numbers import Real
 
 import numpy as np
 
+__all__ = [
+    'TimeLattice',
+    'adaptive_lattice',
+]
+
 
 @dataclass(frozen=True)
 class TimeLattice:

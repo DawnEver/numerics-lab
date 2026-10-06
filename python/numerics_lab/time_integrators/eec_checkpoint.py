@@ -5,6 +5,10 @@ from dataclasses import dataclass
 
 from motronics.gauss.time_integrators.eec_tangent import CycleTangentCSR
 
+__all__ = [
+    'EECCheckpointState',
+]
+
 
 def _finite(value):
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):

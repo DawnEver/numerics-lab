@@ -4,6 +4,11 @@ import numpy as np
 from scipy.linalg import eigh
 from scipy.sparse.linalg import eigsh
 
+__all__ = [
+    'generalized_modes',
+    'semidefinite_modes',
+]
+
 
 def generalized_modes(stiffness, mass, count, *, shift):
     """Return ascending mass-normalized modes; a shift targets, never changes, eigenvalues."""

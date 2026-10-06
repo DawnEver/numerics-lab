@@ -9,6 +9,15 @@ import numpy as np
 
 from motronics.contracts.spec.analysis_formulation import DerivativeWeights
 
+__all__ = [
+    'bdf2_boundary_moment',
+    'canonical_eec_study',
+    'explicit_error_correction',
+    'nonlinear_error_correction',
+    'periodic_converged',
+    'validate_eec_restart',
+]
+
 
 def canonical_eec_study(study, restart):
     """Resolve a declared uniform tick to its one original-clock representation.
