@@ -12,6 +12,20 @@ from motronics.contracts.converted import Converted
 from motronics.contracts.spec.analysis_formulation import HistoryProblem
 from motronics.gauss.time_integrators.eec_checkpoint import EECCheckpointState
 
+__all__ = [
+    'CheckpointContext',
+    'CheckpointHistory',
+    'EECCheckpointState',
+    'HistoryPresence',
+    'TransientCheckpoint',
+    'capture_history',
+    'model_digest',
+    'restore_history_checkpoint',
+    'validate_context_json',
+    'validate_history_json',
+    'validate_history_owner',
+]
+
 
 def _number(value):
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):

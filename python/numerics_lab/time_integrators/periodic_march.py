@@ -10,6 +10,8 @@ from motronics.gauss.time_integrators import integrate_transient
 from motronics.gauss.time_integrators.checkpoint import HistoryPresence
 from motronics.gauss.time_integrators.shooting import periodic_shooting
 
+__all__ = ['TransientShootingResult', 'shoot_transient_cycle']
+
 
 @dataclass(frozen=True)
 class TransientShootingResult:

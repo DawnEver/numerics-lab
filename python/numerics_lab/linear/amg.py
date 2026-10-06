@@ -11,6 +11,8 @@ import scipy.sparse as sp
 from scipy.linalg import cho_factor, cho_solve
 from scipy.sparse.linalg import LinearOperator
 
+__all__ = ['amg_preconditioner']
+
 
 def _aggregates(matrix):
     """Greedy strongest-neighbour pairs; unmatched rows form singleton aggregates."""

@@ -19,6 +19,9 @@ from motronics.gauss.time_integrators._forms import StepForm, _roundoff_floor, r
 from motronics.gauss.time_integrators.factor_reuse import FactorCache, apply_factor, factor_matrix
 from motronics.gauss.time_integrators.local_convergence import LocalIterationCheck
 
+__all__ = ['HELD_STALL_RATIO', 'HeldFactor', 'directional_line_search']
+
+
 #: The stall-polish's ratio threshold (MANUAL-627 (i)): a per-iteration residual ratio
 #: above this marks the direction stalled. Calibrated on the GaN bridge's toggle steps:
 #: the normal phase's ratios are ALL below 0.9, the stall's three-cycle (creep ~0.996,

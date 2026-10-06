@@ -17,6 +17,18 @@ from motronics.contracts.spec.analysis_formulation import DerivativeWeights, Res
 from motronics.gauss.linear import solve_linear_system
 from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint
 
+__all__ = [
+    'ITimeIntegrator',
+    'IntegratorState',
+    'StepForm',
+    'TransientSolution',
+    'bdf2_variable_form',
+    'residual_floor',
+    'residual_floor_of_magnitude',
+    'seeded_bdf2_state',
+]
+
+
 #: Safety factor on the estimated roundoff floor, DELIBERATELY the same 64 as the DC operating
 #: point's ``laplace.circuit.core.mna_solves._FLOOR_SAFETY``, and for the same stated reason: the
 #: estimate bounds the rounding error of ONE row sum, while the accumulated error over a row of

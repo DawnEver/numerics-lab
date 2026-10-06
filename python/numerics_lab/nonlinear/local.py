@@ -2,6 +2,8 @@
 
 import numpy as np
 
+__all__ = ['local_change', 'newton_linear_tolerance']
+
 
 def local_change(previous, current) -> float:
     """Worst relative change over independent field arrays (element axis first).

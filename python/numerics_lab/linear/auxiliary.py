@@ -4,6 +4,8 @@ import numpy as np
 from scipy.sparse import csc_matrix, csr_matrix
 from scipy.sparse.linalg import LinearOperator, splu
 
+__all__ = ['additive_auxiliary_preconditioner']
+
 
 def additive_auxiliary_preconditioner(matrix, transfer, scalar_matrix, *, scale):
     """Apply diag(A)^-1 + scale G S^-1 G.T; transpose deliberately is not conjugated."""
