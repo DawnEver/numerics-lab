@@ -57,6 +57,8 @@ class AssembledState:
         material_change: relative change of the IRREVERSIBLE material state this assembly's trial
             implies (`gauss.nonlinear.material_state`); ``0`` for a system whose materials are all
             reversible. The material term of :func:`_has_converged`.
+        local_values: snapshots of per-element fields, one array per independently
+            dimensioned quantity (B, voltage, current); Newton checks the worst element.
 
     """
 
@@ -405,21 +407,21 @@ DEFAULT_SOLVE_BUDGET_S = 500.0
 #: DECLARED, NOT DERIVED FROM MESH SIZE. The default above is priced by the TIER's arithmetic, not
 #: by a solve's cost; a budget that grew with the cell count would grow exactly where that bound is
 #: tightest, and its per-cell rate would be a property of whichever machine measured it.
-_RUN_SOLVE_BUDGET_S: float | None = None
+_RUN_SOLVE_BUDGET_S: dict[str, float | None] = {'seconds': None}
 
 
 def set_run_solve_budget_s(seconds: float | None) -> None:
     """Set the run's solve budget in seconds (> 0); ``None`` restores :data:`DEFAULT_SOLVE_BUDGET_S`."""
-    global _RUN_SOLVE_BUDGET_S
     if seconds is not None and not float(seconds) > 0.0:
         msg = f'a solve budget must be > 0 s, got {seconds!r} (a zero budget refuses the first call)'
         raise ValueError(msg)
-    _RUN_SOLVE_BUDGET_S = None if seconds is None else float(seconds)
+    _RUN_SOLVE_BUDGET_S['seconds'] = None if seconds is None else float(seconds)
 
 
 def run_solve_budget_s() -> float:
     """The budget a driver applies when its caller passes none: the run's override, else the default."""
-    return DEFAULT_SOLVE_BUDGET_S if _RUN_SOLVE_BUDGET_S is None else _RUN_SOLVE_BUDGET_S
+    held = _RUN_SOLVE_BUDGET_S['seconds']
+    return DEFAULT_SOLVE_BUDGET_S if held is None else held
 
 
 def with_time_budget(system, *, seconds: float | None, clock=None):

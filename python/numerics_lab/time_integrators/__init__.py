@@ -432,6 +432,10 @@ def integrate_transient(
             solution.checkpoint = _checkpoint_of(problem, state, h_prev, checkpoint_key, integrator.name)
         return solution
     n_steps = _full_fixed_steps(study)
+    # A SPAN THAT IS NOT A WHOLE NUMBER OF STEPS ends on one shorter step landing exactly on t1.
+    has_remainder = step_times is None and study.t1 - (study.t0 + n_steps * dt) > 1e-12 * max(
+        dt, abs(study.t1 - study.t0)
+    )
     solution = TransientSolution(times=[study.t0], states=[u0], state_rates=[], rate_state_overrides={})
     if eec_period is not None:
         solution.correction_model = (
@@ -444,7 +448,7 @@ def integrate_transient(
     targets = (
         step_times[1:]
         if step_times is not None
-        else [target_origin + (first_tick + k + 1) * dt for k in range(n_steps)]
+        else [target_origin + (first_tick + k + 1) * dt for k in range(n_steps)] + ([study.t1] if has_remainder else [])
     )
     if step_times is None and (not targets or study.t1 - targets[-1] > 1e-12 * max(dt, abs(study.t1 - study.t0))):
         targets.append(study.t1)
@@ -500,7 +504,7 @@ def integrate_transient(
         )
 
     for t_new in targets:
-        dt = t_new - state.t
+        dt = study.dt if step_times is None and not (has_remainder and t_new == targets[-1]) else t_new - state.t
         if integrator.name == 'bdf2' and len(state.us) >= 2 and dt != previous_dt:
             form = _bdf2_variable_form(state, dt, previous_dt, t_new)
         else:
