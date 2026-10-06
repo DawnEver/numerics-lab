@@ -17,6 +17,8 @@ __all__ = [
     'RawStateSystem',
     'WrappedNonlinearSystem',
     'increment_ratio',
+    'run_solve_budget_s',
+    'set_run_solve_budget_s',
     'unwrap_system',
     'with_time_budget',
 ]
@@ -394,6 +396,30 @@ class _TimeBudgetedSystem:
 #: strictly more information than none. A caller that knows its solve is genuinely long passes its
 #: own ``seconds``.
 DEFAULT_SOLVE_BUDGET_S = 500.0
+
+#: The run-scoped override of :data:`DEFAULT_SOLVE_BUDGET_S`, or ``None`` for the default. A
+#: PROCESS property, like the FEMM COM ceiling: the CLI boundary resolves ``--solve-budget`` over the
+#: case's ``[solve] budget`` once per run (`motronics.cli.target._resolve_solve_budget`), and every
+#: driver not handed its own ``seconds`` reads :func:`run_solve_budget_s`.
+#:
+#: DECLARED, NOT DERIVED FROM MESH SIZE. The default above is priced by the TIER's arithmetic, not
+#: by a solve's cost; a budget that grew with the cell count would grow exactly where that bound is
+#: tightest, and its per-cell rate would be a property of whichever machine measured it.
+_RUN_SOLVE_BUDGET_S: float | None = None
+
+
+def set_run_solve_budget_s(seconds: float | None) -> None:
+    """Set the run's solve budget in seconds (> 0); ``None`` restores :data:`DEFAULT_SOLVE_BUDGET_S`."""
+    global _RUN_SOLVE_BUDGET_S
+    if seconds is not None and not float(seconds) > 0.0:
+        msg = f'a solve budget must be > 0 s, got {seconds!r} (a zero budget refuses the first call)'
+        raise ValueError(msg)
+    _RUN_SOLVE_BUDGET_S = None if seconds is None else float(seconds)
+
+
+def run_solve_budget_s() -> float:
+    """The budget a driver applies when its caller passes none: the run's override, else the default."""
+    return DEFAULT_SOLVE_BUDGET_S if _RUN_SOLVE_BUDGET_S is None else _RUN_SOLVE_BUDGET_S
 
 
 def with_time_budget(system, *, seconds: float | None, clock=None):
