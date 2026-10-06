@@ -1,6 +1,6 @@
 """The native direct factorisation behind the ``direct`` backend -- faer, pattern-cached.
 
-``motronics_native.gauss.DirectFactorization`` (``rust/crates/gauss/src/linear/direct/mod.rs``) is a
+``motronics_native.gauss.DirectFactorization`` (``rust/crates/gauss/src/linear/direct.rs``) is a
 supernodal LU, or a supernodal Cholesky when the operator is verified EXACTLY symmetric, whose
 symbolic analysis is paid once per sparsity pattern and whose numeric storage is reused. A Newton
 loop reassembles one mesh, so its pattern is constant and only the values move; this module holds
