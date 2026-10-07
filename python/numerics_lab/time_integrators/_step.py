@@ -7,6 +7,7 @@ this step is the unit of.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import numpy as np
 import scipy.sparse as sp
@@ -20,12 +21,14 @@ from motronics.contracts.spec.analysis_formulation import (
     SemiDiscreteProblem,
 )
 from motronics.gauss.linear import reject_nonfinite_solution
-from motronics.gauss.time_integrators._forms import StepForm, residual_floor
+from motronics.gauss.time_integrators._forms import IntegratorState, StepForm, residual_floor
 from motronics.gauss.time_integrators.factor_reuse import FactorCache, apply_factor, factor_matrix
 
 __all__ = [
     'HELD_STALL_RATIO',
     'HeldFactor',
+    'StepOutcome',
+    'take_step',
 ]
 
 
@@ -466,3 +469,40 @@ def _solve_step(
             residual = residual_g
         iterations += max(2, max_newton) * len(gmin_stages)
     return u, converged, iterations, residual, on_floor
+
+
+@dataclass(frozen=True)
+class StepOutcome:
+    """One whole step of a scheme, every stage solved: the new history and the step's verdict.
+
+    ``converged`` holds only if EVERY stage converged; ``residual`` is the worst stage's, and
+    ``rate`` is the final stage's ``u_dot`` -- the rate the trajectory point was solved with.
+    """
+
+    state: IntegratorState
+    u: NDArray[np.floating]
+    converged: bool
+    iterations: int
+    residual: float
+    on_floor: bool
+    rate: NDArray[np.floating]
+
+
+def take_step(problem, integrator, state: IntegratorState, dt: float, t_new: float, **solve_kw) -> StepOutcome:
+    """Advance ``state`` by ``dt`` to ``t_new`` through every stage of ``integrator``.
+
+    The ONE place a marcher turns a scheme into solves: ``prepare`` -> :func:`_solve_step` ->
+    ``advance``, ``integrator.stages`` times. A multi-stage scheme's intermediate state never leaves
+    this function, so every marcher, probe and landing treats a step as one opaque move.
+    """
+    converged, on_floor, iterations, worst = True, False, 0, 0.0
+    u = state.last_u
+    form = None
+    for _ in range(integrator.stages):
+        form = integrator.prepare(state, dt, t_new)
+        u, ok, its, residual, floor = _solve_step(problem, form, state.last_u, **solve_kw)
+        converged, on_floor = converged and ok, on_floor or floor
+        iterations, worst = iterations + its, max(worst, residual)
+        state = integrator.advance(state, u, dt, t_new)
+    assert form is not None
+    return StepOutcome(state, u, converged, iterations, worst, on_floor, form.u_dot(u))

@@ -217,8 +217,8 @@ def test_an_event_inside_a_quadratic_ramp_costs_no_accuracy_at_all() -> None:
     study = TransientStudy(t0=0.0, t1=2.0, dt=0.3, integrator=IntegratorKind.BDF2)
     # The form itself, on an exact history, steps a quadratic exactly (direct check, u(0.75)).
     from motronics.gauss.time_integrators._forms import IntegratorState
+    from motronics.gauss.time_integrators._integrators import _bdf2_variable_form
     from motronics.gauss.time_integrators._step import _solve_step
-    from motronics.gauss.time_integrators.events import _bdf2_variable_form
 
     state = IntegratorState(us=[np.array([0.045]), np.array([0.18])], t=0.6)
     form = _bdf2_variable_form(state, 0.15, 0.3, 0.75)

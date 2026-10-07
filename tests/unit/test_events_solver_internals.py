@@ -19,6 +19,7 @@ import pytest
 from tests.unit.gauss._helpers import _RampWithToggle
 
 from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
+from motronics.gauss.time_integrators import _step as _step_mod
 from motronics.gauss.time_integrators.events import integrate_transient_with_events
 
 
@@ -32,8 +33,8 @@ def test_the_relative_tolerance_labels_a_scale_stalled_step_converged() -> None:
     tol_rel = 1e-4, exhausted without it.
     """
     from motronics.gauss.time_integrators._forms import IntegratorState
+    from motronics.gauss.time_integrators._integrators import _bdf2_variable_form
     from motronics.gauss.time_integrators._step import _solve_step
-    from motronics.gauss.time_integrators.events import _bdf2_variable_form
 
     class _Stalled:
         """A residual that reads 1e3 on the first evaluation and 1e-1 forever after --
@@ -80,8 +81,8 @@ def test_the_backtracking_line_search_halves_an_overshooting_step() -> None:
     the divergence runs away.
     """
     from motronics.gauss.time_integrators._forms import IntegratorState
+    from motronics.gauss.time_integrators._integrators import _bdf2_variable_form
     from motronics.gauss.time_integrators._step import _solve_step
-    from motronics.gauss.time_integrators.events import _bdf2_variable_form
 
     class _Quadratic:
         """f(u) = u^2 with the solve's 10x OVERSTEP: the full step u: 1 -> -9 RAISES the
@@ -143,8 +144,8 @@ def test_the_stall_polish_switches_to_the_tangent_and_converges() -> None:
     at the ~1e-3-relative floor vs 16 iterations to 4e-5).
     """
     from motronics.gauss.time_integrators._forms import IntegratorState
+    from motronics.gauss.time_integrators._integrators import _bdf2_variable_form
     from motronics.gauss.time_integrators._step import _solve_step
-    from motronics.gauss.time_integrators.events import _bdf2_variable_form
 
     class _CouplingChordBase:
         """Two switches coupled through G: the ON channel's saturation
@@ -217,8 +218,8 @@ def test_a_polish_whose_step_the_line_search_cannot_accept_hands_back_to_the_new
     that was already on its way finishes.
     """
     from motronics.gauss.time_integrators._forms import IntegratorState
+    from motronics.gauss.time_integrators._integrators import _bdf2_variable_form
     from motronics.gauss.time_integrators._step import _solve_step
-    from motronics.gauss.time_integrators.events import _bdf2_variable_form
 
     class _SlowFarField:
         #: The declared capability `AlternativeJacobianProblem` reads, so the polish can engage.
@@ -294,7 +295,7 @@ def test_a_discarded_bisection_probe_does_not_count_as_a_nonconverged_STEP(monke
     problem = _NonlinearRampWithToggle(level=0.35)
     study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
     events = import_module('motronics.gauss.time_integrators.events')
-    solve_step, locate = events._solve_step, events._locate_bracket
+    solve_step, locate = _step_mod._solve_step, events._locate_bracket
     discarded_probe = False
     probe_failures = []
 
@@ -321,7 +322,7 @@ def test_a_discarded_bisection_probe_does_not_count_as_a_nonconverged_STEP(monke
 
         return locate(lo_t, g_lo, hi_t, g_hi, failed_probe, tol=tol)
 
-    monkeypatch.setattr(events, '_solve_step', classified_solve)
+    monkeypatch.setattr(_step_mod, '_solve_step', classified_solve)
     monkeypatch.setattr(events, '_locate_bracket', classified_locator)
     sol = integrate_transient_with_events(
         problem,

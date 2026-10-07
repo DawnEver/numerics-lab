@@ -8,6 +8,7 @@ import pytest
 from tests.unit.gauss._helpers import _RampWithToggle
 
 from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
+from motronics.gauss.time_integrators import _step as _step_mod
 
 
 def test_rollback_retracts_only_discarded_residual_side_snapshots():
@@ -19,7 +20,7 @@ def test_rollback_retracts_only_discarded_residual_side_snapshots():
         state_rates=[np.array([1.0]), np.array([2.0])],
         rate_state_overrides={0: np.array([1.0]), 1: np.array([3.0])},
     )
-    checkpoint = events._Checkpoint(state=state, prev_dt=1.0, n_points=2)
+    checkpoint = events._Checkpoint(state=state, n_points=2)
     events._rollback(checkpoint, solved)
     assert solved.times == [0.0, 1.0]
     assert solved.rate_state_overrides is not None
@@ -83,7 +84,7 @@ def test_coincident_observers_reuse_exact_trial_but_preserve_states_rates_and_ca
         return solved, callbacks
 
     reference, _callbacks = march(1)
-    original_step, original_locator = events._solve_step, events._locate_bracket
+    original_step, original_locator = _step_mod._solve_step, events._locate_bracket
     inside_probe = False
     requests, solves = [], []
 
@@ -105,7 +106,7 @@ def test_coincident_observers_reuse_exact_trial_but_preserve_states_rates_and_ca
         return original_step(problem, form, guess, **kwargs)
 
     monkeypatch.setattr(events, '_locate_bracket', locate)
-    monkeypatch.setattr(events, '_solve_step', solve_step)
+    monkeypatch.setattr(_step_mod, '_solve_step', solve_step)
     monkeypatch.setattr(events, '_EVENT_TRIAL_CACHE_BYTES', cache_bytes)
     actual, callbacks = march(6)
     assert actual.converged
@@ -123,7 +124,7 @@ def test_a_failed_trial_is_retried_not_exact_memoized(monkeypatch):
     events = import_module('motronics.gauss.time_integrators.events')
     problem = _RampWithToggle(0.3)
     study = TransientStudy(t0=0.0, t1=0.4, dt=0.4, integrator=IntegratorKind.BDF1)
-    original_step, original_locator = events._solve_step, events._locate_bracket
+    original_step, original_locator = _step_mod._solve_step, events._locate_bracket
     inside_probe = False
     failed_time = None
     attempts = Counter()
@@ -152,7 +153,7 @@ def test_a_failed_trial_is_retried_not_exact_memoized(monkeypatch):
         return result
 
     monkeypatch.setattr(events, '_locate_bracket', locate)
-    monkeypatch.setattr(events, '_solve_step', solve_step)
+    monkeypatch.setattr(_step_mod, '_solve_step', solve_step)
     solved = events.integrate_transient_with_events(
         problem,
         study,

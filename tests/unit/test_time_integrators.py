@@ -89,34 +89,18 @@ def test_the_public_march_uses_the_single_step_owner_and_canonical_state(monkeyp
     assert result.converged
 
 
-def test_the_existing_public_step_patch_seam_still_drives_the_march(monkeypatch):
-    calls = []
-    original = time_integrators._solve_step
-
-    def observe(*args, **kwargs):
-        calls.append(args[2].copy())
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(time_integrators, '_solve_step', observe)
-    result = integrate_transient(DecayProblem(1.0), TransientStudy(t0=0.0, t1=0.2, dt=0.1), np.array([1.0]))
-    assert len(calls) == 2
-    np.testing.assert_array_equal(calls[0], [1.0])
-    np.testing.assert_array_equal(calls[1], result.states[1])
-
-
-@pytest.mark.parametrize('patch_target', [_step, events])
-def test_event_marches_reach_the_same_step_owner_and_keep_the_event_patch_seam(monkeypatch, patch_target):
+def test_event_marches_reach_the_same_step_owner(monkeypatch):
     study = TransientStudy(t0=0.0, t1=0.2, dt=0.1, integrator=IntegratorKind.BDF2)
     kwargs = {'time_breakpoints': [0.15]}
     expected = events.integrate_transient_with_events(DecayProblem(1.0), study, np.array([1.0]), **kwargs)
     calls = []
-    original = patch_target._solve_step
+    original = _step._solve_step
 
     def observe(*args, **options):
         calls.append(args[1])
         return original(*args, **options)
 
-    monkeypatch.setattr(patch_target, '_solve_step', observe)
+    monkeypatch.setattr(_step, '_solve_step', observe)
     actual = events.integrate_transient_with_events(DecayProblem(1.0), study, np.array([1.0]), **kwargs)
     assert len(calls) == 3
     assert all(isinstance(form, _forms.StepForm) for form in calls)

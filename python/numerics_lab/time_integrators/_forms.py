@@ -100,13 +100,31 @@ class IntegratorState:
 
     ``us`` holds past state vectors most-recent-LAST (BDF2 reads the last two); ``v`` / ``a`` are
     the velocity ``u_dot`` and acceleration ``u_ddot`` at the last step (the second-order schemes
-    propagate them, the first-order schemes leave them ``None``). ``t`` is the last step's time.
+    and the trapezoid propagate them, BDF leaves them ``None``). ``t`` is the last step's time.
+
+    ``h`` is the spacing of the last step (``None`` right after a start/restart): it IS history,
+    because a multistep form differentiates against it, so it lives here and is checkpointed and
+    rolled back with the vectors rather than tracked by each marcher. ``stage`` is the next stage
+    of a multi-stage scheme (TR-BDF2); single-stage schemes keep it 0.
     """
 
     us: list[NDArray[np.floating]]
     t: float
     v: NDArray[np.floating] | None = None
     a: NDArray[np.floating] | None = None
+    h: float | None = None
+    stage: int = 0
+
+    def copy(self) -> IntegratorState:
+        """A deep copy -- a checkpoint must never alias the arrays a probe step goes on to touch."""
+        return IntegratorState(
+            us=[np.array(u, dtype=float, copy=True) for u in self.us],
+            t=self.t,
+            v=None if self.v is None else np.array(self.v, dtype=float, copy=True),
+            a=None if self.a is None else np.array(self.a, dtype=float, copy=True),
+            h=self.h,
+            stage=self.stage,
+        )
 
     @property
     def last_u(self) -> NDArray[np.floating]:
@@ -152,6 +170,12 @@ class ITimeIntegrator(Protocol):
 
     name: str
     order: int
+    #: Implicit solves per step (TR-BDF2: 2). The marcher runs ``prepare``/solve/``advance`` this
+    #: many times per step; the intermediate stage states never join the trajectory.
+    stages: int
+    #: The local-truncation-error constant ``C`` in ``LTE = C h^(order+1) u^(order+1)``: what the
+    #: step-size controller scales its predictor-corrector difference by.
+    error_constant: float
 
     def weights(self, dt: float) -> DerivativeWeights: ...
 
@@ -168,6 +192,10 @@ class ITimeIntegrator(Protocol):
     def advance(
         self, state: IntegratorState, u_new: NDArray[np.floating], dt: float, t_new: float
     ) -> IntegratorState: ...
+
+    def restart(self, state: IntegratorState, u: NDArray[np.floating], t: float) -> IntegratorState:
+        """Drop the derivative history at a discontinuity (an event), keeping what stays continuous."""
+        ...
 
 
 @dataclass

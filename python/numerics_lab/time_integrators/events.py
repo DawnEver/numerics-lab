@@ -64,14 +64,12 @@ from motronics.contracts.spec.analysis_formulation import FactorReusableProblem
 from motronics.contracts.spec.study_spec import TransientStudy
 from motronics.gauss.time_integrators import (
     FactorCache,
-    _bdf2_variable_form,
     _default_solve,
     _full_fixed_steps,
-    _solve_step,
     get_integrator,
 )
 from motronics.gauss.time_integrators._forms import IntegratorState, TransientSolution
-from motronics.gauss.time_integrators._step import HeldFactor
+from motronics.gauss.time_integrators._step import HeldFactor, take_step
 
 logger = logging.getLogger(__name__)
 
@@ -101,24 +99,19 @@ class EventfulTransientSolution(TransientSolution):
 class _Checkpoint:
     """The march state at an instant, deep enough that probing past it cannot alias into it.
 
-    ``prev_dt`` is part of the history (BDF2's weights read the previous spacing), so it is
-    checkpointed and restored with the state vectors.
+    The history spacing rides :class:`IntegratorState` (``h``), so the copy carries it.
     """
 
     state: IntegratorState
-    prev_dt: float | None
     n_points: int
 
 
-def _take_checkpoint(state: IntegratorState, prev_dt: float | None, solution: TransientSolution) -> _Checkpoint:
+def _take_checkpoint(state: IntegratorState, solution: TransientSolution) -> _Checkpoint:
     """Snapshot the integrator history (arrays COPIED -- a rollback must not restore an alias)."""
-    us = [np.array(u, dtype=float, copy=True) for u in state.us]
-    v = None if state.v is None else np.array(state.v, dtype=float, copy=True)
-    a = None if state.a is None else np.array(state.a, dtype=float, copy=True)
-    return _Checkpoint(state=IntegratorState(us=us, t=state.t, v=v, a=a), prev_dt=prev_dt, n_points=len(solution.times))
+    return _Checkpoint(state=state.copy(), n_points=len(solution.times))
 
 
-def _rollback(checkpoint: _Checkpoint, solution: TransientSolution) -> tuple[IntegratorState, float | None]:
+def _rollback(checkpoint: _Checkpoint, solution: TransientSolution) -> IntegratorState:
     """Retract every point appended past the checkpoint; hand back its history (re-copied) + spacing.
 
     A retracted point is no longer a step OF the solution, so any exhaustion promoted to
@@ -139,8 +132,7 @@ def _rollback(checkpoint: _Checkpoint, solution: TransientSolution) -> tuple[Int
         for index in tuple(solution.rate_state_overrides):
             if index >= max(0, checkpoint.n_points - 1):
                 del solution.rate_state_overrides[index]
-    restored = _take_checkpoint(checkpoint.state, checkpoint.prev_dt, solution)
-    return restored.state, restored.prev_dt
+    return checkpoint.state.copy()
 
 
 def _sign(value: float) -> bool:
@@ -293,7 +285,6 @@ def integrate_transient_with_events(
     bracket_tol = dt * 1.0e-6 if time_tol is None else time_tol
     solution = EventfulTransientSolution(times=[study.t0], states=[u0], state_rates=[], rate_state_overrides={})
     g_prev = [float(g(u0, study.t0)) for g in event_fns]
-    prev_dt: float | None = None
     breakpoints = tuple(time_breakpoints)
     for i, bp in enumerate(breakpoints):
         if not study.t0 < bp <= study.t1:
@@ -326,21 +317,14 @@ def integrate_transient_with_events(
     latest_failed: dict[float, bool] = {}
 
     def step_from(
-        from_state: IntegratorState, from_prev_dt: float | None, dt_step: float, t_new: float
+        from_state: IntegratorState, dt_step: float, t_new: float
     ) -> tuple[IntegratorState, NDArray, bool, NDArray]:
-        if (
-            integrator.name == 'bdf2'
-            and len(from_state.us) >= 2
-            and from_prev_dt is not None
-            and from_prev_dt != dt_step
-        ):
-            form = _bdf2_variable_form(from_state, dt_step, from_prev_dt, t_new)
-        else:
-            form = integrator.prepare(from_state, dt_step, t_new)
-        u_new, converged, _iterations, residual, on_floor = _solve_step(
+        out = take_step(
             problem,
-            form,
-            from_state.last_u,
+            integrator,
+            from_state,
+            dt_step,
+            t_new,
             solve=solve,
             max_newton=max_newton,
             tol=tol,
@@ -351,6 +335,7 @@ def integrate_transient_with_events(
             gmin_stages=gmin_stages,
             held=held,
         )
+        converged, residual, on_floor = out.converged, out.residual, out.on_floor
         # The convergence contract rides the eventful march too: an exhausted step is labelled on
         # the solution, never silent. But WHICH list it belongs in is not knowable here -- this
         # helper is called both for steps that will land and for bisection probes the rollback
@@ -367,7 +352,7 @@ def integrate_transient_with_events(
         if not converged:
             solution.nonconverged_probe_times.append(t_new)
         latest_failed[t_new] = not converged
-        return integrator.advance(from_state, u_new, dt_step, t_new), u_new, converged, form.u_dot(u_new)
+        return out.state, out.u, converged, out.rate
 
     def _commit(t_new: float, u_new: NDArray, rate: NDArray) -> None:
         """Append a point to the trajectory, promoting its exhaustion label from probe to landed."""
@@ -430,11 +415,11 @@ def integrate_transient_with_events(
                 t_target = breakpoints[bp_index]
                 pending_dt = t_target - state.t
                 resume_from = t_target + dt  # the uniform grid continues from the breakpoint
-            checkpoint = _take_checkpoint(state, prev_dt, solution)
+            checkpoint = _take_checkpoint(state, solution)
             t_from = state.t
             step_dt = pending_dt
             t_step = t_target
-            probe_state, u_probe, step_ok, probe_rate = step_from(state, prev_dt, step_dt, t_step)
+            probe_state, u_probe, step_ok, probe_rate = step_from(state, step_dt, t_step)
             if adaptive and not step_ok:
                 # REJECT-HALVE-RETRY, the contract `integrate_transient(adaptive=True)` has carried
                 # since W6 and the eventful march never did: without it the caller accepts `u` from
@@ -447,7 +432,7 @@ def integrate_transient_with_events(
                 while not step_ok and 0.5 * step_dt >= floor:
                     step_dt *= 0.5
                     t_step = t_from + step_dt
-                    probe_state, u_probe, step_ok, probe_rate = step_from(state, prev_dt, step_dt, t_step)
+                    probe_state, u_probe, step_ok, probe_rate = step_from(state, step_dt, t_step)
             g_new = [float(g(u_probe, t_step)) for g in event_fns]
             crossed = [
                 i
@@ -463,10 +448,9 @@ def integrate_transient_with_events(
                         # under-resolved the fast dynamics; the two half-steps then replace it.
                         h2 = 0.5 * step_dt
                         t_mid = t_from + h2
-                        cs, cd = checkpoint.state, checkpoint.prev_dt
-                        mid_state, u_mid, mid_ok, mid_rate = step_from(cs, cd, h2, t_mid)
+                        mid_state, u_mid, mid_ok, mid_rate = step_from(checkpoint.state.copy(), h2, t_mid)
                         if mid_ok:
-                            half_state, u_half, half_ok, half_rate = step_from(mid_state, h2, h2, t_step)
+                            half_state, u_half, half_ok, half_rate = step_from(mid_state, h2, t_step)
                             if half_ok:
                                 gm = [float(g(u_mid, t_mid)) for g in event_fns]
                                 gh = [float(g(u_half, t_step)) for g in event_fns]
@@ -485,7 +469,6 @@ def integrate_transient_with_events(
                                     if float(np.max(np.abs(u_half - u_probe))) > refine * scale:
                                         # Accept the two half-steps instead of the full step.
                                         state = half_state
-                                        prev_dt = h2
                                         _commit(t_mid, u_mid, mid_rate)
                                         _commit(t_step, u_half, half_rate)
                                         g_prev = gh
@@ -494,7 +477,6 @@ def integrate_transient_with_events(
                                             continue
                                         break
                 state = probe_state
-                prev_dt = step_dt
                 _commit(t_step, u_probe, probe_rate)
                 g_prev = g_new
                 if t_step < t_target - bracket_tol:
@@ -533,8 +515,8 @@ def integrate_transient_with_events(
                         if mid_t in trials:
                             u_mid, ok, _rate = trials[mid_t]
                         else:
-                            trial_state, trial_prev_dt = _rollback(checkpoint, solution)
-                            _ps, u_mid, ok, _rate = step_from(trial_state, trial_prev_dt, mid_t - t_from, mid_t)
+                            trial_state = _rollback(checkpoint, solution)
+                            _ps, u_mid, ok, _rate = step_from(trial_state, mid_t - t_from, mid_t)
                             size = u_mid.nbytes + _rate.nbytes
                             if (
                                 ok
@@ -578,7 +560,6 @@ def integrate_transient_with_events(
             candidates = [c for c in candidates if c[0] - last_fired.get(c[1], -np.inf) > bracket_tol]
             if not candidates:
                 state = probe_state
-                prev_dt = step_dt
                 _commit(t_step, u_probe, probe_rate)
                 g_prev = g_new
                 if t_step < t_target - bracket_tol:
@@ -587,9 +568,9 @@ def integrate_transient_with_events(
                 break
             t_star = min(c[0] for c in candidates)
             simultaneous = [c for c in candidates if c[0] - t_star <= bracket_tol]
-            state, prev_dt = _rollback(checkpoint, solution)
+            state = _rollback(checkpoint, solution)
             if t_star > t_from:  # land the march exactly on the event
-                state, u_star, landed, landed_rate = step_from(state, prev_dt, t_star - t_from, t_star)
+                state, u_star, landed, landed_rate = step_from(state, t_star - t_from, t_star)
                 if not landed:
                     msg = (
                         f'event landing at t={t_star:g} did not converge; its state cannot '
@@ -623,8 +604,7 @@ def integrate_transient_with_events(
             # history, so the first post-event step must not read it (see the module docstring for
             # the kink-rounding measurement). The landing step's v/a carry over for second-order
             # integrators; for BDF they are None and the restart is a plain bootstrap.
-            state = integrator.start(u_star, t_star, state.v, state.a)
-            prev_dt = None
+            state = integrator.restart(state, u_star, t_star)
             g_prev = [float(g(u_star, t_star)) for g in event_fns]
             pending_dt = t_target - t_star  # the genuine remainder of this cell
             events_this_cell += 1

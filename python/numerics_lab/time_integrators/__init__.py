@@ -30,21 +30,18 @@ mesh, no material, no solver.
 from __future__ import annotations
 
 import logging
-from functools import wraps
 
 import numpy as np
 import scipy.sparse as sp
 from numpy.typing import NDArray
 
 from motronics.contracts.spec.analysis_formulation import (
-    DerivativeWeights,
     FactorReusableProblem,
     HistoryProblem,
     SemiDiscreteProblem,
 )
 from motronics.contracts.spec.study_spec import TransientStudy
 from motronics.gauss.linear import solve_linear_system
-from motronics.gauss.time_integrators import _step
 from motronics.gauss.time_integrators._forms import IntegratorState, StepForm, TransientSolution
 from motronics.gauss.time_integrators._integrators import (
     INTEGRATOR_REGISTRY,
@@ -52,9 +49,11 @@ from motronics.gauss.time_integrators._integrators import (
     BDF2Integrator,
     GeneralizedAlphaIntegrator,
     NewmarkIntegrator,
+    TrapezoidIntegrator,
+    TRBDF2Integrator,
     get_integrator,
 )
-from motronics.gauss.time_integrators._step import HeldFactor, directional_line_search
+from motronics.gauss.time_integrators._step import HeldFactor, directional_line_search, take_step
 from motronics.gauss.time_integrators.factor_reuse import FactorCache
 
 logger = logging.getLogger(__name__)
@@ -66,8 +65,12 @@ __all__ = [
     'BDF2Integrator',
     'FactorCache',
     'GeneralizedAlphaIntegrator',
+    'IntegratorState',
     'NewmarkIntegrator',
-    'bdf2_variable_form',
+    'StepForm',
+    'TRBDF2Integrator',
+    'TransientSolution',
+    'TrapezoidIntegrator',
     'directional_line_search',
     'get_integrator',
     'integrate_transient',
@@ -81,28 +84,6 @@ def _full_fixed_steps(study: TransientStudy) -> int:
     return nearest if abs(ratio - nearest) <= 1e-10 else int(np.floor(ratio))
 
 
-def _bdf2_variable_form(state: IntegratorState, dt: float, h: float, t_new: float) -> StepForm:
-    """The variable-spacing BDF2 step form; ``h`` is the previous step's size.
-
-    Fixed-weight BDF2 assumes uniform history spacing; a step whose size differs from its
-    history's spacing needs the derivative of the quadratic through the unevenly spaced
-    points (the events module docstring names the O(1) wrong-equation trap this closes).
-    """
-    u_n, u_nm1 = state.us[-1], state.us[-2]
-    return StepForm(
-        weights=DerivativeWeights(alpha0=1.0, alpha1=(2.0 * dt + h) / (dt * (dt + h))),
-        h_u=np.zeros_like(u_n),
-        h_dot=-(dt + h) / (dt * h) * u_n + dt / (h * (dt + h)) * u_nm1,
-        h_ddot=np.zeros_like(u_n),
-        t_eval=t_new,
-    )
-
-
-#: The public spelling of the variable-step BDF2 form, for a CHECK that must replay the march's own
-#: weights (`hamilton.coupling.terminal_balance`). One function, two names, never two formulas.
-bdf2_variable_form = _bdf2_variable_form
-
-
 def _default_solve(matrix: object, rhs: NDArray[np.floating]) -> NDArray[np.floating]:
     """Solve ``matrix @ x = rhs`` for a dense ndarray or a scipy-sparse jacobian (physics-blind)."""
     b = np.asarray(rhs, dtype=float)
@@ -112,12 +93,6 @@ def _default_solve(matrix: object, rhs: NDArray[np.floating]) -> NDArray[np.floa
     if m.ndim == 0:  # scalar jacobian (1-DOF problem written as a plain number)
         return b / float(m)
     return np.linalg.solve(m, b)
-
-
-@wraps(_step._solve_step)
-def _solve_step(*args, **kwargs):
-    """The package's step seam; the implicit algorithm has one owner in ``_step``."""
-    return _step._solve_step(*args, **kwargs)
 
 
 def integrate_transient(
@@ -184,25 +159,12 @@ def integrate_transient(
         while state.t < t_end - 1e-14:
             h = min(h, t_end - state.t)
             t_new = state.t + h
-            # The variable-spacing BDF2 form whenever the step differs from the history's
-            # spacing: the uniform prepare would differentiate against the WRONG history
-            # (measured 2026-08-07: the first retry after a rejection was off by |du|, and
-            # the controller spun at the floor chasing a phantom error).
-            if len(state.us) >= 2 and h != h_prev:
-                form = _bdf2_variable_form(state, h, h_prev, t_new)
-            else:
-                form = integrator.prepare(state, h, t_new)
-            # RETIRED 2026-09-12: this call used to raise the bar to ``max(tol, 1e-10)`` for the
-            # adaptive march ALONE, on the correct diagnosis that "at the tiny steps the variable
-            # form's history offsets cancel at the 1/h scale, so the residual's noise floor is
-            # ~eps*u/h". The diagnosis was right and the remedy was a NUMBER -- right at h=1e-6,
-            # wrong at h=1e-9, and blind to the supply besides. :func:`residual_floor` IS that
-            # noise floor computed, and ``|J|`` carries the 1/h weights, so the same statement now
-            # holds at every h and every voltage AND on the fixed-grid path, which never had it.
-            u_new, converged, _it, residual, on_floor = _solve_step(
+            out = take_step(
                 problem,
-                form,
-                state.last_u,
+                integrator,
+                state,
+                h,
+                t_new,
                 solve=solve,
                 max_newton=max_newton,
                 tol=tol,
@@ -213,6 +175,7 @@ def integrate_transient(
                 gmin_stages=gmin_stages,
                 held=held,
             )
+            u_new, converged, residual, on_floor = out.u, out.converged, out.residual, out.on_floor
             # The LTE: |u_new - u_extrap| where u_extrap is the linear continuation from the
             # last two states, SCALED by the spacing ratio h/h_prev -- the naive 2u1-u0 form
             # assumes h == h_prev and overstates the error by |du|*|1 - h/h_prev| on the
@@ -238,11 +201,11 @@ def integrate_transient(
                     # recorded against exactly one of the two lists, because `on_floor` is only
                     # ever set where the floor MADE the verdict converged.
                     solution.floor_converged_times.append(t_new)
-                state = integrator.advance(state, u_new, h, t_new)
+                state = out.state
                 solution.times.append(t_new)
                 solution.states.append(u_new)
                 assert solution.state_rates is not None
-                solution.state_rates.append(form.u_dot(u_new))
+                solution.state_rates.append(out.rate)
                 if isinstance(problem, HistoryProblem):
                     problem.commit_history(u_new, t_new)
                 h_prev = h
@@ -260,14 +223,12 @@ def integrate_transient(
         final_partial = k == n_full
         t_new = study.t1 if final_partial else study.t0 + (k + 1) * dt
         step_dt = t_new - state.t if final_partial else dt
-        if final_partial and integrator.name == 'bdf2' and len(state.us) >= 2:
-            form = _bdf2_variable_form(state, step_dt, dt, t_new)
-        else:
-            form = integrator.prepare(state, step_dt, t_new)
-        u_new, converged, _iterations, residual, on_floor = _solve_step(
+        out = take_step(
             problem,
-            form,
-            state.last_u,
+            integrator,
+            state,
+            step_dt,
+            t_new,
             solve=solve,
             max_newton=max_newton,
             tol=tol,
@@ -279,6 +240,7 @@ def integrate_transient(
             gmin_stages=gmin_stages,
             held=held,
         )
+        u_new, converged, residual, on_floor = out.u, out.converged, out.residual, out.on_floor
         solution.worst_step_residual = max(solution.worst_step_residual, residual)
         if on_floor:
             solution.floor_converged_times.append(t_new)
@@ -296,11 +258,11 @@ def integrate_transient(
                 f'{residual:.3e}',
                 f'{tol:.3e}',
             )
-        state = integrator.advance(state, u_new, step_dt, t_new)
+        state = out.state
         solution.times.append(t_new)
         solution.states.append(u_new)
         assert solution.state_rates is not None
-        solution.state_rates.append(form.u_dot(u_new))
+        solution.state_rates.append(out.rate)
         # THE STEP JOINED THE TRAJECTORY, so its material history is the one the next step starts
         # from -- including a step labelled non-converged: the march continues from `u_new`, and a
         # history left at the previous step would be a trajectory the material never followed.
