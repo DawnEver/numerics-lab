@@ -12,7 +12,7 @@ precision it carries an error of order ``eps * ||A|| ||x||``, so the move cannot
 1e-6 bar, and every solve above it was refused as "singular / rank-deficient" while holding an
 answer good to six digits.
 
-FOUND 2026-09-16 on `spm_ferrari_luce_rear --scope full --chart cartesian_3d --select fea,tet` at
+FOUND 2026-09-16 on `spm_ferrari_luce_rear --scope full --set solve.chart=cartesian_3d --select fea,tet` at
 3.0 mm: an n=207104 H(curl) magnetostatic solve refused at refinement = **1.635e-06**, i.e. 1.6x
 the bar -- against the committed singular plant's 4.7 and the well-posed sweep's 1e-13. A system
 that is genuinely rank-deficient does not land at 1.6x. The repair had run its four steps and the

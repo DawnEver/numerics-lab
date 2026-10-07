@@ -149,8 +149,8 @@ _DIRECT_REFINEMENT_MAX_STEPS = 4
 #
 # Neither point carries n, and the first refinement move goes as cond*eps -- so a PHYSICALLY SOUND
 # solve crosses the ceiling simply by getting bigger, and the larger the problem the more certain
-# the false refusal. Measured 2026-09-17 on `spm_ferrari_luce_rear --scope full --chart
-# cartesian_3d --select fea,tet --mesh-size "5 mm"`: n = 123,233, a move of 1.434e-03 that is
+# the false refusal. Measured 2026-09-17 on `spm_ferrari_luce_rear --scope full --set
+# solve.chart=cartesian_3d --select fea,tet --mesh-size "5 mm"`: n = 123,233, a move of 1.434e-03 that is
 # 1.43x past the old ceiling, and a trajectory [1.434e-03, 2.062e-06, 2.961e-09, 4.252e-12] that
 # collapses nine decades to three orders INSIDE `_DIRECT_REFINEMENT_RTOL`. The solve was always
 # solvable; the instrument said otherwise, and it said so more confidently the bigger n grew.
@@ -233,8 +233,8 @@ _DEKKER_SPLIT = 134217729.0
 def refinement_residual(matrix, rhs, x) -> np.ndarray | None:
     """``b - A x`` computed to DOUBLE the working precision, or ``None`` when it cannot be.
 
-    WHY THIS EXISTS, measured 2026-09-16 on `spm_ferrari_luce_rear --scope full --chart
-    cartesian_3d --select fea,tet` at 3.0 mm: an n=207104 H(curl) solve was refused as "singular /
+    WHY THIS EXISTS, measured 2026-09-16 on `spm_ferrari_luce_rear --scope full --set
+    solve.chart=cartesian_3d --select fea,tet` at 3.0 mm: an n=207104 H(curl) solve was refused as "singular /
     rank-deficient" on a refinement move of **1.635e-06** -- 1.6x the bar, against the committed
     singular plant's 4.7 and the well-posed sweep's 1e-13 (see :data:`_DIRECT_REFINEMENT_RTOL`).
     A system that is genuinely rank-deficient does not land at 1.6x the bar. What it had was a
