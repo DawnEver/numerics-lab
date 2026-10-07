@@ -93,3 +93,52 @@ def linear_dae_initial_state(
         msg = 'initial preferred DAE states are not uniquely determined after preserving declared states'
         raise ValueError(msg)
     return state
+
+
+def linear_dae_initial_pair(jacobian, residual, mass, initial, *, partial_time, tolerance=1e-10):
+    """Resolve algebraic state and stored-state rate for an index-two linear DAE.
+
+    The caller supplies the actual partial time derivative of its residual at
+    zero rate. Differential state is preserved; algebraic constraints are also
+    differentiated, so an algebraic series-current equality constrains both
+    currents and their rates. Free algebraic rates are harmless, but a free
+    state or stored-state rate is not selected by a minimum-norm convention.
+    """
+    initial = np.asarray(initial, dtype=float)
+    jacobian, mass = csr_matrix(jacobian).toarray(), csr_matrix(mass).toarray()
+    residual, partial_time = np.asarray(residual, dtype=float), np.asarray(partial_time, dtype=float)
+    n = initial.size
+    if (
+        initial.shape != (n,)
+        or residual.shape != (n,)
+        or partial_time.shape != (n,)
+        or jacobian.shape != (n, n)
+        or mass.shape != (n, n)
+        or not all(np.isfinite(value).all() for value in (initial, jacobian, mass, residual, partial_time))
+        or not np.isfinite(tolerance)
+        or tolerance <= 0
+    ):
+        msg = 'initial state/rate consistency requires finite actual DAE matrices and time derivative'
+        raise ValueError(msg)
+    mass_scale = np.linalg.norm(mass, axis=1)
+    mass_scale = np.where(mass_scale == 0.0, 1.0, mass_scale)
+    algebraic = null_space((mass / mass_scale[:, None]).T).T / mass_scale[None, :]
+    zero = np.zeros_like(mass)
+    matrix = np.vstack((np.column_stack((jacobian, mass)), np.column_stack((mass, zero))))
+    matrix = np.vstack((matrix, np.column_stack((np.zeros_like(algebraic), algebraic @ jacobian))))
+    rhs = np.concatenate((-residual, np.zeros(n), -algebraic @ partial_time))
+    scale = np.linalg.norm(matrix, axis=1)
+    scale = np.where(scale == 0.0, 1.0, scale)
+    matrix, rhs = matrix / scale[:, None], rhs / scale
+    pair, *_ = np.linalg.lstsq(matrix, rhs, rcond=None)
+    bar = tolerance * (np.linalg.norm(matrix) * np.linalg.norm(pair) + np.linalg.norm(rhs))
+    if np.linalg.norm(matrix @ pair - rhs) > bar:
+        msg = 'stored initial state contradicts the actual state/rate DAE constraints'
+        raise ValueError(msg)
+    free = null_space(matrix)
+    rank_bar = np.finfo(float).eps * max(matrix.shape) * 16
+    normalized_mass = mass / mass_scale[:, None]
+    if np.linalg.norm(free[:n]) > rank_bar or np.linalg.norm(normalized_mass @ free[n:]) > rank_bar:
+        msg = 'initial state or stored-state rate requires additional physical initial authority'
+        raise ValueError(msg)
+    return initial + pair[:n], pair[n:]

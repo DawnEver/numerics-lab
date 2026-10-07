@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from motronics.gauss.linear.initial_constraints import linear_dae_initial_state
+from motronics.gauss.linear.initial_constraints import linear_dae_initial_pair, linear_dae_initial_state
 
 
 def test_storage_forces_a_unique_preferred_state_without_changing_the_stored_value():
@@ -48,3 +48,25 @@ def test_row_unit_rescaling_does_not_change_the_left_algebraic_nullspace():
             preferred_indices=(2,),
         )
         assert result[2] == pytest.approx(3.0, abs=1e-12)
+
+
+def test_series_stored_states_determine_initial_algebraic_voltage_and_rates():
+    # x=(current0, port_voltage, current1), L0=.5, L1=.25,
+    # V=3, R=2. The algebraic series-current constraint must also
+    # hold for rates, rather than choosing separate arbitrary di/dt.
+    state, rate = linear_dae_initial_pair(
+        [[0, 1, 0], [2, -1, 0], [1, 0, -1]],
+        [-3, 0.6, 0],
+        [[0, 0, 0.25], [0.5, 0, 0], [0, 0, 0]],
+        [0.3, 0, 0.3],
+        partial_time=[0, 0, 0],
+    )
+    np.testing.assert_allclose(state, [0.3, 2.2, 0.3], atol=1e-13)
+    np.testing.assert_allclose(rate[[0, 2]], [3.2, 3.2], atol=1e-13)
+
+
+def test_source_derivative_reaches_initial_storage_rate_without_a_zero_slope_default():
+    # A stored x is constrained to a declared time-dependent source.
+    state, rate = linear_dae_initial_pair([[0, 1], [1, 0]], [0, 0], [[1e-12, 0], [0, 0]], [3, 0], partial_time=[0, -4])
+    np.testing.assert_allclose(state, [3, -4e-12], atol=1e-14)
+    assert rate[0] == pytest.approx(4.0)
