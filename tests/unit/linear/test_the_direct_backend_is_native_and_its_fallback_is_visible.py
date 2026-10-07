@@ -63,9 +63,8 @@ def test_a_revalued_system_on_the_same_pattern_reuses_the_analysis_and_is_still_
 
 @needs_native
 @pytest.mark.parametrize('move_rows', [False, True])
-def test_a_crc_collision_cannot_reuse_a_different_actual_sparse_pattern(monkeypatch, move_rows):
+def test_an_equal_size_different_pattern_is_never_answered_from_the_cache(monkeypatch, move_rows):
     monkeypatch.setattr(native_direct, '_cache', OrderedDict())
-    monkeypatch.setattr(native_direct.zlib, 'crc32', lambda _: 0)
     a = sp.csr_matrix([[4.0, 0.2, 0.0], [0.0, 5.0, 0.0], [0.0, 0.0, 6.0]])
     other = sp.csr_matrix(
         [[4.0, 0.0, 0.0], [0.2, 5.0, 0.0], [0.0, 0.0, 6.0]]
@@ -86,7 +85,6 @@ def test_a_crc_collision_cannot_reuse_a_different_actual_sparse_pattern(monkeypa
 @pytest.mark.parametrize('move_rows', [False, True])
 def test_the_cached_pattern_is_owned_when_the_callers_pattern_buffer_changes(monkeypatch, move_rows):
     monkeypatch.setattr(native_direct, '_cache', OrderedDict())
-    monkeypatch.setattr(native_direct.zlib, 'crc32', lambda _: 0)
     a = sp.csr_matrix([[4.0, 0.2, 0.0], [0.0, 5.0, 0.0], [0.0, 0.0, 6.0]])
     rhs = np.array([1.0, 2.0, 3.0])
     native_direct.native_solve(a, rhs)

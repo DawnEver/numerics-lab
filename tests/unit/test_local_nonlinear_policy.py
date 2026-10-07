@@ -33,3 +33,16 @@ def test_local_units_do_not_underflow_or_overflow_the_relative_change():
         old = (np.array([[scale, scale]]),)
         new = (np.array([[2 * scale, 2 * scale]]),)
         assert local_change(old, new) == pytest.approx(0.5)
+
+
+def test_a_converged_fields_roundoff_is_not_a_change():
+    """A branch at roundoff (`+-1e-15` beside a 1.8 bulk) flips sign between two solved iterates.
+
+    MEASURED 2026-10-07 on the warm-start ring: the MEC Newton reached a relative residual of 4.6e-16
+    and then ran its 100-iteration cap, because such a branch read a local change of 2.0 against a
+    one-ulp floor. The floor is the field scale's ``sqrt(eps)``, so roundoff reads as settled while a
+    small element's real change (the 1e-5 case above) still reads as the whole of itself.
+    """
+    old = (np.array([1.82, 1.0842021724855029e-15]),)
+    new = (np.array([1.82, -1.0842021724855029e-15]),)
+    assert local_change(old, new) < 1e-6

@@ -2,7 +2,13 @@
 
 import numpy as np
 
-__all__ = ['local_change', 'newton_linear_tolerance']
+__all__ = [
+    'local_change',
+    'newton_linear_tolerance',
+]
+
+#: Below this fraction of a field's own scale an element's value is roundoff, not a state.
+_ROUNDOFF_FLOOR = float(np.sqrt(np.finfo(float).eps))
 
 
 def local_change(previous, current) -> float:
@@ -30,7 +36,11 @@ def local_change(previous, current) -> float:
         scale = np.maximum(np.hypot.reduce(np.abs(old), axis=1), np.hypot.reduce(np.abs(new), axis=1))
         if not np.all(np.isfinite(change)) or not np.all(np.isfinite(scale)):
             return float('inf')
-        floor = np.finfo(float).eps * float(scale.max())
+        # sqrt(eps) of the field's scale, not one ulp: a SOLVED field carries a few ulps of
+        # roundoff, and an element sitting at that noise flips sign between two converged iterates
+        # (a relative change of 2 against a one-ulp floor) -- measured 2026-10-07, a MEC Newton at
+        # relres 4.6e-16 ran its whole iteration cap on it. Real small-element changes stay visible.
+        floor = _ROUNDOFF_FLOOR * float(scale.max())
         ratio = np.divide(change, np.maximum(scale, floor), out=np.zeros_like(change), where=scale > 0)
         maximum = max(maximum, float(ratio.max()))
     return maximum
