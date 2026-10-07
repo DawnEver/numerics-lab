@@ -20,7 +20,7 @@ from tests.unit.gauss._helpers import _RampWithToggle
 
 from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
 from motronics.gauss.time_integrators import _step as _step_mod
-from motronics.gauss.time_integrators.events import integrate_transient_with_events
+from motronics.gauss.time_integrators import integrate_transient
 
 
 def test_the_relative_tolerance_labels_a_scale_stalled_step_converged() -> None:
@@ -294,7 +294,7 @@ def test_a_discarded_bisection_probe_does_not_count_as_a_nonconverged_STEP(monke
 
     problem = _NonlinearRampWithToggle(level=0.35)
     study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
-    events = import_module('motronics.gauss.time_integrators.events')
+    events = import_module('motronics.gauss.time_integrators.march')
     solve_step, locate = _step_mod._solve_step, events._locate_bracket
     discarded_probe = False
     probe_failures = []
@@ -324,7 +324,7 @@ def test_a_discarded_bisection_probe_does_not_count_as_a_nonconverged_STEP(monke
 
     monkeypatch.setattr(_step_mod, '_solve_step', classified_solve)
     monkeypatch.setattr(events, '_locate_bracket', classified_locator)
-    sol = integrate_transient_with_events(
+    sol = integrate_transient(
         problem,
         study,
         np.array([0.0]),
@@ -357,7 +357,7 @@ def test_an_adaptive_march_does_not_locate_a_switch_from_an_unsolved_probe() -> 
     problem = _UnsolvableBetweenGridPoints(level=1.0)
     study = TransientStudy(t0=0.0, t1=1.5, dt=0.3, integrator=IntegratorKind.BDF2)
     with pytest.raises(RuntimeError, match='event probe.*converge'):
-        integrate_transient_with_events(
+        integrate_transient(
             problem,
             study,
             np.array([0.0]),
@@ -380,10 +380,10 @@ def test_an_adaptive_march_does_not_fire_a_switch_from_an_unsolved_landing() -> 
     problem = _UnsolvableAtCrossing(level=1.0)
     study = TransientStudy(t0=0.0, t1=1.5, dt=0.3, integrator=IntegratorKind.BDF2)
     with (
-        patch('motronics.gauss.time_integrators.events._locate_bracket', return_value=(1.0, 1.0)),
+        patch('motronics.gauss.time_integrators.march._locate_bracket', return_value=(1.0, 1.0)),
         pytest.raises(RuntimeError, match='event landing.*converge'),
     ):
-        integrate_transient_with_events(
+        integrate_transient(
             problem,
             study,
             np.array([0.0]),
@@ -410,8 +410,8 @@ def test_the_event_root_is_solved_once_not_once_for_ranking_and_again_for_landin
 
     problem = _CountRoot()
     study = TransientStudy(t0=0.0, t1=1.5, dt=0.3, integrator=IntegratorKind.BDF2)
-    with patch('motronics.gauss.time_integrators.events._locate_bracket', return_value=(1.0, 1.0)):
-        solution = integrate_transient_with_events(
+    with patch('motronics.gauss.time_integrators.march._locate_bracket', return_value=(1.0, 1.0)):
+        solution = integrate_transient(
             problem,
             study,
             np.array([0.0]),

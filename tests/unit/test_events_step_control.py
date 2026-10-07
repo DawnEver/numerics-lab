@@ -1,4 +1,4 @@
-"""Adaptive step rejection and local-error refinement on the eventful march.
+"""Adaptive step rejection on the eventful march (local-error control lives in its own test file).
 
 Split from the original ``test_events.py``: locator/rollback behaviors live in
 ``test_events_location.py``, ``time_breakpoints`` in ``test_events_breakpoints.py``, and
@@ -16,7 +16,6 @@ import pytest
 
 from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
 from motronics.gauss.time_integrators import integrate_transient
-from motronics.gauss.time_integrators.events import integrate_transient_with_events
 
 
 class _SharpLayer:
@@ -77,15 +76,13 @@ def test_the_eventful_march_REJECTS_a_step_its_newton_could_not_take() -> None:
         'tol': 1.0e-10,
         'backtrack_cap': 0,
     }
-    fixed = integrate_transient_with_events(_SharpLayer(), study, np.array([0.0]), **common)
+    fixed = integrate_transient(_SharpLayer(), study, np.array([0.0]), **common)
     # The premise: without the retry this problem DOES exhaust. If it stopped doing so the test
     # would pass vacuously, proving nothing about the retry -- so the premise is asserted, not
     # assumed.
     assert fixed.nonconverged_times, 'the fixed march converged everywhere -- nothing to reject'
 
-    shrunk = integrate_transient_with_events(
-        _SharpLayer(), study, np.array([0.0]), adaptive=True, h_min=dt / 1000.0, **common
-    )
+    shrunk = integrate_transient(_SharpLayer(), study, np.array([0.0]), adaptive=True, h_min=dt / 1000.0, **common)
     off_grid = [t for t in shrunk.times if abs(t / dt - round(t / dt)) > 1.0e-9]
     assert off_grid, (
         'no marched instant lies off the nominal grid, so no step was ever shortened -- '
@@ -123,67 +120,13 @@ def test_a_step_rejected_and_then_re_landed_converged_is_not_labelled_non_conver
     dt = 0.1
     study = TransientStudy(t0=0.0, t1=0.3, dt=dt, integrator=IntegratorKind.BDF1)
     common = {'event_fns': (_SharpLayer.never,), 'max_newton': 4, 'tol': 1e-10, 'backtrack_cap': 0}
-    fixed = integrate_transient_with_events(_StiffOnlyAtLargeSteps(), study, np.array([0.0]), **common)
+    fixed = integrate_transient(_StiffOnlyAtLargeSteps(), study, np.array([0.0]), **common)
     assert fixed.nonconverged_times, 'PREMISE: the nominal step must exhaust, or nothing is rescued'
-    shrunk = integrate_transient_with_events(_StiffOnlyAtLargeSteps(), study, np.array([0.0]), adaptive=True, **common)
+    shrunk = integrate_transient(_StiffOnlyAtLargeSteps(), study, np.array([0.0]), adaptive=True, **common)
     assert any(abs(t / dt - round(t / dt)) > 1e-9 for t in shrunk.times), 'no step was shortened'
     assert shrunk.nonconverged_times == []
     assert shrunk.nonconverged_probe_times, 'the rejected attempts stay on record as probes'
     np.testing.assert_allclose([u[0] for u in shrunk.states], shrunk.times, atol=1e-9)
-
-
-def test_refine_lands_finer_steps_where_the_full_step_under_resolves() -> None:
-    """``refine`` is ACCURACY-controlled: a converged step whose half-size re-take disagrees
-    beyond the tolerance is replaced by the two half-steps, so the grid adapts where the fast
-    dynamics are under-resolved.
-
-    The ``_SharpLayer``'s tanh turnover is far narrower than the grid at dt=0.05, so the full step
-    smears it; ``refine`` detects the discrepancy and lands the finer steps (21 -> 31 points).
-    At dt=0.02 the grid already resolves the layer, so ``refine`` adds NOTHING (51 == 51) -- the
-    refinement is driven by the local error, not by the option being on. ``refine=None`` is
-    bit-identical to the plain march (the default must not move a single point).
-    """
-    base = integrate_transient_with_events(
-        _SharpLayer(),
-        TransientStudy(t0=0.0, t1=1.0, dt=0.05, integrator=IntegratorKind.BDF2),
-        np.array([0.0]),
-        event_fns=(_SharpLayer.never,),
-    )
-    explicit_none = integrate_transient_with_events(
-        _SharpLayer(),
-        TransientStudy(t0=0.0, t1=1.0, dt=0.05, integrator=IntegratorKind.BDF2),
-        np.array([0.0]),
-        event_fns=(_SharpLayer.never,),
-        refine=None,
-    )
-    assert len(explicit_none.times) == len(base.times), (
-        'refine=None must be bit-identical to the plain march (the shipped cases pass nothing)'
-    )
-    refined = integrate_transient_with_events(
-        _SharpLayer(),
-        TransientStudy(t0=0.0, t1=1.0, dt=0.05, integrator=IntegratorKind.BDF2),
-        np.array([0.0]),
-        event_fns=(_SharpLayer.never,),
-        refine=1.0e-3,
-    )
-    assert len(refined.times) > len(base.times), (
-        'refine must land the half-steps where the full step under-resolves the sharp layer'
-    )
-    fine = integrate_transient_with_events(
-        _SharpLayer(),
-        TransientStudy(t0=0.0, t1=1.0, dt=0.02, integrator=IntegratorKind.BDF2),
-        np.array([0.0]),
-        event_fns=(_SharpLayer.never,),
-        refine=1.0e-3,
-    )
-    assert len(fine.times) == len(
-        integrate_transient_with_events(
-            _SharpLayer(),
-            TransientStudy(t0=0.0, t1=1.0, dt=0.02, integrator=IntegratorKind.BDF2),
-            np.array([0.0]),
-            event_fns=(_SharpLayer.never,),
-        ).times
-    ), 'a grid that already resolves the layer must not be refined -- the option is not a finer grid'
 
 
 def test_an_event_inside_a_quadratic_ramp_costs_no_accuracy_at_all() -> None:
@@ -236,7 +179,7 @@ def test_an_event_inside_a_quadratic_ramp_costs_no_accuracy_at_all() -> None:
         problem.fired = True
 
     plain = integrate_transient(problem, study, np.array([0.0]))
-    eventful = integrate_transient_with_events(
+    eventful = integrate_transient(
         problem,
         study,
         np.array([0.0]),
@@ -261,7 +204,7 @@ def test_an_event_inside_a_quadratic_ramp_costs_no_accuracy_at_all() -> None:
     def fire_on_grid(_i, _t, _u) -> None:
         on_grid.fired = True
 
-    grid_march = integrate_transient_with_events(
+    grid_march = integrate_transient(
         on_grid,
         study,
         np.array([0.0]),

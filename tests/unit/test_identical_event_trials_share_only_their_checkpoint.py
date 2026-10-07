@@ -12,9 +12,9 @@ from motronics.gauss.time_integrators import _step as _step_mod
 
 
 def test_rollback_retracts_only_discarded_residual_side_snapshots():
-    events = import_module('motronics.gauss.time_integrators.events')
+    events = import_module('motronics.gauss.time_integrators.march')
     state = events.IntegratorState(us=[np.array([2.0])], t=1.0, v=None, a=None)
-    solved = events.EventfulTransientSolution(
+    solved = events.TransientSolution(
         times=[0.0, 1.0, 2.0],
         states=[np.array([0.0]), np.array([2.0]), np.array([4.0])],
         state_rates=[np.array([1.0]), np.array([2.0])],
@@ -30,7 +30,7 @@ def test_rollback_retracts_only_discarded_residual_side_snapshots():
 
 @pytest.mark.parametrize('kind', [IntegratorKind.BDF1, IntegratorKind.BDF2])
 def test_a_mutating_handler_retains_the_original_residual_side_once(kind):
-    events = import_module('motronics.gauss.time_integrators.events')
+    events = import_module('motronics.gauss.time_integrators.march')
     problem = _RampWithToggle(0.3)
     before = []
 
@@ -40,7 +40,7 @@ def test_a_mutating_handler_retains_the_original_residual_side_once(kind):
             problem.toggle()
         state[0] += index + 1
 
-    solved = events.integrate_transient_with_events(
+    solved = events.integrate_transient(
         problem,
         TransientStudy(t0=0.0, t1=0.5, dt=0.4, integrator=kind),
         np.zeros(1),
@@ -61,7 +61,7 @@ def test_a_mutating_handler_retains_the_original_residual_side_once(kind):
 @pytest.mark.parametrize('kind', [IntegratorKind.BDF1, IntegratorKind.BDF2])
 @pytest.mark.parametrize('cache_bytes', [0, 64 * 1024**2])
 def test_coincident_observers_reuse_exact_trial_but_preserve_states_rates_and_callbacks(monkeypatch, kind, cache_bytes):
-    events = import_module('motronics.gauss.time_integrators.events')
+    events = import_module('motronics.gauss.time_integrators.march')
     study = TransientStudy(t0=0.0, t1=1.0, dt=0.4, integrator=kind)
 
     def march(count):
@@ -73,7 +73,7 @@ def test_coincident_observers_reuse_exact_trial_but_preserve_states_rates_and_ca
             if index == 0:
                 problem.toggle()
 
-        solved = events.integrate_transient_with_events(
+        solved = events.integrate_transient(
             problem,
             study,
             np.zeros(1),
@@ -121,7 +121,7 @@ def test_coincident_observers_reuse_exact_trial_but_preserve_states_rates_and_ca
 
 
 def test_a_failed_trial_is_retried_not_exact_memoized(monkeypatch):
-    events = import_module('motronics.gauss.time_integrators.events')
+    events = import_module('motronics.gauss.time_integrators.march')
     problem = _RampWithToggle(0.3)
     study = TransientStudy(t0=0.0, t1=0.4, dt=0.4, integrator=IntegratorKind.BDF1)
     original_step, original_locator = _step_mod._solve_step, events._locate_bracket
@@ -154,7 +154,7 @@ def test_a_failed_trial_is_retried_not_exact_memoized(monkeypatch):
 
     monkeypatch.setattr(events, '_locate_bracket', locate)
     monkeypatch.setattr(_step_mod, '_solve_step', solve_step)
-    solved = events.integrate_transient_with_events(
+    solved = events.integrate_transient(
         problem,
         study,
         np.zeros(1),
@@ -169,7 +169,7 @@ def test_a_failed_trial_is_retried_not_exact_memoized(monkeypatch):
 
 @pytest.mark.parametrize('kind', [IntegratorKind.BDF1, IntegratorKind.BDF2])
 def test_same_time_after_a_physical_handler_has_a_new_checkpoint_and_rate(monkeypatch, kind):
-    events = import_module('motronics.gauss.time_integrators.events')
+    events = import_module('motronics.gauss.time_integrators.march')
     problem = _RampWithToggle(0.25)
     study = TransientStudy(t0=0.0, t1=1.0, dt=1.0, integrator=kind)
     original_locator = events._locate_bracket
@@ -191,7 +191,7 @@ def test_same_time_after_a_physical_handler_has_a_new_checkpoint_and_rate(monkey
         problem.slope = 2.0 if index == 0 else 3.0
 
     monkeypatch.setattr(events, '_locate_bracket', locate)
-    solved = events.integrate_transient_with_events(
+    solved = events.integrate_transient(
         problem,
         study,
         np.zeros(1),

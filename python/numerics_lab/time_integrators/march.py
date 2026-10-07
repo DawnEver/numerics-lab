@@ -1,4 +1,11 @@
-"""Event location + checkpoint/rollback for the time march -- physics-blind, roadmap W2.
+"""THE time march -- the one loop every transient in this repo steps through, physics-blind.
+
+It marches a nominal ``study.dt`` grid (the output grid and the largest step), lands KNOWN
+non-smooth instants (``time_breakpoints``), locates STATE events (``event_fns``), halves a step
+whose Newton failed (``adaptive``) and, with a :class:`StepTolerance`, controls every step's LOCAL
+TRUNCATION ERROR per unknown. Without events, breakpoints or step control it is the plain fixed grid.
+
+Event location + checkpoint/rollback, roadmap W2:
 
 A switch, a comparator, a contact: several physics have instants where the problem itself changes,
 and a fixed-grid march past such an instant integrates a smeared version of it. This module adds
@@ -54,26 +61,25 @@ circuit, no device, no physics.
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
+import scipy.sparse as sp
 from numpy.typing import NDArray
 
-from motronics.contracts.spec.analysis_formulation import FactorReusableProblem
+from motronics.contracts.spec.analysis_formulation import FactorReusableProblem, HistoryProblem
 from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.time_integrators import (
-    FactorCache,
-    _default_solve,
-    _full_fixed_steps,
-    get_integrator,
-)
+from motronics.gauss.linear import solve_linear_system
 from motronics.gauss.time_integrators._forms import IntegratorState, TransientSolution
+from motronics.gauss.time_integrators._integrators import get_integrator
 from motronics.gauss.time_integrators._step import HeldFactor, take_step
+from motronics.gauss.time_integrators.factor_reuse import FactorCache
 
 logger = logging.getLogger(__name__)
 
-__all__ = ['EventfulTransientSolution', 'integrate_transient_with_events']
+__all__ = ['StepTolerance', 'integrate_transient']
 
 #: Events tolerated inside ONE nominal cell before the function is declared chattering. A genuine
 #: circuit sees a handful of crossings per cell at most (a PWM edge and a state ripple); past this
@@ -88,11 +94,83 @@ _MAX_EVENTS_PER_CELL = 512
 _EVENT_TRIAL_CACHE_BYTES = 64 * 1024**2
 
 
-@dataclass
-class EventfulTransientSolution(TransientSolution):
-    """A :class:`TransientSolution` plus the located events as ``(function index, time)`` pairs."""
+@dataclass(frozen=True)
+class StepTolerance:
+    """Per-unknown local-error tolerances: a step is accepted when EVERY unknown satisfies
+    ``|LTE_i| <= atol_i + rtol_i * max(|u_n,i|, |u_n+1,i|)``.
 
-    events: list[tuple[int, float]] = field(default_factory=list)
+    ``rtol`` / ``atol`` are scalars or vectors the length of the state; a vector is how a caller
+    whose unknowns carry different units says so (a circuit's node volts and branch amperes need
+    different absolute floors -- one scalar is right for at most one of them). ``h_min`` is the
+    smallest step the controller may take (default ``study.dt * 1e-6``); a step still rejected
+    there RAISES with the error reached rather than being accepted.
+    """
+
+    rtol: float | NDArray[np.floating] = 1e-3
+    atol: float | NDArray[np.floating] = 1e-6
+    h_min: float | None = None
+
+
+def _full_fixed_steps(study: TransientStudy) -> int:
+    """Count full cells, treating a floating-point near-integer as an integer."""
+    ratio = (study.t1 - study.t0) / study.dt
+    nearest = round(ratio)
+    return nearest if abs(ratio - nearest) <= 1e-10 else int(np.floor(ratio))
+
+
+def _default_solve(matrix: object, rhs: NDArray[np.floating]) -> NDArray[np.floating]:
+    """Solve ``matrix @ x = rhs`` for a dense ndarray or a scipy-sparse jacobian (physics-blind)."""
+    b = np.asarray(rhs, dtype=float)
+    if sp.issparse(matrix):
+        return np.asarray(solve_linear_system(sp.csc_matrix(matrix), b))
+    m = np.asarray(matrix, dtype=float)
+    if m.ndim == 0:  # scalar jacobian (1-DOF problem written as a plain number)
+        return b / float(m)
+    return np.linalg.solve(m, b)
+
+
+def _lte_ratio(
+    history: list[tuple[float, NDArray[np.floating]]],
+    t_new: float,
+    u_new: NDArray[np.floating],
+    order: int,
+    error_constant: float,
+    tolerance: StepTolerance,
+) -> float:
+    """The worst unknown's ``|LTE| / tol`` for the step to ``(t_new, u_new)``; 0 without enough history.
+
+    The predictor is the degree-``order`` polynomial through the last ``order + 1`` accepted points,
+    extrapolated to ``t_new``. Its gap to the corrector is ``u^(p+1) prod(t_new - t_i) / (p+1)!``
+    to leading order on ANY spacing, and the scheme's own error is ``C h^(p+1) u^(p+1)``; their
+    ratio converts one into the other, so the estimate needs no assumption of uniform steps.
+    """
+    if len(history) < order + 1:
+        return 0.0
+    pts = history[-(order + 1) :]
+    ts = [t for t, _u in pts]
+    pred = np.zeros_like(u_new)
+    for j, (tj, uj) in enumerate(pts):
+        w = 1.0
+        for m, tm in enumerate(ts):
+            if m != j:
+                w *= (t_new - tm) / (tj - tm)
+        pred = pred + w * uj
+    span = float(np.prod([t_new - t for t in ts]))
+    h = t_new - ts[-1]
+    lte = error_constant * math.factorial(order + 1) * h ** (order + 1) / span * (u_new - pred)
+    scale = tolerance.atol + tolerance.rtol * np.maximum(np.abs(pts[-1][1]), np.abs(u_new))
+    return float(np.max(np.abs(lte) / scale)) if lte.size else 0.0
+
+
+#: Step-size controller limits: never grow past 2x or shrink below 0.2x in one decision, and aim
+#: 10% inside the tolerance so an accepted step is not immediately followed by a rejected one.
+_GROW, _SHRINK, _SAFETY = 2.0, 0.2, 0.9
+
+
+def _resize(h: float, ratio: float, order: int) -> float:
+    if ratio <= 0.0:
+        return _GROW * h
+    return h * min(_GROW, max(_SHRINK, _SAFETY * ratio ** (-1.0 / (order + 1))))
 
 
 @dataclass
@@ -183,7 +261,7 @@ def _locate_bracket(
     return lo_t, hi_t
 
 
-def integrate_transient_with_events(
+def integrate_transient(
     problem,
     study: TransientStudy,
     u0: NDArray[np.floating],
@@ -199,18 +277,18 @@ def integrate_transient_with_events(
     tol_rel: float | None = None,
     time_tol: float | None = None,
     factor_cache: FactorCache | None = None,
-    backtrack_band: float | None = None,
-    backtrack_cap: int = 8,
+    backtrack_band: float | None = 1.5,
+    backtrack_cap: int = 4,
+    line_search: str = 'backtrack',
     gmin_stages: tuple[float, ...] | None = None,
     adaptive: bool = False,
     h_min: float | None = None,
-    refine: float | None = None,
+    step_control: StepTolerance | None = None,
     refactor_every: int | None = None,
-) -> EventfulTransientSolution:
+) -> TransientSolution:
     """March ``problem`` over ``study``, stopping the grid at every zero of ``event_fns``.
 
-    Identical to :func:`~motronics.gauss.time_integrators.integrate_transient` when ``event_fns``
-    is empty (same times, same states, bit-for-bit). Otherwise each step is taken under a
+    With no ``event_fns`` this is the plain fixed-grid march. Otherwise each step is taken under a
     checkpoint; a sign change in any ``g_i`` between the step's ends brackets a crossing, which is
     bisected (by re-stepping from the checkpoint) down to ``time_tol`` and landed on exactly: the
     located point joins the march, ``on_event(i, t*, u*)`` runs -- the caller's whole knowledge of
@@ -234,26 +312,13 @@ def integrate_transient_with_events(
     endpoint is unchanged. Only a step that ACTUALLY failed is subdivided: blanket subdivision was
     measured WORSE (64 -> 98/148/268 exhausted on srdab_closed_loop).
 
-    ``refine`` (default ``None`` -- bit-identical) is ACCURACY-controlled refinement, the
-    complement of ``adaptive``'s convergence-driven halving: after each converged step that lands
-    WITHOUT crossing an event, the step is re-taken from the same checkpoint at HALF size, and if
-    the two half-steps disagree with the full step beyond ``refine`` (relative), the half-steps
-    are accepted instead -- the grid adapts where the fast dynamics are under-resolved, which a
-    high-Q resonant tank needs (measured 2026-08-20: the K=1 srdab_power_stage tank is grid-
-    dependent 0.17/0.29/0.47/0.44 across dt_factor 505/1010/2020/4040 because the fixed grid
-    under-resolves the Coss-tank ring; ``refine`` lands the step on the finer half-steps there).
-    A step that crosses an event is NOT refined (the bisection already locates it exactly); only
-    steps that land cleanly are accuracy-checked, and only when both half-steps converge and
-    neither crosses. ``refine`` is a RELATIVE tolerance on ``max|u_half - u_full|``.
-
-    WHAT IT DOES NOT FIX, on record so the option is not read as a remedy for it: it does NOT
-    close ``srdab_closed_loop``'s 64 exhausted steps. That case's failures are not a step-size
-    problem -- its root is unreachable at any iteration budget (64 exhausted at both 60 and 200
-    Newton iterations, with the residual GROWING 5.5e3 -> 1.1e4), BDF1 fails at exactly the same
-    steps as BDF2, and a leakage-explicit reformulation that cut the assembled jacobian's
-    condition number 169x (9.16e13 -> 5.41e11) left the count at 64 unchanged. The mechanism here
-    is verified on its own terms -- the steps do shrink and the shortened ones land -- and that is
-    the claim it carries, no more.
+    ``step_control`` is LOCAL-ERROR control for every integrator: each converged step that lands
+    without crossing an event has its truncation error estimated per unknown (:func:`_lte_ratio`)
+    against the :class:`StepTolerance`; a step over tolerance is rejected and retried smaller, an
+    accepted one sets the next step's size. ``study.dt`` stays the largest step and the output grid.
+    The first ``order`` steps after a start or an event restart are not estimated -- the history
+    the predictor needs does not exist yet, and a predictor reaching across an event would measure
+    the event, not the error. A step still over tolerance at ``h_min`` RAISES.
 
     ``time_breakpoints`` pins KNOWN non-smooth instants (a source edge -- the laplace
     ``SourceSpec.breakpoints_in`` instants) onto the marched grid: a breakpoint inside a nominal
@@ -276,6 +341,8 @@ def integrate_transient_with_events(
     if factor_cache is None and isinstance(problem, FactorReusableProblem):
         factor_cache = FactorCache()
     integrator = get_integrator(study.integrator)
+    h_floor = study.dt * 1e-6 if step_control is None or step_control.h_min is None else step_control.h_min
+    h_ctrl = study.dt  # the controller's next step size (only consulted with step_control)
     u0 = np.asarray(u0, dtype=float)
     state = integrator.start(u0, study.t0, v0, a0)
     dt = study.dt
@@ -283,7 +350,9 @@ def integrate_transient_with_events(
         msg = f'time_tol must be finite and positive, got {time_tol!r}'
         raise ValueError(msg)
     bracket_tol = dt * 1.0e-6 if time_tol is None else time_tol
-    solution = EventfulTransientSolution(times=[study.t0], states=[u0], state_rates=[], rate_state_overrides={})
+    solution = TransientSolution(times=[study.t0], states=[u0], state_rates=[], rate_state_overrides={})
+    # The accepted points since the last start/restart: the step-error predictor's history.
+    lte_history: list[tuple[float, NDArray]] = [(study.t0, u0)]
     g_prev = [float(g(u0, study.t0)) for g in event_fns]
     breakpoints = tuple(time_breakpoints)
     for i, bp in enumerate(breakpoints):
@@ -332,6 +401,7 @@ def integrate_transient_with_events(
             factor_cache=factor_cache,
             backtrack_band=backtrack_band,
             backtrack_cap=backtrack_cap,
+            line_search=line_search,
             gmin_stages=gmin_stages,
             held=held,
         )
@@ -360,6 +430,12 @@ def integrate_transient_with_events(
         solution.states.append(u_new)
         assert solution.state_rates is not None
         solution.state_rates.append(rate)
+        lte_history.append((t_new, u_new))
+        del lte_history[: -(integrator.order + 1)]
+        # THE STEP JOINED THE TRAJECTORY, so its material history is the one the next step starts
+        # from -- including a step labelled non-converged: the march continues from `u_new`.
+        if isinstance(problem, HistoryProblem):
+            problem.commit_history(u_new, t_new)
         # The step that produced this point recorded any failure against t_new; it landed, so it
         # is a real non-converged STEP. Only the most recent such record is promoted -- an earlier
         # discarded probe at the same instant stays a probe, and so does every record when the step
@@ -370,6 +446,9 @@ def integrate_transient_with_events(
             if solution.nonconverged_probe_times[j] == t_new:
                 del solution.nonconverged_probe_times[j]
                 solution.nonconverged_times.append(t_new)
+                # The CONVERGENCE CONTRACT, label-don't-block: the march continues and the caller
+                # reads the tag; one warning per landed exhaustion, never a silent accept.
+                logger.warning('step at t=%s did not converge in %s Newton iteration(s)', t_new, max_newton)
                 break
 
     # The plain march's full-cell count; the final cell is partial when needed.
@@ -419,6 +498,9 @@ def integrate_transient_with_events(
             t_from = state.t
             step_dt = pending_dt
             t_step = t_target
+            if step_control is not None and h_ctrl < pending_dt - bracket_tol:
+                step_dt = h_ctrl
+                t_step = t_from + step_dt
             probe_state, u_probe, step_ok, probe_rate = step_from(state, step_dt, t_step)
             if adaptive and not step_ok:
                 # REJECT-HALVE-RETRY, the contract `integrate_transient(adaptive=True)` has carried
@@ -440,44 +522,50 @@ def integrate_transient_with_events(
                 if _sign(g_new[i]) != _sign(g_prev[i]) and t_step - last_fired.get(i, -np.inf) > bracket_tol
             ]
             if not crossed:
-                if refine is not None:
-                    floor = h_min if h_min is not None else dt / 1000.0
-                    if step_dt > 2.0 * floor:
-                        # Accuracy-controlled refinement: re-take the step at half size from the
-                        # same checkpoint and compare. A large discrepancy means the full step
-                        # under-resolved the fast dynamics; the two half-steps then replace it.
+                halves = None
+                if step_control is not None and step_ok:
+                    order = integrator.order
+                    if len(lte_history) >= order + 1:
+                        ratio = _lte_ratio(lte_history, t_step, u_probe, order, integrator.error_constant, step_control)
+                    else:
+                        # BOOTSTRAP (no predictor history yet, after a start or an event restart):
+                        # STEP DOUBLING. The bootstrap step is a BDF1-class step whatever the scheme,
+                        # so the estimate takes order 1 -- conservative for a scheme already at 2.
+                        order, ratio = 1, 0.0
                         h2 = 0.5 * step_dt
-                        t_mid = t_from + h2
-                        mid_state, u_mid, mid_ok, mid_rate = step_from(checkpoint.state.copy(), h2, t_mid)
-                        if mid_ok:
-                            half_state, u_half, half_ok, half_rate = step_from(mid_state, h2, t_step)
-                            if half_ok:
-                                gm = [float(g(u_mid, t_mid)) for g in event_fns]
-                                gh = [float(g(u_half, t_step)) for g in event_fns]
-                                crossed_mid = any(
-                                    _sign(gm[i]) != _sign(g_prev[i])
-                                    and t_mid - last_fired.get(i, -np.inf) > bracket_tol
-                                    for i in range(len(event_fns))
+                        mid = step_from(checkpoint.state.copy(), h2, t_from + h2)
+                        end = step_from(mid[0], h2, t_step) if mid[2] else None
+                        if end is not None and end[2]:
+                            g_mid = [float(g(mid[1], t_from + h2)) for g in event_fns]
+                            g_end = [float(g(end[1], t_step)) for g in event_fns]
+                            if all(
+                                _sign(a) == _sign(b) == _sign(c) for a, b, c in zip(g_prev, g_mid, g_end, strict=True)
+                            ):
+                                scale = step_control.atol + step_control.rtol * np.maximum(
+                                    np.abs(state.last_u), np.abs(end[1])
                                 )
-                                crossed_half = any(
-                                    _sign(gh[i]) != _sign(gm[i]) and t_step - last_fired.get(i, -np.inf) > bracket_tol
-                                    for i in range(len(event_fns))
-                                )
-                                if not (crossed_mid or crossed_half):
-                                    u_max = float(np.max(np.abs(u_probe))) if u_probe.size else 1.0
-                                    scale = max(u_max, 1e-12)
-                                    if float(np.max(np.abs(u_half - u_probe))) > refine * scale:
-                                        # Accept the two half-steps instead of the full step.
-                                        state = half_state
-                                        _commit(t_mid, u_mid, mid_rate)
-                                        _commit(t_step, u_half, half_rate)
-                                        g_prev = gh
-                                        if t_step < t_target - bracket_tol:
-                                            pending_dt = t_target - state.t
-                                            continue
-                                        break
-                state = probe_state
-                _commit(t_step, u_probe, probe_rate)
+                                ratio = float(np.max(np.abs(end[1] - u_probe) * 2.0 / scale)) if scale.size else 0.0
+                                halves = (mid, end, g_end)
+                    if ratio > 1.0:
+                        if step_dt <= h_floor * (1.0 + 1e-9):
+                            msg = (
+                                f'step control: the step at t={t_from:g} is still {ratio:.3g}x over its '
+                                f'local-error tolerance at h_min={h_floor:g}; the state reached is t={t_from:g}. '
+                                'An undeclared discontinuity (a source edge without a breakpoint, a switch '
+                                'without an event) is the usual cause.'
+                            )
+                            raise RuntimeError(msg)
+                        h_ctrl = max(h_floor, _resize(step_dt, ratio, order))
+                        continue
+                    grown = _resize(step_dt, ratio, order)
+                    h_ctrl = max(h_ctrl, grown) if step_dt < h_ctrl else grown
+                if halves is not None:  # the doubled pair is the more accurate answer: keep it
+                    (_mid_state, u_mid, _ok, mid_rate), (state, u_end, _ok2, end_rate), g_new = halves
+                    _commit(t_from + 0.5 * step_dt, u_mid, mid_rate)
+                    _commit(t_step, u_end, end_rate)
+                else:
+                    state = probe_state
+                    _commit(t_step, u_probe, probe_rate)
                 g_prev = g_new
                 if t_step < t_target - bracket_tol:
                     # A SHORTENED step landed inside the cell: the cell is not finished, so the
@@ -605,6 +693,7 @@ def integrate_transient_with_events(
             # the kink-rounding measurement). The landing step's v/a carry over for second-order
             # integrators; for BDF they are None and the restart is a plain bootstrap.
             state = integrator.restart(state, u_star, t_star)
+            lte_history[:] = [(t_star, u_star)]
             g_prev = [float(g(u_star, t_star)) for g in event_fns]
             pending_dt = t_target - t_star  # the genuine remainder of this cell
             events_this_cell += 1

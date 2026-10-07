@@ -242,6 +242,8 @@ class TransientSolution:
     #: ``nonconverged_times``, this includes the eventful march's DISCARDED bisection probes:
     #: it is a diagnostic about the SOLVES, not a property of the trajectory.
     floor_converged_times: list[float] = field(default_factory=list)
+    #: The located state events as ``(function index, time)`` pairs (empty without ``event_fns``).
+    events: list[tuple[int, float]] = field(default_factory=list)
 
     @property
     def converged(self) -> bool:

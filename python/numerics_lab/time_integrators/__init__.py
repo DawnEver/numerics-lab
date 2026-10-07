@@ -29,19 +29,6 @@ mesh, no material, no solver.
 
 from __future__ import annotations
 
-import logging
-
-import numpy as np
-import scipy.sparse as sp
-from numpy.typing import NDArray
-
-from motronics.contracts.spec.analysis_formulation import (
-    FactorReusableProblem,
-    HistoryProblem,
-    SemiDiscreteProblem,
-)
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.linear import solve_linear_system
 from motronics.gauss.time_integrators._forms import IntegratorState, StepForm, TransientSolution
 from motronics.gauss.time_integrators._integrators import (
     INTEGRATOR_REGISTRY,
@@ -53,11 +40,9 @@ from motronics.gauss.time_integrators._integrators import (
     TRBDF2Integrator,
     get_integrator,
 )
-from motronics.gauss.time_integrators._step import HeldFactor, directional_line_search, take_step
+from motronics.gauss.time_integrators._step import HeldFactor, directional_line_search
 from motronics.gauss.time_integrators.factor_reuse import FactorCache
-
-logger = logging.getLogger(__name__)
-
+from motronics.gauss.time_integrators.march import StepTolerance, integrate_transient
 
 __all__ = [
     'INTEGRATOR_REGISTRY',
@@ -65,9 +50,11 @@ __all__ = [
     'BDF2Integrator',
     'FactorCache',
     'GeneralizedAlphaIntegrator',
+    'HeldFactor',
     'IntegratorState',
     'NewmarkIntegrator',
     'StepForm',
+    'StepTolerance',
     'TRBDF2Integrator',
     'TransientSolution',
     'TrapezoidIntegrator',
@@ -75,199 +62,3 @@ __all__ = [
     'get_integrator',
     'integrate_transient',
 ]
-
-
-def _full_fixed_steps(study: TransientStudy) -> int:
-    """Count full cells, treating a floating-point near-integer as an integer."""
-    ratio = (study.t1 - study.t0) / study.dt
-    nearest = round(ratio)
-    return nearest if abs(ratio - nearest) <= 1e-10 else int(np.floor(ratio))
-
-
-def _default_solve(matrix: object, rhs: NDArray[np.floating]) -> NDArray[np.floating]:
-    """Solve ``matrix @ x = rhs`` for a dense ndarray or a scipy-sparse jacobian (physics-blind)."""
-    b = np.asarray(rhs, dtype=float)
-    if sp.issparse(matrix):
-        return np.asarray(solve_linear_system(sp.csc_matrix(matrix), b))
-    m = np.asarray(matrix, dtype=float)
-    if m.ndim == 0:  # scalar jacobian (1-DOF problem written as a plain number)
-        return b / float(m)
-    return np.linalg.solve(m, b)
-
-
-def integrate_transient(
-    problem: SemiDiscreteProblem,
-    study: TransientStudy,
-    u0: NDArray[np.floating],
-    *,
-    v0: NDArray[np.floating] | None = None,
-    a0: NDArray[np.floating] | None = None,
-    solve=_default_solve,
-    max_newton: int = 1,
-    tol: float = 1e-12,
-    tol_rel: float | None = None,
-    factor_cache: FactorCache | None = None,
-    backtrack_band: float | None = 1.5,
-    backtrack_cap: int = 4,
-    line_search: str = 'backtrack',
-    gmin_stages: tuple[float, ...] | None = None,
-    adaptive: bool = False,
-    atol: float = 1e-6,
-    h_min: float | None = None,
-    h_max: float | None = None,
-    refactor_every: int | None = None,
-) -> TransientSolution:
-    """March ``problem`` from ``study.t0`` to ``study.t1`` by ``study.dt`` with ``study.integrator``.
-
-    Steps the selected :class:`ITimeIntegrator`: each step ``prepare`` yields the affine
-    :class:`StepForm`, :func:`_solve_step` advances the residual/jacobian seam for ``u_{n+1}``, and
-    ``advance`` folds it back into the history. ``v0`` / ``a0`` seed the second-order schemes
-    (default zero). ``max_newton = 1`` is the exact linear step; raise it (or swap ``solve``) for a
-    nonlinear problem. Returns the full march including the initial condition.
-
-    ``factor_cache`` (W6) reuses one factorization per reuse key across the march (see
-    :mod:`~motronics.gauss.time_integrators.factor_reuse`); the default ``None`` builds a fresh
-    cache when the problem exposes ``factor_reuse_key`` and none otherwise, so a keyed problem
-    reuses by default and an unkeyed one is untouched. Pass a cache in to READ the counters.
-    """
-    # The MODIFIED Newton (ruling 3A): one held factor across the whole march, or None (full Newton).
-    held = HeldFactor(refactor_every) if refactor_every is not None else None
-    if factor_cache is None and isinstance(problem, FactorReusableProblem):
-        factor_cache = FactorCache()
-    integrator = get_integrator(study.integrator)
-    if adaptive and integrator.name != 'bdf2':
-        msg = f'adaptive stepping is implemented for BDF2 only, got integrator {integrator.name}'
-        raise ValueError(msg)
-    u0 = np.asarray(u0, dtype=float)
-    state = integrator.start(u0, study.t0, v0, a0)
-    dt = study.dt
-    if adaptive:
-        # The ADAPTIVE march (W6, OTSF from the simba notes): the BDF2's local truncation
-        # error is estimated by the difference between the BDF2 step and the linear
-        # extrapolation from the history (the second-order difference is O(h^3), so the
-        # controller h *= (atol/err)^(1/3) drives the LTE to atol). A rejected step halves
-        # and retries; an accepted step's size is grown by the controller's own gain. The
-        # event locator's bracket-and-bisect machinery is step-agnostic, so the adaptive
-        # steps and the eventful march compose -- the events' own adaptive wiring is a
-        # follow-up (the events.py cells are fixed-grid by construction).
-        h = dt
-        h_prev = dt  # the last ACCEPTED step's size (the history's spacing, for the LTE)
-        h_lo = dt / 1000.0 if h_min is None else h_min
-        h_hi = dt * 1000.0 if h_max is None else h_max
-        t_end = study.t1
-        solution = TransientSolution(times=[study.t0], states=[u0], state_rates=[], rate_state_overrides={})
-        while state.t < t_end - 1e-14:
-            h = min(h, t_end - state.t)
-            t_new = state.t + h
-            out = take_step(
-                problem,
-                integrator,
-                state,
-                h,
-                t_new,
-                solve=solve,
-                max_newton=max_newton,
-                tol=tol,
-                tol_rel=tol_rel,
-                factor_cache=factor_cache,
-                backtrack_band=backtrack_band,
-                backtrack_cap=backtrack_cap,
-                gmin_stages=gmin_stages,
-                held=held,
-            )
-            u_new, converged, residual, on_floor = out.u, out.converged, out.residual, out.on_floor
-            # The LTE: |u_new - u_extrap| where u_extrap is the linear continuation from the
-            # last two states, SCALED by the spacing ratio h/h_prev -- the naive 2u1-u0 form
-            # assumes h == h_prev and overstates the error by |du|*|1 - h/h_prev| on the
-            # first retry after a rejection (measured 2026-08-07: the controller then spun
-            # at the floor).
-            if len(state.us) >= 2:
-                u_prev = np.asarray(state.us[-2], dtype=float)
-                u_extrap = state.last_u + (state.last_u - u_prev) * (h / h_prev)
-                err = float(np.linalg.norm(u_new - u_extrap))
-                err = max(err, 1e-300)
-            else:
-                err = 0.0  # the first step: no history to extrapolate from -- accept it
-            if h <= h_lo or (converged and (err == 0.0 or err <= atol)):
-                # accept the step -- at the h_lo floor REGARDLESS of the convergence (the
-                # step is taken with the contract's label: the nonconverged_times + the
-                # warning -- a step that cannot converge at the floor must not spin forever,
-                # measured 2026-08-07: the retry loop at h_lo with conv=False never exited)
-                solution.worst_step_residual = max(solution.worst_step_residual, residual)
-                if not converged:
-                    solution.nonconverged_times.append(t_new)
-                elif on_floor:
-                    # ONE spelling of this rule, shared with the fixed-grid march below: a step is
-                    # recorded against exactly one of the two lists, because `on_floor` is only
-                    # ever set where the floor MADE the verdict converged.
-                    solution.floor_converged_times.append(t_new)
-                state = out.state
-                solution.times.append(t_new)
-                solution.states.append(u_new)
-                assert solution.state_rates is not None
-                solution.state_rates.append(out.rate)
-                if isinstance(problem, HistoryProblem):
-                    problem.commit_history(u_new, t_new)
-                h_prev = h
-                if err > 0.0:
-                    h = min(h_hi, max(h_lo, h * min(2.0, 1.2 * (atol / err) ** (1.0 / 3.0))))
-            else:
-                # reject: halve and retry (bounded by h_lo -- at the floor the step is taken
-                # with the contract's label rather than spun forever)
-                h = max(h_lo, h / 2.0)
-        return solution
-    n_full = _full_fixed_steps(study)
-    solution = TransientSolution(times=[study.t0], states=[u0], state_rates=[], rate_state_overrides={})
-    has_remainder = study.t1 - (study.t0 + n_full * dt) > 1e-12 * max(dt, abs(study.t1 - study.t0))
-    for k in range(n_full + int(has_remainder)):
-        final_partial = k == n_full
-        t_new = study.t1 if final_partial else study.t0 + (k + 1) * dt
-        step_dt = t_new - state.t if final_partial else dt
-        out = take_step(
-            problem,
-            integrator,
-            state,
-            step_dt,
-            t_new,
-            solve=solve,
-            max_newton=max_newton,
-            tol=tol,
-            tol_rel=tol_rel,
-            factor_cache=factor_cache,
-            backtrack_band=backtrack_band,
-            backtrack_cap=backtrack_cap,
-            line_search=line_search,
-            gmin_stages=gmin_stages,
-            held=held,
-        )
-        u_new, converged, residual, on_floor = out.u, out.converged, out.residual, out.on_floor
-        solution.worst_step_residual = max(solution.worst_step_residual, residual)
-        if on_floor:
-            solution.floor_converged_times.append(t_new)
-        elif not converged:
-            solution.nonconverged_times.append(t_new)
-            # The CONVERGENCE CONTRACT, label-don't-block (AGENTS.md first principle): the
-            # march continues, the result carries the measured deviation, and the caller
-            # reads the tag -- a silent accept is the forbidden shape. One warning per
-            # exhaustion event, carrying the measured residual.
-            logger.warning(
-                'step at t=%s did not converge in %s Newton iteration(s): residual %s exceeds '
-                'both the absolute tol %s and the arithmetic floor of this system',
-                t_new,
-                max_newton,
-                f'{residual:.3e}',
-                f'{tol:.3e}',
-            )
-        state = out.state
-        solution.times.append(t_new)
-        solution.states.append(u_new)
-        assert solution.state_rates is not None
-        solution.state_rates.append(out.rate)
-        # THE STEP JOINED THE TRAJECTORY, so its material history is the one the next step starts
-        # from -- including a step labelled non-converged: the march continues from `u_new`, and a
-        # history left at the previous step would be a trajectory the material never followed.
-        if isinstance(problem, HistoryProblem):
-            problem.commit_history(u_new, t_new)
-    if held is not None:
-        logger.info('held-factor march: factorizations=%d solves=%d', held.factorizations, held.solves)
-    return solution

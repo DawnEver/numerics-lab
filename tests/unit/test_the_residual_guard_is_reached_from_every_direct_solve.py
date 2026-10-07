@@ -56,7 +56,7 @@ import pytest
 import scipy.sparse as sp
 
 from motronics.gauss.linear import LinearSolveError, direct_relative_residual, solve_linear_system
-from motronics.gauss.time_integrators import _default_solve
+from motronics.gauss.time_integrators.march import _default_solve
 
 GOLDEN = Path(__file__).parent / 'goldens' / 'lipo_inductor_m6_singular_157.npz'
 

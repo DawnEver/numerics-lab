@@ -21,9 +21,9 @@ from scipy.sparse import csr_matrix
 
 from motronics.contracts.spec.analysis_formulation import DerivativeWeights
 from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
-from motronics.gauss.time_integrators import _default_solve, factor_reuse, integrate_transient
-from motronics.gauss.time_integrators.events import integrate_transient_with_events
+from motronics.gauss.time_integrators import factor_reuse, integrate_transient
 from motronics.gauss.time_integrators.factor_reuse import FactorCache
+from motronics.gauss.time_integrators.march import _default_solve
 
 
 class _SpringBase:
@@ -132,7 +132,7 @@ def test_a_state_change_is_a_new_key_and_refactors() -> None:
 
 
 def test_the_event_march_refactors_on_the_toggle_and_stays_bit_identical() -> None:
-    """``integrate_transient_with_events``: the toggle flips the key, the grid event is exact."""
+    """``integrate_transient``: the toggle flips the key, the grid event is exact."""
     problem = _LinearSpring([[2.0, 0.1], [0.1, 1.0]])
     study = _study()
     cache = FactorCache()
@@ -141,9 +141,9 @@ def test_the_event_march_refactors_on_the_toggle_and_stays_bit_identical() -> No
         problem.k_scale = 3.0
 
     kwargs = {'event_fns': (lambda _u, t: t - 0.5,), 'on_event': toggle}
-    plain = integrate_transient_with_events(problem, study, np.array([1.0, 0.5]), **kwargs)
+    plain = integrate_transient(problem, study, np.array([1.0, 0.5]), **kwargs)
     problem.k_scale = 1.0
-    cached = integrate_transient_with_events(problem, study, np.array([1.0, 0.5]), factor_cache=cache, **kwargs)
+    cached = integrate_transient(problem, study, np.array([1.0, 0.5]), factor_cache=cache, **kwargs)
     assert plain.times == cached.times and plain.events == cached.events
     for a, b in zip(plain.states, cached.states, strict=True):
         assert np.array_equal(a, b)

@@ -17,7 +17,6 @@ from tests.unit.gauss._helpers import _RampWithToggle
 
 from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
 from motronics.gauss.time_integrators import integrate_transient
-from motronics.gauss.time_integrators.events import integrate_transient_with_events
 
 
 def test_time_breakpoints_land_on_the_grid_and_do_not_change_a_breakpointless_march() -> None:
@@ -38,16 +37,16 @@ def test_time_breakpoints_land_on_the_grid_and_do_not_change_a_breakpointless_ma
 
     study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
     problem = _Linear()
-    solution = integrate_transient_with_events(problem, study, np.array([0.0]), time_breakpoints=(0.05, 0.27, 0.8))
+    solution = integrate_transient(problem, study, np.array([0.0]), time_breakpoints=(0.05, 0.27, 0.8))
     ts = np.asarray(solution.times)
     for bp in (0.05, 0.27, 0.8):
         assert np.isclose(ts, bp).any(), f'breakpoint {bp} not on the grid'
 
-    plain = integrate_transient_with_events(problem, study, np.array([0.0]))
+    plain = integrate_transient(problem, study, np.array([0.0]))
     # A clipped cell replaces its nominal target: 0.1 is displaced by the 0.05 breakpoint.
     assert 0.1 not in ts
 
-    no_bps = integrate_transient_with_events(problem, study, np.array([0.0]), time_breakpoints=())
+    no_bps = integrate_transient(problem, study, np.array([0.0]), time_breakpoints=())
     assert np.array_equal(no_bps.times, plain.times)
 
 
@@ -63,7 +62,7 @@ def test_time_breakpoints_and_state_events_coexist() -> None:
     """
     problem = _RampWithToggle(level=0.5)
     study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
-    solution = integrate_transient_with_events(
+    solution = integrate_transient(
         problem,
         study,
         np.array([0.0]),
@@ -89,9 +88,9 @@ def test_time_breakpoints_outside_the_study_window_are_refused() -> None:
             return np.array([[weights.alpha1.real]])
 
     with pytest.raises(ValueError, match='study window'):
-        integrate_transient_with_events(_Linear(), study, np.array([0.0]), time_breakpoints=(1.5,))
+        integrate_transient(_Linear(), study, np.array([0.0]), time_breakpoints=(1.5,))
     with pytest.raises(ValueError, match='strictly increasing'):
-        integrate_transient_with_events(_Linear(), study, np.array([0.0]), time_breakpoints=(0.2, 0.2))
+        integrate_transient(_Linear(), study, np.array([0.0]), time_breakpoints=(0.2, 0.2))
 
 
 def test_thousands_of_time_breakpoints_all_land_on_the_grid() -> None:
@@ -111,7 +110,7 @@ def test_thousands_of_time_breakpoints_all_land_on_the_grid() -> None:
         def jacobian(self, u, u_dot, u_ddot, t, weights):
             return np.array([[weights.alpha1.real]])
 
-    solution = integrate_transient_with_events(_Linear(), study, np.array([0.0]), time_breakpoints=bps)
+    solution = integrate_transient(_Linear(), study, np.array([0.0]), time_breakpoints=bps)
     ts = np.asarray(solution.times)
     for bp in (bps[0], bps[1000], bps[3000], bps[-1]):
         assert np.isclose(ts, bp).any(), f'breakpoint {bp} not on the grid'
@@ -138,7 +137,7 @@ def test_breakpoint_clipping_never_drifts_the_time_base() -> None:
             return np.array([[weights.alpha1.real]])
 
     study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
-    solution = integrate_transient_with_events(_Linear(), study, np.array([0.0]), time_breakpoints=(0.05, 0.27, 0.8))
+    solution = integrate_transient(_Linear(), study, np.array([0.0]), time_breakpoints=(0.05, 0.27, 0.8))
     ts = np.asarray(solution.times)
     us = np.asarray([float(s[0]) for s in solution.states])
     assert np.max(np.abs(us - ts)) < 1.0e-12, f'time base drifted: max |u - t| = {np.max(np.abs(us - ts))}'
@@ -162,7 +161,7 @@ def test_a_final_cell_breakpoint_is_a_partial_step_not_a_full_dt() -> None:
             return np.array([[weights.alpha1.real]])
 
     study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
-    solution = integrate_transient_with_events(_Linear(), study, np.array([0.0]), time_breakpoints=(0.95,))
+    solution = integrate_transient(_Linear(), study, np.array([0.0]), time_breakpoints=(0.95,))
     ts = np.asarray(solution.times)
     us = np.asarray([float(s[0]) for s in solution.states])
     assert np.max(np.abs(us - ts)) < 1.0e-12
@@ -182,7 +181,7 @@ def test_a_breakpoint_in_a_non_integral_final_interval_is_consumed(bp: float) ->
             return np.array([[weights.alpha1.real]])
 
     study = TransientStudy(t0=0.0, t1=1.0, dt=0.3, integrator=IntegratorKind.BDF2)
-    solution = integrate_transient_with_events(_Linear(), study, np.array([0.0]), time_breakpoints=(bp,))
+    solution = integrate_transient(_Linear(), study, np.array([0.0]), time_breakpoints=(bp,))
 
     assert solution.times[-1] == pytest.approx(study.t1)
     assert any(t == pytest.approx(bp) for t in solution.times)
@@ -200,7 +199,7 @@ def test_a_non_integral_window_is_bit_identical_to_the_plain_march() -> None:
 
     study = TransientStudy(t0=0.0, t1=1.0, dt=0.3, integrator=IntegratorKind.BDF2)
     plain = integrate_transient(_Linear(), study, np.array([0.0]))
-    eventful = integrate_transient_with_events(_Linear(), study, np.array([0.0]))
+    eventful = integrate_transient(_Linear(), study, np.array([0.0]))
     assert np.array_equal(plain.times, eventful.times)
     assert np.array_equal(np.asarray(plain.states), np.asarray(eventful.states))
     assert eventful.times[-1] == pytest.approx(1.0)
@@ -215,5 +214,5 @@ def test_event_location_tolerance_cannot_erase_a_short_observation_window() -> N
             return np.array([[weights.alpha1.real]])
 
     study = TransientStudy(t0=0.0, t1=0.1, dt=1.0, integrator=IntegratorKind.BDF2)
-    solution = integrate_transient_with_events(_Linear(), study, np.array([0.0]), time_tol=0.2)
+    solution = integrate_transient(_Linear(), study, np.array([0.0]), time_tol=0.2)
     assert solution.times == pytest.approx([0.0, 0.1])
