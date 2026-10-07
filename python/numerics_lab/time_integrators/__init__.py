@@ -43,6 +43,14 @@ from motronics.gauss.time_integrators._integrators import (
 from motronics.gauss.time_integrators._step import HeldFactor, directional_line_search
 from motronics.gauss.time_integrators.factor_reuse import FactorCache
 from motronics.gauss.time_integrators.march import StepTolerance, integrate_transient
+from motronics.gauss.time_integrators.multirate import (
+    Hold,
+    RateTransition,
+    SampledTask,
+    base_sample_time,
+    integrate_sampled,
+    sample_hits,
+)
 
 __all__ = [
     'INTEGRATOR_REGISTRY',
@@ -51,14 +59,20 @@ __all__ = [
     'FactorCache',
     'GeneralizedAlphaIntegrator',
     'HeldFactor',
+    'Hold',
     'IntegratorState',
     'NewmarkIntegrator',
+    'RateTransition',
+    'SampledTask',
     'StepForm',
     'StepTolerance',
     'TRBDF2Integrator',
     'TransientSolution',
     'TrapezoidIntegrator',
+    'base_sample_time',
     'directional_line_search',
     'get_integrator',
+    'integrate_sampled',
     'integrate_transient',
+    'sample_hits',
 ]
