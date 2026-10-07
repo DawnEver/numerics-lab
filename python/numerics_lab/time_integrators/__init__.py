@@ -60,9 +60,9 @@ from motronics.gauss.time_integrators._step import HeldFactor, directional_line_
 from motronics.gauss.time_integrators._time_lattice import adaptive_lattice
 from motronics.gauss.time_integrators.checkpoint import (
     EECCheckpointState,
-    HistoryPresence,
     TransientCheckpoint,
     _checkpoint_of,
+    owns_history,
     restore_history_checkpoint,
     validate_history_owner,
 )
@@ -298,7 +298,7 @@ def integrate_transient(
         if adaptive or integrator.name not in ('bdf1', 'bdf2') or not np.isfinite(eec_period) or eec_period <= 0:
             msg = 'eec_period requires a positive period and fixed/table first-order BDF march'
             raise ValueError(msg)
-        if isinstance(problem, HistoryProblem) and (not isinstance(problem, HistoryPresence) or problem.has_history):
+        if owns_history(problem):
             msg = 'TP-EEC cannot correct material history'
             raise ValueError(msg)
     if adaptive and integrator.name != 'bdf2':

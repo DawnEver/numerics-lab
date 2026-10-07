@@ -4,10 +4,9 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 
-from motronics.contracts.spec.analysis_formulation import HistoryProblem
 from motronics.contracts.spec.study_spec import IntegratorKind
 from motronics.gauss.time_integrators import integrate_transient
-from motronics.gauss.time_integrators.checkpoint import HistoryPresence
+from motronics.gauss.time_integrators.checkpoint import owns_history
 from motronics.gauss.time_integrators.shooting import periodic_shooting
 
 __all__ = [
@@ -38,7 +37,7 @@ def shoot_transient_cycle(
     if study.integrator not in (IntegratorKind.BDF1, IntegratorKind.BDF2):
         msg = 'shooting requires first-order BDF1 or BDF2 integration'
         raise ValueError(msg)
-    if isinstance(problem, HistoryProblem) and (not isinstance(problem, HistoryPresence) or problem.has_history):
+    if owns_history(problem):
         msg = 'shooting cannot reuse mutable material history across trial cycles'
         raise ValueError(msg)
     steps = period / study.dt

@@ -293,7 +293,7 @@ def validate_context_json(value):
 
 
 def validate_history_owner(problem):
-    if _history_required(problem) and not isinstance(problem, CheckpointHistory):
+    if owns_history(problem) and not isinstance(problem, CheckpointHistory):
         msg = 'checkpoint requires a material-history export/restore protocol'
         raise ValueError(msg)
 
@@ -306,7 +306,7 @@ def restore_history_checkpoint(problem, checkpoint):
     if contextual:
         problem.restore_checkpoint_context(checkpoint.problem_context)
     validate_history_owner(problem)
-    stateful = _history_required(problem)
+    stateful = owns_history(problem)
     if stateful != (checkpoint.material_history is not None):
         msg = 'checkpoint material history does not match the problem history requirement'
         raise ValueError(msg)
@@ -315,10 +315,15 @@ def restore_history_checkpoint(problem, checkpoint):
 
 
 def capture_history(problem):
-    return problem.checkpoint_history() if _history_required(problem) else None
+    return problem.checkpoint_history() if owns_history(problem) else None
 
 
-def _history_required(problem):
+def owns_history(problem) -> bool:
+    """Whether a march over ``problem`` must commit a material history -- THE one predicate.
+
+    ``HistoryPresence`` is optional: a ``HistoryProblem`` that does not spell it always commits, and
+    a problem that is not a ``HistoryProblem`` never does, whatever else it carries.
+    """
     return isinstance(problem, HistoryProblem) and (not isinstance(problem, HistoryPresence) or problem.has_history)
 
 
