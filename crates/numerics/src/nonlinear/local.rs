@@ -45,7 +45,9 @@ pub fn local_change(
         if !changes.iter().chain(&scales).all(|x| x.is_finite()) {
             return Ok(f64::INFINITY);
         }
-        let floor = f64::EPSILON * scales.iter().copied().fold(0.0_f64, f64::max);
+        // sqrt(eps) of the field's scale, as the Python: a solved field's roundoff is a few ulps,
+        // and an element at that noise flips sign between two converged iterates.
+        let floor = f64::EPSILON.sqrt() * scales.iter().copied().fold(0.0_f64, f64::max);
         for (change, scale) in changes.into_iter().zip(scales) {
             if scale > 0.0 {
                 maximum = maximum.max(change / scale.max(floor));
