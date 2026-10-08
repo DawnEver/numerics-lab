@@ -1,12 +1,11 @@
 """Aggregation multigrid is an actual coarse correction, not a renamed smoother."""
 
-import argparse
-
 import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.cli._numerics_flags import add_linear_solve_flags
+from motronics.__main__ import build_parser
+from motronics.cli.legs import _resolve_orchestration_specs
 from motronics.gauss.linear import make_preconditioner, solve_linear_system
 
 
@@ -43,11 +42,10 @@ def test_amg_refuses_unsupported_operator_types():
 
 
 def test_amg_is_reachable_from_the_production_cli_registry():
-    parser = argparse.ArgumentParser()
-    add_linear_solve_flags(parser.add_argument_group('solver'))
-    args = parser.parse_args(['--linear-solver', 'cg', '--preconditioner', 'amg'])
-    assert args.linear_solver == ['cg']
-    assert args.preconditioner == ['amg']
+    args = build_parser().parse_args(['case', 'run', 'raw.FCStd', '--select', 'fea,cg,amg'])
+    (spec,) = _resolve_orchestration_specs(args)
+    assert spec.linear_solver == 'cg'
+    assert spec.preconditioner == 'amg'
 
 
 def test_amg_operator_accepts_multiple_right_hand_sides():
