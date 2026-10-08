@@ -1,0 +1,72 @@
+"""Sparse algebraic bulk elimination with rank revelation confined to its declared border."""
+
+import numpy as np
+import scipy.sparse as sp
+from scipy.linalg import null_space
+from scipy.sparse.linalg import splu
+
+from motronics.gauss.linear.initial_sparse import SparseInitialPair
+from motronics.gauss.linear.storage_border import storage_border_rows
+
+
+def algebraic_bulk_initial_pair(
+    jacobian, residual, mass, initial, *, bulk_size, partial_time, stored_increment, tolerance
+):
+    """Eliminate proven storage-free bulk; never select a free physical state.
+
+    The numerical representative of a free algebraic rate is not an initial
+    condition: every affected physical component is explicitly marked unknown.
+    Dense rank work is confined to the caller-declared small border.
+    """
+    jacobian, mass = sp.csr_matrix(jacobian), sp.csr_matrix(mass)
+    initial, residual, partial_time = map(np.asarray, (initial, residual, partial_time))
+    n = initial.size
+    k = bulk_size
+    if not 0 < k < n or n - k > 256 or mass[:k].nnz or mass[:, :k].nnz:
+        msg = 'algebraic bulk requires explicit storage-free rows and columns and a bounded border'
+        raise ValueError(msg)
+    factor = splu(jacobian[:k, :k].tocsc())
+    sensitivity = factor.solve(jacobian[:k, k:].toarray())
+    residual_bulk = factor.solve(residual[:k])
+    partial_bulk = factor.solve(partial_time[:k])
+    coupling = jacobian[k:, :k]
+    reduced_jacobian = jacobian[k:, k:].toarray() - coupling @ sensitivity
+    reduced_residual = residual[k:] - coupling @ residual_bulk
+    reduced_partial = partial_time[k:] - coupling @ partial_bulk
+    reduced_mass = mass[k:, k:]
+    m = n - k
+    storage = storage_border_rows(reduced_mass, bulk_indices=np.array([], dtype=int), border_rows=np.arange(m))
+    algebraic = storage.algebraic_rows.toarray()
+    selected = storage.stored_rows
+    matrix = np.block([
+        [reduced_jacobian, reduced_mass.toarray()],
+        [reduced_mass[selected].toarray(), np.zeros((len(selected), m))],
+        [np.zeros((len(algebraic), m)), algebraic @ reduced_jacobian],
+    ])
+    change = np.asarray(stored_increment)
+    if change.shape != (len(selected),):
+        msg = 'algebraic bulk must retain every actual independent border storage increment'
+        raise ValueError(msg)
+    rhs = np.concatenate((-reduced_residual, change, -algebraic @ reduced_partial))
+    norms = np.linalg.norm(matrix, axis=1)
+    norms[norms == 0] = 1
+    matrix, rhs = matrix / norms[:, None], rhs / norms
+    free = null_space(matrix)
+    rank_bar = np.finfo(float).eps * max(matrix.shape) * 16
+    if np.any(np.linalg.norm(free[:m], axis=1) > rank_bar):
+        msg = 'actual border initial state requires additional physical authority'
+        raise ValueError(msg)
+    answer, *_ = np.linalg.lstsq(matrix, rhs, rcond=None)
+    defect = matrix @ answer - rhs
+    scale = np.abs(matrix) @ np.abs(answer) + np.abs(rhs)
+    if np.any(np.abs(defect) > tolerance * scale):
+        msg = 'actual border stored state contradicts its state/rate equations'
+        raise ValueError(msg)
+    state = initial + np.concatenate((-residual_bulk - sensitivity @ answer[:m], answer[:m]))
+    rate = np.concatenate((-partial_bulk - sensitivity @ answer[m:], answer[m:]))
+    rate_free = free[m:]
+    border_unique = np.linalg.norm(rate_free, axis=1) <= rank_bar
+    bulk_free = sensitivity @ rate_free
+    bulk_scale = np.abs(sensitivity) @ np.abs(rate_free)
+    bulk_unique = np.all(np.abs(bulk_free) <= rank_bar * bulk_scale, axis=1)
+    return SparseInitialPair(state, rate, np.concatenate((bulk_unique, border_unique)))

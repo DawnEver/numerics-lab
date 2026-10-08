@@ -9,6 +9,7 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import splu
 
+from motronics.gauss.linear.algebraic_bulk_initial import algebraic_bulk_initial_pair
 from motronics.gauss.linear.initial_sparse import projected_rate_consistent, sparse_initial_pair
 from motronics.gauss.nonlinear import AssembledState, NewtonStrategy
 
@@ -123,6 +124,7 @@ def finite_storage_initial_pair(
     storage_rows,
     max_newton=30,
     tolerance=1e-10,
+    algebraic_bulk_size=None,
 ):
     """Actual state/rate pair for finite Q with its invariant algebraic row space."""
     state = np.asarray(initial, dtype=float).copy()
@@ -139,13 +141,18 @@ def finite_storage_initial_pair(
             msg = 'finite storage initial pair requires its invariant actual algebraic row space'
             raise ValueError(msg)
         jacobian, residual = sp.csr_matrix(jacobian_at(state)), np.asarray(residual_at(state, zero))
-        pair = sparse_initial_pair(
+        pair_solver = sparse_initial_pair if algebraic_bulk_size is None else algebraic_bulk_initial_pair
+        coordinates = (
+            {'algebraic_rows': algebraic, 'stored_rows': selected}
+            if algebraic_bulk_size is None
+            else {'bulk_size': algebraic_bulk_size}
+        )
+        pair = pair_solver(
             jacobian,
             residual,
             mass,
             state,
-            algebraic_rows=algebraic,
-            stored_rows=selected,
+            **coordinates,
             stored_increment=target - np.asarray(storage_at(state))[selected],
             partial_time=partial_time_at(state),
             tolerance=tolerance,
