@@ -29,6 +29,30 @@ def complete_rate_border(
     """
     mass, jacobian, matrix = map(sp.csr_matrix, (mass, jacobian, matrix))
     n = mass.shape[0]
+    rhs, acceleration_rhs, evaluation_scale = map(np.asarray, (rhs, acceleration_rhs, evaluation_scale))
+    rate_is_unique = np.asarray(rate_is_unique)
+    if (
+        rhs.shape != (matrix.shape[0],)
+        or acceleration_rhs.shape != (n,)
+        or evaluation_scale.shape != rhs.shape
+        or rate_is_unique.shape != (n,)
+        or rate_is_unique.dtype.kind != 'b'
+        or any(value.dtype.kind not in 'fiu' for value in (rhs, acceleration_rhs, evaluation_scale))
+        or any(not np.isfinite(value).all() for value in (rhs, acceleration_rhs, evaluation_scale))
+        or any(not np.isfinite(value.data).all() for value in (mass, jacobian, matrix))
+        or np.any(evaluation_scale < 0)
+        or isinstance(tolerance, (bool, np.bool_))
+        or not np.isscalar(tolerance)
+        or not np.isreal(tolerance)
+        or not np.isfinite(tolerance)
+        or tolerance <= 0
+        or isinstance(acceleration_equation_start, (bool, np.bool_))
+        or not isinstance(acceleration_equation_start, (int, np.integer))
+        or acceleration_equation_start < 0
+        or acceleration_equation_start + n > matrix.shape[0]
+    ):
+        msg = 'stored acceleration border requires finite aligned actual equations and a boolean rate mask'
+        raise ValueError(msg)
     rows, columns = np.asarray(stored_rows), np.asarray(stored_columns)
     unknown = np.flatnonzero(~np.asarray(rate_is_unique))
     free_acceleration = np.setdiff1d(np.arange(n), columns)
@@ -52,7 +76,11 @@ def complete_rate_border(
     ):
         msg = 'stored acceleration elimination requires proven independent coordinates and a bounded actual border'
         raise ValueError(msg)
-    factor = splu(mass[rows][:, columns].tocsc())
+    try:
+        factor = splu(mass[rows][:, columns].tocsc())
+    except RuntimeError as exc:
+        msg = 'declared stored acceleration coordinates are not independent'
+        raise ValueError(msg) from exc
     base = np.zeros(2 * n)
     base[n + columns] = factor.solve(np.asarray(acceleration_rhs)[rows])
     sensitivity = np.zeros((n, width))
