@@ -20,13 +20,15 @@ rule every solve here follows -- a periodic state that is not periodic is not an
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import numpy as np
 from numpy.typing import NDArray
 
-__all__ = ['PeriodicFixedPoint', 'periodic_fixed_point']
+from motronics.gauss.time_integrators._forms import TransientSolution
+
+__all__ = ['PeriodicFixedPoint', 'periodic_fixed_point', 'periodic_steady_state', 'smooth_phase']
 
 
 @dataclass(frozen=True)
@@ -70,13 +72,17 @@ def periodic_fixed_point(
     if rank < 1 or max_cycles < 1:
         msg = f'rank and max_cycles must be positive, got rank={rank}, max_cycles={max_cycles}'
         raise ValueError(msg)
+    if not np.isfinite(tol) or tol <= 0:
+        msg = f'tol must be finite and positive, got {tol}'
+        raise ValueError(msg)
     x = np.asarray(x0, dtype=float).copy()
     calls = 0
     residual = np.inf
     for _ in range(max_cycles):
         xs = [x]
         for _ in range(rank + 1):
-            xs.append(np.asarray(period_map(xs[-1]), dtype=float))
+            # A caller may march in place or reuse its output buffer; neither may alter history.
+            xs.append(np.asarray(period_map(xs[-1].copy()), dtype=float).copy())
             calls += 1
             scale = max(float(np.max(np.abs(xs[-1]))), float(np.max(np.abs(xs[-2]))), np.finfo(float).tiny)
             residual = float(np.max(np.abs(xs[-1] - xs[-2]))) / scale
@@ -89,3 +95,52 @@ def periodic_fixed_point(
         'subharmonic orbit), or the period is not the forcing period.'
     )
     raise RuntimeError(msg)
+
+
+def smooth_phase(period: float, edges: Sequence[float]) -> float:
+    """The middle of the widest edge-free gap in one period: where a period map may restart its history.
+
+    Restarting the integrator ON a source edge integrates the edge differently from a march that
+    spans it (measured on a pulse-driven LC: the restarted map settled at 4.018 V against the
+    continuous march's 3.993 V). Away from every edge the restart is one smooth bootstrap step.
+    """
+    if not np.isfinite(period) or period <= 0:
+        msg = f'period must be finite and positive, got {period}'
+        raise ValueError(msg)
+    marks = sorted({0.0, *(e % period for e in edges)})
+    gaps = [((marks[(i + 1) % len(marks)] - m) % period or period, m) for i, m in enumerate(marks)]
+    width, at = max(gaps)
+    return (at + 0.5 * width) % period
+
+
+def periodic_steady_state(
+    march: Callable[[float, float, NDArray[np.floating], tuple[float, ...], bool], TransientSolution],
+    period: float,
+    x0: Callable[[float], NDArray[np.floating]] | NDArray[np.floating],
+    *,
+    edges: Sequence[float] = (),
+    tol: float = 1e-9,
+    rank: int = 6,
+    max_cycles: int = 50,
+) -> tuple[PeriodicFixedPoint, TransientSolution]:
+    """THE forced periodic steady state: the period map's fixed point and one marched period of it.
+
+    ``march(t0, t1, x, breakpoints, first)`` marches one window (``first`` is True only for the very
+    first map, so a caller may reset its own switch state once). The map starts at
+    :func:`smooth_phase` -- never on a forcing edge -- and lands every edge of the period as a
+    breakpoint. ``x0`` is the start state, or a callable returning it at the chosen phase. ``period``
+    must be the forcing period of every source; a free-running orbit has no such clock.
+    """
+    phase = smooth_phase(period, edges)
+    wrapped = sorted({e % period + (period if e % period <= phase else 0.0) for e in edges})
+    bps = tuple(phase + period if abs(e - phase - period) < 1e-12 * period else e for e in wrapped)
+    first = [True]
+
+    def period_map(x: NDArray[np.floating]) -> NDArray[np.floating]:
+        sol = march(phase, phase + period, x, bps, first[0])
+        first[0] = False
+        return np.asarray(sol.states[-1], dtype=float)
+
+    start = x0(phase) if callable(x0) else np.asarray(x0, dtype=float)
+    fixed = periodic_fixed_point(period_map, start, tol=tol, rank=rank, max_cycles=max_cycles)
+    return fixed, march(phase, phase + period, fixed.state, bps, False)

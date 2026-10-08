@@ -3,13 +3,13 @@
 A sampled controller (or any discrete block) runs at its own clock; the continuous problem it acts on
 sees its outputs HELD between samples. This module owns the three pieces that makes precise:
 
-* :func:`sample_hits` -- the ONE rule for "which instants of ``[t0, t1)`` are hits of a clock", with
-  the floating-point near-integer tolerance every hand-rolled ``round((t1 - t0)/dt)`` re-derived;
+* :func:`sample_hits` -- the ONE rule for clock instants in exactly ``[t0, t1)``; candidate tick
+  padding handles quotient roundoff without expanding the physical time interval;
 * :func:`base_sample_time` -- the AUTO sample time: the largest period every declared clock is an
   integer multiple of (a rational gcd), so integer AND non-integer clock ratios (2:3, 1:1.5) share
   one grid;
-* :func:`integrate_sampled` -- fire the due tasks at each hit (fastest clock first, so a slower task
-  reading through a :class:`RateTransition` sees the faster task's value OF THAT INSTANT), then march
+* :func:`integrate_sampled` -- fire due tasks by declared causal priority, then fastest clock (a slower task
+  reading through a :class:`RateTransition` sees the faster task's value OF THAT INSTANT by default), then march
   the continuous problem to the next hit. Every hit is a discontinuity of the held inputs, so each
   segment restarts the integrator history -- the same rule an event follows.
 
@@ -20,22 +20,38 @@ the caller wires into its residual. What a task COMPUTES is the caller's.
 from __future__ import annotations
 
 import itertools
+import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from fractions import Fraction
 
 import numpy as np
 from numpy.typing import NDArray
 
-from motronics.contracts.spec.study_spec import TransientStudy
+from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
 from motronics.gauss.time_integrators._forms import TransientSolution
-from motronics.gauss.time_integrators.march import integrate_transient
+from motronics.gauss.time_integrators._integrators import get_integrator
+from motronics.gauss.time_integrators.initial import consistent_initial_condition
+from motronics.gauss.time_integrators.march import BudgetExceeded, integrate_transient
 
 __all__ = ['Hold', 'RateTransition', 'SampledTask', 'base_sample_time', 'integrate_sampled', 'sample_hits']
 
 #: Relative slack for "this instant is a clock hit": far below any physical period ratio, far above
 #: the round-off of ``offset + k * period``.
 _HIT_TOL = 1e-9
+
+
+def _validate_clock(period: float, offset: float) -> None:
+    if not (np.isfinite(period) and period > 0.0):
+        msg = f'a sampled clock needs a finite positive period, got {period!r}'
+        raise ValueError(msg)
+    if not np.isfinite(offset):
+        msg = f'a sampled clock needs a finite offset, got {offset!r}'
+        raise ValueError(msg)
+
+
+def _same_instant(a: float, b: float) -> bool:
+    return abs(a - b) <= 4 * max(abs(np.spacing(a)), abs(np.spacing(b)))
 
 
 @dataclass
@@ -52,15 +68,18 @@ class SampledTask:
     period: float
     update: Callable[[float, NDArray[np.floating]], None]
     offset: float = 0.0
+    #: Lower priorities run first at coincident hits (e.g. an outer reference before its inner PI).
+    #: Within one priority, fastest clock then declaration order remain the rule.
+    priority: int = 0
 
     def __post_init__(self) -> None:
-        if not (np.isfinite(self.period) and self.period > 0.0):
-            msg = f'a sampled task needs a finite positive period, got {self.period!r}'
-            raise ValueError(msg)
+        _validate_clock(self.period, self.offset)
 
     def due(self, t: float) -> bool:
-        k = (t - self.offset) / self.period
-        return k > -_HIT_TOL and abs(k - round(k)) <= _HIT_TOL * max(1.0, abs(k))
+        if not np.isfinite(t):
+            return False
+        k = round((t - self.offset) / self.period)
+        return k >= 0 and _same_instant(t, self.offset + k * self.period)
 
 
 @dataclass
@@ -86,12 +105,16 @@ class RateTransition:
 
 
 def sample_hits(t0: float, t1: float, period: float, offset: float = 0.0) -> NDArray[np.float64]:
-    """The clock's hits in ``[t0, t1)``: ``offset + k * period``, a near-integer count read as integer."""
-    k0 = (t0 - offset) / period
-    k_first = round(k0) if abs(k0 - round(k0)) <= _HIT_TOL * max(1.0, abs(k0)) else int(np.ceil(k0))
-    k1 = (t1 - offset) / period
-    k_last = round(k1) - 1 if abs(k1 - round(k1)) <= _HIT_TOL * max(1.0, abs(k1)) else int(np.floor(k1))
-    return offset + period * np.arange(k_first, k_last + 1, dtype=float)
+    """Clock instants in exactly ``[t0, t1)``; a clock starts at nonnegative tick zero."""
+    _validate_clock(period, offset)
+    # Quotient rounding can land on either side of an integer. Generate one extra
+    # candidate at each boundary, then decide membership from the actual instants.
+    # A relative clock tolerance must never admit a hit before a study's start or
+    # drop a genuine final hit: doing so changes the held-input problem itself.
+    k_first = max(0, int(np.floor((t0 - offset) / period)) - 1)
+    k_last = int(np.ceil((t1 - offset) / period)) + 1
+    hits = offset + period * np.arange(k_first, k_last + 1, dtype=float)
+    return hits[(hits >= t0) & (hits < t1)]
 
 
 def base_sample_time(periods: Sequence[float], *, max_denominator: int = 10**9) -> float:
@@ -105,6 +128,8 @@ def base_sample_time(periods: Sequence[float], *, max_denominator: int = 10**9) 
     if not periods:
         msg = 'base_sample_time needs at least one period'
         raise ValueError(msg)
+    for period in periods:
+        _validate_clock(period, 0.0)
     fracs = [Fraction(p).limit_denominator(max_denominator) for p in periods]
     for p, f in zip(periods, fracs, strict=True):
         if abs(float(f) - p) > _HIT_TOL * p:
@@ -122,34 +147,79 @@ def integrate_sampled(
     study: TransientStudy,
     u0: NDArray[np.floating],
     tasks: Sequence[SampledTask],
+    *,
+    consistent_start: bool = False,
     **march,
 ) -> TransientSolution:
     """March ``problem`` over ``study`` with ``tasks`` firing at their hits and holding between them.
 
     ``study.dt`` bounds the continuous step inside a segment; every ``march`` keyword passes to
-    :func:`~motronics.gauss.time_integrators.march.integrate_transient`. Tasks due at the same
-    instant run fastest-clock first, same-clock tasks in declaration order. The returned trajectory is the segments joined at their hits
+    :func:`~motronics.gauss.time_integrators.march.integrate_transient`. Coincident tasks run by
+    ascending priority, then fastest clock, then declaration order. The returned trajectory is the segments joined at their hits
     (each hit appears once), with every convergence label carried.
+    ``consistent_start`` recomputes first-order rates after tasks update held inputs,
+    holding all declared states fixed. Inconsistent algebraic states are refused rather
+    than silently jumped; this option is for index-1 first-order systems, not acceleration.
     """
-    order = sorted(tasks, key=lambda task: task.period)
-    hits = sorted({float(h) for task in tasks for h in sample_hits(study.t0, study.t1, task.period, task.offset)})
-    if not hits or hits[0] > study.t0 + _HIT_TOL * study.dt:
+    if consistent_start and study.integrator in (IntegratorKind.NEWMARK, IntegratorKind.GENERALIZED_ALPHA):
+        msg = 'consistent_start initializes first-order rates, not second-order acceleration'
+        raise ValueError(msg)
+    order = sorted(tasks, key=lambda task: (task.priority, task.period))
+    scheduled = sorted(
+        (float(h), index)
+        for index, task in enumerate(order)
+        for h in sample_hits(study.t0, study.t1, task.period, task.offset)
+    )
+    hits: list[float] = []
+    due: list[set[int]] = []
+    for hit, index in scheduled:
+        # Only arithmetic roundoff joins clock instants; the much wider hit-recognition
+        # tolerance must not merge physically distinct offsets or fire a task at another clock.
+        if hits and _same_instant(hit, hits[-1]):
+            due[-1].add(index)
+        else:
+            hits.append(hit)
+            due.append({index})
+    if not hits or hits[0] > study.t0:
         hits.insert(0, study.t0)
+        due.insert(0, set())
     bounds = [*hits, study.t1]
     u = np.asarray(u0, dtype=float)
     out = TransientSolution(times=[study.t0], states=[u], state_rates=[], rate_state_overrides={})
-    for t_a, t_b in itertools.pairwise(bounds):
-        for task in order:
-            if task.due(t_a):
-                task.update(t_a, u)
-        if t_b - t_a <= _HIT_TOL * study.dt:
+    v, a = march.pop('v0', None), march.pop('a0', None)
+    integrator = get_integrator(study.integrator)
+    budget = march.pop('budget', None)
+    started = time.perf_counter()
+    for (t_a, t_b), firing in zip(itertools.pairwise(bounds), due, strict=True):
+        if budget is not None:
+            budget.check(started, out.times[-1], u, len(out.times) - 1)
+        for index in sorted(firing):
+            task = order[index]
+            task.update(t_a, u)
+            if budget is not None:
+                budget.check(started, out.times[-1], u, len(out.times) - 1)
+        if t_b <= t_a:
             continue
-        seg = integrate_transient(
-            problem,
-            TransientStudy(t0=t_a, t1=t_b, dt=min(study.dt, t_b - t_a), integrator=study.integrator),
-            u,
-            **march,
-        )
+        if consistent_start:
+            start = consistent_initial_condition(problem, u, t_a, fixed=range(u.size), tol=march.get('tol', 1e-10))
+            v = start.u_dot
+            if budget is not None:
+                budget.check(started, out.times[-1], u, len(out.times) - 1)
+        remaining = budget
+        if budget is not None and budget.wall_seconds is not None:
+            remaining = replace(budget, wall_seconds=max(0.0, budget.wall_seconds - (time.perf_counter() - started)))
+        try:
+            seg = integrate_transient(
+                problem,
+                TransientStudy(t0=t_a, t1=t_b, dt=min(study.dt, t_b - t_a), integrator=study.integrator),
+                u,
+                v0=v,
+                a0=a,
+                budget=remaining,
+                **march,
+            )
+        except BudgetExceeded as exc:
+            raise BudgetExceeded(exc.reason, exc.t_reached, exc.u_reached, len(out.times) - 1 + exc.steps) from exc
         out.times.extend(seg.times[1:])
         out.states.extend(seg.states[1:])
         assert out.state_rates is not None and seg.state_rates is not None
@@ -166,4 +236,8 @@ def integrate_sampled(
         out.floor_converged_times.extend(seg.floor_converged_times)
         out.worst_step_residual = max(out.worst_step_residual, seg.worst_step_residual)
         u = np.asarray(seg.states[-1], dtype=float)
+        assert seg.final_integrator_state is not None
+        out.final_integrator_state = seg.final_integrator_state.copy()
+        restart = integrator.restart(out.final_integrator_state, u, t_b)
+        v, a = restart.v, restart.a
     return out

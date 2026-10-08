@@ -61,15 +61,21 @@ def _bdf2_variable_form(state: IntegratorState, dt: float, h: float, t_new: floa
     return StepForm(
         weights=DerivativeWeights(alpha0=1.0, alpha1=(2.0 * dt + h) / (dt * (dt + h))),
         h_u=np.zeros_like(u_n),
-        h_dot=-(dt + h) / (dt * h) * u_n + dt / (h * (dt + h)) * u_nm1,
+        h_dot=dt / (h * (dt + h)) * (u_nm1 - u_n),
         h_ddot=np.zeros_like(u_n),
         t_eval=t_new,
+        rate_origin=u_n,
     )
 
 
 def _bdf1_form(u_n: NDArray[np.floating], dt: float, t_new: float) -> StepForm:
     return StepForm(
-        weights=_bdf1_weights(dt), h_u=_zeros_like(u_n), h_dot=-u_n / dt, h_ddot=_zeros_like(u_n), t_eval=t_new
+        weights=_bdf1_weights(dt),
+        h_u=_zeros_like(u_n),
+        h_dot=_zeros_like(u_n),
+        h_ddot=_zeros_like(u_n),
+        t_eval=t_new,
+        rate_origin=u_n,
     )
 
 
@@ -131,9 +137,10 @@ class BDF2Integrator:
         return StepForm(
             weights=self.weights(dt),
             h_u=_zeros_like(u_n),
-            h_dot=(-4.0 * u_n + u_nm1) / (2.0 * dt),
+            h_dot=(u_nm1 - u_n) / (2.0 * dt),
             h_ddot=_zeros_like(u_n),
             t_eval=t_new,
+            rate_origin=u_n,
         )
 
     def advance(self, state: IntegratorState, u_new, dt: float, t_new: float) -> IntegratorState:
@@ -173,9 +180,10 @@ class TrapezoidIntegrator:
         return StepForm(
             weights=self.weights(dt),
             h_u=_zeros_like(u_n),
-            h_dot=-2.0 / dt * u_n - state.v,
+            h_dot=-state.v,
             h_ddot=_zeros_like(u_n),
             t_eval=t_new,
+            rate_origin=u_n,
         )
 
     def advance(self, state: IntegratorState, u_new, dt: float, t_new: float) -> IntegratorState:
@@ -220,9 +228,10 @@ class TRBDF2Integrator:
         return StepForm(
             weights=self.weights(dt),
             h_u=_zeros_like(u_n),
-            h_dot=-2.0 / h_g * u_n - state.v,
+            h_dot=-state.v,
             h_ddot=_zeros_like(u_n),
             t_eval=state.t + h_g,
+            rate_origin=u_n,
         )
 
     def advance(self, state: IntegratorState, u_new, dt: float, t_new: float) -> IntegratorState:
@@ -293,7 +302,7 @@ class NewmarkIntegrator:
         w = self.weights(dt)
         form = self.prepare(state, dt, t_new)
         a_new = w.alpha2.real * u_new + form.h_ddot
-        v_new = w.alpha1.real * u_new + form.h_dot
+        v_new = form.u_dot(u_new)
         return IntegratorState(us=[u_new], t=t_new, v=v_new, a=a_new, h=dt)
 
     def restart(self, state: IntegratorState, u, t: float) -> IntegratorState:

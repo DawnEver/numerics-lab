@@ -137,7 +137,8 @@ class StepForm:
 
     Every implicit derivative is affine in the unknown: ``u_arg = alpha0*u + h_u`` (the state the
     residual is evaluated at -- the identity ``u`` for BDF/Newmark, an intermediate point for
-    generalized-alpha), ``u_dot = alpha1*u + h_dot``, ``u_ddot = alpha2*u + h_ddot``. The slopes
+    generalized-alpha), ``u_dot = alpha1*(u-rate_origin) + h_dot`` (zero origin when absent),
+    ``u_ddot = alpha2*u + h_ddot``. The slopes
     are exactly the :class:`DerivativeWeights` the jacobian consumes; the offsets are the history.
     ``t_eval`` is the time the residual/source is sampled at (shifted by ``alpha_f*dt`` for
     generalized-alpha).
@@ -148,12 +149,15 @@ class StepForm:
     h_dot: NDArray[np.floating]
     h_ddot: NDArray[np.floating]
     t_eval: float
+    #: Rate history is centered here to avoid subtracting large weighted states.
+    rate_origin: NDArray[np.floating] | None = None
 
     def u_arg(self, u: NDArray[np.floating]) -> NDArray[np.floating]:
         return self.weights.alpha0.real * u + self.h_u
 
     def u_dot(self, u: NDArray[np.floating]) -> NDArray[np.floating]:
-        return self.weights.alpha1.real * u + self.h_dot
+        delta = u if self.rate_origin is None else u - self.rate_origin
+        return self.weights.alpha1.real * delta + self.h_dot
 
     def u_ddot(self, u: NDArray[np.floating]) -> NDArray[np.floating]:
         return self.weights.alpha2.real * u + self.h_ddot
@@ -244,6 +248,9 @@ class TransientSolution:
     floor_converged_times: list[float] = field(default_factory=list)
     #: The located state events as ``(function index, time)`` pairs (empty without ``event_fns``).
     events: list[tuple[int, float]] = field(default_factory=list)
+    #: Owned final integration state: segmented marches preserve continuous velocity/acceleration
+    #: while restarting derivative history at a sampled-input discontinuity.
+    final_integrator_state: IntegratorState | None = None
 
     @property
     def converged(self) -> bool:

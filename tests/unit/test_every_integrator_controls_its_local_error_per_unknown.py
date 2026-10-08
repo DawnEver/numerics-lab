@@ -21,6 +21,29 @@ import pytest
 
 from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
 from motronics.gauss.time_integrators import StepTolerance, integrate_transient
+from motronics.gauss.time_integrators._integrators import get_integrator
+
+
+@pytest.mark.parametrize('kind', [IntegratorKind.BDF1, IntegratorKind.TRAPEZOID, IntegratorKind.TR_BDF2])
+def test_first_order_rate_does_not_cancel_a_large_constant_state(kind) -> None:
+    integrator = get_integrator(kind)
+    previous = np.array([6.0])
+    state = integrator.start(previous, 0.0, np.zeros(1))
+    form = integrator.prepare(state, 1e-5, 1e-5)
+    current = np.nextafter(previous, np.inf)
+    expected = form.weights.alpha1.real * (current - previous)
+    np.testing.assert_array_equal(form.u_dot(current), expected)
+
+
+@pytest.mark.parametrize('next_dt', [1e-5, 2e-5])
+def test_bdf2_history_keeps_one_ulp_rate_on_uniform_and_variable_spacing(next_dt) -> None:
+    integrator = get_integrator(IntegratorKind.BDF2)
+    previous = np.array([6.0])
+    state = integrator.start(previous, 0.0)
+    state = integrator.advance(state, previous.copy(), 1e-5, 1e-5)
+    form = integrator.prepare(state, next_dt, 1e-5 + next_dt)
+    current = np.nextafter(previous, np.inf)
+    np.testing.assert_array_equal(form.u_dot(current), form.weights.alpha1.real * (current - previous))
 
 
 class _Decay:
@@ -103,6 +126,28 @@ def test_planted_control_without_step_control_the_march_is_the_dt_grid() -> None
         _Decay(), TransientStudy(t0=0.0, t1=4.0, dt=0.5, integrator=IntegratorKind.BDF2), np.ones(2)
     )
     np.testing.assert_allclose(sol.times, np.arange(0.0, 4.01, 0.5))
+
+
+def test_event_location_tolerance_cannot_prevent_lte_step_reduction() -> None:
+    class CountedDecay(_Decay):
+        calls = 0
+
+        def residual(self, u, u_dot, u_ddot, t):
+            self.calls += 1
+            if self.calls > 5000:
+                msg = 'step rejection made no progress'
+                raise RuntimeError(msg)
+            return super().residual(u, u_dot, u_ddot, t)
+
+    sol = integrate_transient(
+        CountedDecay(),
+        TransientStudy(t0=0.0, t1=0.01, dt=0.01),
+        np.ones(2),
+        time_tol=0.01,
+        step_control=StepTolerance(rtol=1e-5, atol=1e-10),
+    )
+    assert sol.times[-1] == pytest.approx(0.01)
+    np.testing.assert_allclose(sol.states[-1], np.exp(-_Decay.lam * 0.01), atol=1e-3, rtol=0)
 
 
 class _UndeclaredStep:

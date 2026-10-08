@@ -120,12 +120,31 @@ class StepNotConverged(RuntimeError):
 class RunBudget:
     """Hard limits on one march: wall-clock seconds and resident memory bytes (``None`` = unlimited).
 
-    Checked after every accepted step. A march over budget RAISES :class:`BudgetExceeded` with the
+    Checked before and after each trial solve, and after every accepted step. An individual
+    Newton/linear solve is not preempted. A march over budget RAISES :class:`BudgetExceeded` with the
     state it reached -- a run reaped by the OS reports nothing, a run that stops itself reports where.
     """
 
     wall_seconds: float | None = None
     memory_bytes: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.wall_seconds is not None and (not math.isfinite(self.wall_seconds) or self.wall_seconds < 0):
+            msg = f'wall_seconds must be finite and nonnegative, got {self.wall_seconds}'
+            raise ValueError(msg)
+        if self.memory_bytes is not None and self.memory_bytes <= 0:
+            msg = f'memory_bytes must be positive, got {self.memory_bytes}'
+            raise ValueError(msg)
+
+    def check(self, started: float, t_reached: float, u_reached, steps: int) -> None:
+        """Check one run's budget against its last accepted state, including discarded work."""
+        reason = None
+        if self.wall_seconds is not None and time.perf_counter() - started > self.wall_seconds:
+            reason = f'wall > {self.wall_seconds:g} s'
+        elif self.memory_bytes is not None and _rss_bytes() > self.memory_bytes:
+            reason = f'rss > {self.memory_bytes} B'
+        if reason is not None:
+            raise BudgetExceeded(reason, t_reached, u_reached, steps)
 
 
 class BudgetExceeded(RuntimeError):
@@ -446,6 +465,7 @@ def integrate_transient(
     # consumed edge -- O(n^2) over a PWM march with thousands of edges (SR-014). Breakpoints
     # are only ever consumed front-to-back, so an index into the sorted tuple is equivalent.
     bp_index = 0
+    breakpoint_set = frozenset(breakpoints)
     # The last time each function fired. A function lands on its own zero, so on the pass right
     # after firing its sign at the checkpoint is epsilon-arbitrary and reads as a fresh crossing
     # rooted AT the firing instant -- the same event counted twice (measured: a stateless
@@ -469,15 +489,21 @@ def integrate_transient(
         msg = f"on_nonconverged must be 'raise' or 'label', got {on_nonconverged!r}"
         raise ValueError(msg)
 
+    def check_budget() -> None:
+        if budget is not None:
+            budget.check(started, solution.times[-1], solution.states[-1], len(solution.times) - 1)
+
     def step_from(
         from_state: IntegratorState, dt_step: float, t_new: float
     ) -> tuple[IntegratorState, NDArray, bool, NDArray]:
+        check_budget()
         out = take_step(
             problem,
             integrator,
             from_state,
             dt_step,
             t_new,
+            endpoint_left=t_new in breakpoint_set,
             solve=solve,
             max_newton=max_newton,
             tol=tol,
@@ -489,6 +515,7 @@ def integrate_transient(
             gmin_stages=gmin_stages,
             held=held,
         )
+        check_budget()
         converged, residual, on_floor = out.converged, out.residual, out.on_floor
         # The convergence contract rides the eventful march too: an exhausted step is labelled on
         # the solution, never silent. But WHICH list it belongs in is not knowable here -- this
@@ -517,13 +544,7 @@ def integrate_transient(
         assert solution.state_rates is not None
         solution.state_rates.append(rate)
         emit('step', t=t_new, dt=t_new - solution.times[-2], index=len(solution.times) - 1)
-        if budget is not None:
-            if budget.wall_seconds is not None and time.perf_counter() - started > budget.wall_seconds:
-                msg_0 = f'wall > {budget.wall_seconds:g} s'
-                raise BudgetExceeded(msg_0, t_new, u_new, len(solution.times) - 1)
-            if budget.memory_bytes is not None and _rss_bytes() > budget.memory_bytes:
-                msg_0 = f'rss > {budget.memory_bytes} B'
-                raise BudgetExceeded(msg_0, t_new, u_new, len(solution.times) - 1)
+        check_budget()
         lte_history.append((t_new, u_new))
         del lte_history[: -(integrator.order + 1)]
         # THE STEP JOINED THE TRAJECTORY, so its material history is the one the next step starts
@@ -585,7 +606,7 @@ def integrate_transient(
             # W1b: a time breakpoint inside the cell clips the target -- a known non-smooth
             # instant is LANDED on the grid, never sampled past (a landed point is already
             # reached, so it is consumed and the next one examined).
-            while bp_index < len(breakpoints) and breakpoints[bp_index] <= state.t + bracket_tol:
+            while bp_index < len(breakpoints) and breakpoints[bp_index] <= state.t:
                 bp_index += 1
             if bp_index < len(breakpoints) and breakpoints[bp_index] <= t_target:
                 t_target = breakpoints[bp_index]
@@ -595,7 +616,9 @@ def integrate_transient(
             t_from = state.t
             step_dt = pending_dt
             t_step = t_target
-            if step_control is not None and h_ctrl < pending_dt - bracket_tol:
+            # Event-location precision cannot suppress an LTE-requested smaller step: near an
+            # edge that can retry the identical rejected step forever, even at the error floor.
+            if step_control is not None and h_ctrl < pending_dt:
                 step_dt = h_ctrl
                 t_step = t_from + step_dt
             probe_state, u_probe, step_ok, probe_rate = step_from(state, step_dt, t_step)
@@ -664,6 +687,11 @@ def integrate_transient(
                 else:
                     state = probe_state
                     _commit(t_step, u_probe, probe_rate)
+                if bp_index < len(breakpoints) and t_step == breakpoints[bp_index]:
+                    # A declared source edge is as nonsmooth as a located state event; no
+                    # integrator or error predictor may extrapolate its pre-edge history.
+                    state = integrator.restart(state, state.last_u, t_step)
+                    lte_history[:] = [(t_step, state.last_u)]
                 g_prev = g_new
                 if t_step < t_target - bracket_tol:
                     # A SHORTENED step landed inside the cell: the cell is not finished, so the
@@ -810,4 +838,5 @@ def integrate_transient(
         # end of one nominal cell
     if held is not None:
         logger.info('held-factor march: factorizations=%d solves=%d', held.factorizations, held.solves)
+    solution.final_integrator_state = state.copy()
     return solution

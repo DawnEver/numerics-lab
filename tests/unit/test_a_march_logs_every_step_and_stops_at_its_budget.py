@@ -71,8 +71,8 @@ def test_planted_control_no_log_argument_writes_nothing() -> None:
 def test_a_wall_budget_aborts_with_the_state_reached() -> None:
     with pytest.raises(BudgetExceeded, match='wall') as info:
         integrate_transient(_Decay(), _STUDY, np.ones(1), budget=RunBudget(wall_seconds=0.0))
-    assert info.value.steps == 1
-    assert info.value.t_reached == pytest.approx(0.1)
+    assert info.value.steps == 0
+    assert info.value.t_reached == pytest.approx(0.0)
 
 
 def test_a_memory_budget_aborts_and_a_generous_one_does_not() -> None:
@@ -80,3 +80,39 @@ def test_a_memory_budget_aborts_and_a_generous_one_does_not() -> None:
         integrate_transient(_Decay(), _STUDY, np.ones(1), budget=RunBudget(memory_bytes=1))
     sol = integrate_transient(_Decay(), _STUDY, np.ones(1), budget=RunBudget(wall_seconds=3600.0, memory_bytes=1 << 50))
     assert sol.times[-1] == pytest.approx(0.5)
+
+
+def test_a_wall_budget_stops_discarded_trials_at_the_last_accepted_state(monkeypatch) -> None:
+    from motronics.gauss.time_integrators import march  # noqa: PLC0415
+
+    clock = [0.0]
+    monkeypatch.setattr(march.time, 'perf_counter', lambda: clock[0])
+
+    class CostlyDecay(_Decay):
+        def residual(self, u, u_dot, u_ddot, t):
+            clock[0] += 1.0
+            return super().residual(u, u_dot, u_ddot, t)
+
+    with pytest.raises(BudgetExceeded, match='wall') as info:
+        integrate_transient(
+            CostlyDecay(),
+            _STUDY,
+            np.ones(1),
+            step_control=StepTolerance(rtol=1e-6, atol=1e-12),
+            budget=RunBudget(wall_seconds=0.5),
+        )
+    assert info.value.steps == 0
+    assert info.value.t_reached == 0.0
+    np.testing.assert_array_equal(info.value.u_reached, np.ones(1))
+
+
+@pytest.mark.parametrize('seconds', [-1.0, np.nan, np.inf])
+def test_an_invalid_wall_budget_is_refused(seconds) -> None:
+    with pytest.raises(ValueError, match='wall_seconds'):
+        RunBudget(wall_seconds=seconds)
+
+
+@pytest.mark.parametrize('size', [-1, 0])
+def test_an_invalid_memory_budget_is_refused(size) -> None:
+    with pytest.raises(ValueError, match='memory_bytes'):
+        RunBudget(memory_bytes=size)

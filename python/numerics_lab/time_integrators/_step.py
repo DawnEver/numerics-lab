@@ -7,7 +7,7 @@ this step is the unit of.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import scipy.sparse as sp
@@ -488,18 +488,24 @@ class StepOutcome:
     rate: NDArray[np.floating]
 
 
-def take_step(problem, integrator, state: IntegratorState, dt: float, t_new: float, **solve_kw) -> StepOutcome:
+def take_step(
+    problem, integrator, state: IntegratorState, dt: float, t_new: float, *, endpoint_left: bool = False, **solve_kw
+) -> StepOutcome:
     """Advance ``state`` by ``dt`` to ``t_new`` through every stage of ``integrator``.
 
     The ONE place a marcher turns a scheme into solves: ``prepare`` -> :func:`_solve_step` ->
     ``advance``, ``integrator.stages`` times. A multi-stage scheme's intermediate state never leaves
     this function, so every marcher, probe and landing treats a step as one opaque move.
+    ``endpoint_left`` lands a declared discontinuity using its left limit; the clock still lands
+    exactly at ``t_new`` and the next restarted step evaluates the post-edge system.
     """
     converged, on_floor, iterations, worst = True, False, 0, 0.0
     u = state.last_u
     form = None
     for _ in range(integrator.stages):
         form = integrator.prepare(state, dt, t_new)
+        if endpoint_left and form.t_eval == t_new:
+            form = replace(form, t_eval=float(np.nextafter(t_new, -np.inf)))
         u, ok, its, residual, floor = _solve_step(problem, form, state.last_u, **solve_kw)
         converged, on_floor = converged and ok, on_floor or floor
         iterations, worst = iterations + its, max(worst, residual)

@@ -84,10 +84,10 @@ def test_the_pin_changes_no_other_unknown():
 
 
 def test_every_assembled_solve_path_consults_the_one_owner():
-    """One owner, three consumers -- the primal pair and the DWR adjoint the defect was found in.
+    """One owner, four consumers -- the primal pair and both DWR adjoint routes.
 
     Named by IMPORT rather than by call, because the import is what a future edit would have to
-    delete to re-privatise the decision. The floor is that all three are still found: a scan that
+    delete to re-privatise the decision. The floor is that all four are still found: a scan that
     reached zero modules would read exactly like a clean tree.
     """
     src = repo_root() / 'src' / 'motronics'
@@ -95,7 +95,7 @@ def test_every_assembled_solve_path_consults_the_one_owner():
         'hamilton/discretizations/fem/_solve.py',
         'hamilton/discretizations/fem/_newton.py',
         'hamilton/discretizations/fem/dwr.py',
-        'hamilton/error_estimate.py',
+        'hamilton/_error_dwr.py',
     }
 
     found = set()
