@@ -40,6 +40,23 @@ class SparseInitialPair:
         return value
 
 
+def _independent_exact_columns(matrix, selected, *, dependent_start):
+    """Quotient only exact sparse dependencies in explicitly disposable coordinates."""
+    columns = matrix.tocsc()
+    columns.sort_indices()
+    representatives = {}
+    affected, omitted = set(), set()
+    for column in selected[selected >= dependent_start]:
+        start, stop = columns.indptr[column : column + 2]
+        key = (columns.indices[start:stop].tobytes(), columns.data[start:stop].tobytes())
+        if key in representatives:
+            affected.update((column, representatives[key]))
+            omitted.add(column)
+        else:
+            representatives[key] = column
+    return np.asarray([column for column in selected if column not in omitted], dtype=int), affected
+
+
 def projected_rate_consistent(jacobian, rate, partial_time, *, algebraic_rows, tolerance):
     """Check each actual differentiated equation in its own projected units.
 
@@ -129,19 +146,7 @@ def sparse_initial_pair(
     # Identical actual rate columns constrain their sum, not either rate.
     # Remove only this exact sparse dependency; state columns are never
     # quotiented and no numerical rank cutoff invents physical uniqueness.
-    columns = matrix.tocsc()
-    representatives = {}
-    duplicate_rates = set()
-    omitted = set()
-    for column in selected[selected >= n]:
-        start, stop = columns.indptr[column : column + 2]
-        key = (columns.indices[start:stop].tobytes(), columns.data[start:stop].tobytes())
-        if key in representatives:
-            duplicate_rates.update((column - n, representatives[key] - n))
-            omitted.add(column)
-        else:
-            representatives[key] = column
-    selected = np.asarray([column for column in selected if column not in omitted], dtype=int)
+    selected, duplicate_rates = _independent_exact_columns(matrix, selected, dependent_start=n)
     reduced = matrix[:, selected].tocsr()
     # Storage equations are mandatory, even when their increments are tiny
     # compared with the dynamic RHS. Match them first, then verify that none
@@ -190,7 +195,7 @@ def sparse_initial_pair(
         msg = 'declared storage rank decomposition does not preserve actual stored state'
         raise ValueError(msg)
     unique = nonzero[n:].copy()
-    unique[list(duplicate_rates)] = False
+    unique[[column - n for column in duplicate_rates]] = False
     return SparseInitialPair(initial + pair[:n], pair[n:], unique)
 
 
@@ -260,6 +265,9 @@ def sparse_complete_initial_rate(
     # that an overdetermined subsystem may discard. Their correction is zero.
     available[np.flatnonzero(pair.rate_is_unique)] = False
     selected = np.flatnonzero(available)
+    # Acceleration coordinates are not physical initial conditions. Exact
+    # duplicate acceleration columns must not prevent proving a current rate.
+    selected, _ = _independent_exact_columns(matrix, selected, dependent_start=n)
     reduced = matrix[:, selected].tocsr()
     rows = maximum_bipartite_matching(reduced, perm_type='row')
     if np.any(rows < 0):
