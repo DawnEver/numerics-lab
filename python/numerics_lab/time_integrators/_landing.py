@@ -1,8 +1,33 @@
 """Numerical accepted-lattice callback; no event location or physical owner knowledge."""
 
-from numbers import Integral
+from numbers import Integral, Real
 
 import numpy as np
+
+
+def next_deadline(callback, time, target):
+    """Clip a numerical target to an owner's live, strictly future breakpoint."""
+    if callback is None:
+        return target
+    deadline = callback(time)
+    if deadline is None:
+        return target
+    if (
+        isinstance(deadline, (bool, np.bool_))
+        or not isinstance(deadline, Real)
+        or not np.isfinite(deadline)
+        or deadline <= time
+    ):
+        msg = 'next breakpoint must be a finite, strictly future time or None'
+        raise ValueError(msg)
+    return min(target, float(deadline))
+
+
+def live_targets(targets, current_time, callback):
+    """Re-read the owner's schedule after each acceptance, not during Newton probes."""
+    for target in targets:
+        while current_time() < target:
+            yield next_deadline(callback, current_time(), target)
 
 
 def accepted_observation(callback, time, state):

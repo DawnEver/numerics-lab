@@ -23,6 +23,44 @@ class _Forced:
         return np.eye(1) * weights.alpha1.real
 
 
+@pytest.mark.parametrize('adaptive', [False, True])
+def test_live_breakpoint_created_on_accept_is_not_skipped(adaptive):
+    deadlines = []
+    observed = []
+
+    def observe(time, _state):
+        observed.append(time)
+        if time == 0.0:
+            deadlines.append(0.005)
+        elif time == 0.005:
+            deadlines.append(0.007)
+        return False
+
+    solution = integrate_transient(
+        _Forced(),
+        TransientStudy(t0=0.0, t1=0.1, dt=0.1, integrator=IntegratorKind.BDF2),
+        np.zeros(1),
+        adaptive=adaptive,
+        on_accept=observe,
+        next_breakpoint=lambda time: next((value for value in deadlines if value > time), None),
+    )
+    assert 0.005 in solution.times
+    assert 0.007 in solution.times
+    assert observed == solution.times
+    assert solution.times[-1] == 0.1
+
+
+@pytest.mark.parametrize('deadline', [True, float('nan'), float('inf'), 0.0, -1.0])
+def test_live_breakpoint_rejects_nonfuture_or_invalid_owner_time(deadline):
+    with pytest.raises(ValueError, match='strictly future'):
+        integrate_transient(
+            _Forced(),
+            TransientStudy(t0=0.0, t1=0.1, dt=0.1, integrator=IntegratorKind.BDF1),
+            np.zeros(1),
+            next_breakpoint=lambda _time: deadline,
+        )
+
+
 def test_landing_dispatches_only_committed_states_and_restarts_history():
     problem = _Forced()
     observed = []

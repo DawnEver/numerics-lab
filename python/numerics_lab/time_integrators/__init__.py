@@ -64,7 +64,12 @@ from motronics.gauss.time_integrators._integrators import (
     NewmarkIntegrator,
     get_integrator,
 )
-from motronics.gauss.time_integrators._landing import accepted_landing, accepted_observation
+from motronics.gauss.time_integrators._landing import (
+    accepted_landing,
+    accepted_observation,
+    live_targets,
+    next_deadline,
+)
 from motronics.gauss.time_integrators._step import _GMIN_RETRY_STAGES as _GMIN_RETRY_STAGES
 from motronics.gauss.time_integrators._step import _STALL_RATIO as _STALL_RATIO
 from motronics.gauss.time_integrators._step import (
@@ -162,6 +167,7 @@ def integrate_transient(
     timestep_origin: float | None = None,
     on_landing: Callable[[float, NDArray[np.floating]], tuple[int, ...]] | None = None,
     on_accept: Callable[[float, NDArray[np.floating]], bool] | None = None,
+    next_breakpoint: Callable[[float], float | None] | None = None,
 ) -> TransientSolution:
     """March ``problem`` from ``study.t0`` to ``study.t1`` by ``study.dt`` with ``study.integrator``.
 
@@ -170,6 +176,10 @@ def integrate_transient(
     ``advance`` folds it back into the history. ``v0`` / ``a0`` seed the second-order schemes
     (default zero). ``max_newton = 1`` is the exact linear step; raise it (or swap ``solve``) for a
     nonlinear problem. Returns the full march including the initial condition.
+
+    ``next_breakpoint`` supplies the owner's next known future time, re-read after
+    accepted states. It clips steps without changing endpoint laws or projecting
+    algebraic states; those remain the physical owner's responsibility.
 
     ``factor_cache`` (W6) reuses one factorization per reuse key across the march (see
     :mod:`~motronics.gauss.time_integrators.factor_reuse`); the default ``None`` builds a fresh
@@ -300,6 +310,9 @@ def integrate_transient(
     if on_accept is not None and eec_period is not None:
         msg = 'accepted observation requires a physical trajectory without EEC state corrections'
         raise ValueError(msg)
+    if next_breakpoint is not None and eec_period is not None:
+        msg = 'live breakpoints cannot combine with EEC schedule corrections'
+        raise ValueError(msg)
     u0 = np.asarray(u0, dtype=float)
     if on_checkpoint is not None and checkpoint_key is None:
         msg = 'on_checkpoint requires checkpoint_key'
@@ -355,8 +368,10 @@ def integrate_transient(
         solution = TransientSolution(times=[study.t0], states=[u0], state_rates=[], rate_state_overrides={})
         while state.t < t_end - 1e-14:
             h = min(h, t_end - state.t)
-            t_new = state.t + h
+            t_new = next_deadline(next_breakpoint, state.t, state.t + h)
+            h = t_new - state.t
             if lattice is not None:
+                lattice.tick(t_new)
                 current_tick = lattice.tick(state.t)
                 count = min(lattice.steps(h), lattice.tick(t_end) - current_tick)
                 h = count * lattice.quantum
@@ -521,8 +536,12 @@ def integrate_transient(
             problem, state, previous_dt, checkpoint_key, integrator.name, eec_state=eec_state, step_origin=step_origin
         )
 
-    for t_new in targets:
-        dt = study.dt if step_times is None and not (has_remainder and t_new == targets[-1]) else t_new - state.t
+    for t_new in live_targets(targets, lambda: state.t, next_breakpoint):
+        dt = (
+            study.dt
+            if next_breakpoint is None and step_times is None and not (has_remainder and t_new == targets[-1])
+            else t_new - state.t
+        )
         if integrator.name == 'bdf2' and len(state.us) >= 2 and dt != previous_dt:
             form = _bdf2_variable_form(state, dt, previous_dt, t_new)
         else:
