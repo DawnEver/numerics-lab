@@ -1,4 +1,4 @@
-"""A singular MNA is refused BY NAME through `motronics run`, at the seam that factored it.
+"""A singular MNA is refused BY NAME through `motronics case run`, at the seam that factored it.
 
 # The gap this pins, and why nothing was red while it was open
 

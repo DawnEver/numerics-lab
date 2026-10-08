@@ -186,7 +186,7 @@ pub const INCREMENT_RISE_STEPS: usize = 3;
 /// read the SAME deaf channel and drew the opposite conclusion from the same silence, so on an
 /// energy plateau alpha grew every `ALPHA_CALM_STEPS` with nothing able to object.
 ///
-/// MEASURED 2026-09-06 through `python -m motronics run cases/field/pm/ipm_uv_cummins --select
+/// MEASURED 2026-09-06 through `python -m motronics case run cases/field/pm/ipm_uv_cummins --select
 /// mec,quad --max-num-iter 600`, the `[sparse]` leg on `picard-damped`. At iteration 119 the
 /// increment was falling steadily toward the 1e-4 bar (2.03e-4 -> 1.95e-4 -> 1.89e-4) at alpha
 /// 0.137. Recovery raised alpha to 0.205 then 0.308 and the increment blew out ~20x until the

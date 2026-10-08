@@ -48,7 +48,7 @@ from motronics.gauss.linear import (
 # is the low end of the band a ceiling may occupy here: above `PER_TEST_TIMEOUT_S['measure']` = 300,
 # so it grants MORE than an ordinary run rather than becoming the only thing that can kill its
 # worker under `timeout_method = "thread"`, and below `HEAVY_PER_TEST_TIMEOUT_S` = 3000.
-# THE READING WAS TAKEN CONTENDED (another agent held the box with a 3-D `motronics run`), which is
+# THE READING WAS TAKEN CONTENDED (another agent held the box with a 3-D `motronics case run`), which is
 # stated because a busy-box timing is not a property of the file. It can only INFLATE the number,
 # and the claim made from it -- that 600 s is three orders above the work -- only strengthens.
 pytestmark = pytest.mark.timeout(600)

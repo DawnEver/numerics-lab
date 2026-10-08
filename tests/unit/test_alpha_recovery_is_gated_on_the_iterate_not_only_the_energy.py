@@ -1,7 +1,7 @@
 """Alpha may only GROW while the iterate is contracting -- the energy alone cannot license it.
 
 MEASURED 2026-09-06 on the `[sparse]` leg (MEC reluctance loop, `picard-damped`), reproduced through
-``python -m motronics run cases/field/pm/ipm_uv_cummins --select mec,quad --max-num-iter 600``::
+``python -m motronics case run cases/field/pm/ipm_uv_cummins --select mec,quad --max-num-iter 600``::
 
     Iteration: 117/600, ... Energy Error Percentage: 0.00%, alpha: 0.137, increment: 2.03e-04
     Iteration: 118/600, ... Energy Error Percentage: 0.00%, alpha: 0.137, increment: 1.95e-04

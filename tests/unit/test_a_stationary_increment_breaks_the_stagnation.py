@@ -24,7 +24,7 @@ WHAT IS PINNED HERE.
       than the 2x band -- must NOT stagnation-break;
   (b2) an increment CREEPING UP inside the 2x band must not stagnation-break either. The band test
       alone cannot see a trend: a 0.7%-per-step rise stays within max/min <= 2 for a hundred
-      iterations while diverging the whole time. MEASURED 2026-09-06 via ``python -m motronics run
+      iterations while diverging the whole time. MEASURED 2026-09-06 via ``python -m motronics case run
       cases/field/pm/ipm_uv_cummins --select mec,quad`` -- 1.91e-3 -> 2.05e-3 over ten steps, band
       ratio 1.07, and the break fired, returning ``converged = True`` at 20x the increment bar.
       STATIONARY was the word the docstring used and a BAND was all it tested;
