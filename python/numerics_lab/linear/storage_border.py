@@ -87,3 +87,31 @@ def storage_border_rows(mass, *, bulk_indices, border_rows):
         format='csr',
     )
     return StorageRows(np.concatenate((bulk, independent_border)), algebraic)
+
+
+def free_pinned_columns(columns, stored_mass, pinned_rows):
+    """Keep a derivative that a differentiated algebraic row fixes on the border.
+
+    A row of ``algebraic @ jacobian`` supported only on stored columns fixes
+    their rates (and, differentiated again, accelerations) directly. Eliminated through storage instead, such a rate is
+    recovered by cancellation against a coupled free derivative and inherits
+    its roundoff (r = 0 rebuilt as ulps of a 5e7 rate). Exchange it for a free
+    column sharing its storage rows; the block LU still refuses a singular one.
+    """
+    columns = np.array(columns)
+    stored_mass = sp.csc_matrix(stored_mass)
+    pinned_rows = sp.csr_matrix(pinned_rows)
+    pinned_rows.eliminate_zeros()
+    for row in range(pinned_rows.shape[0]):
+        span = slice(pinned_rows.indptr[row], pinned_rows.indptr[row + 1])
+        support, weight = pinned_rows.indices[span], pinned_rows.data[span]
+        if not support.size or not np.isin(support, columns).all():
+            continue
+        pinned = support[np.argmax(abs(weight))]
+        position = int(np.flatnonzero(columns == pinned)[0])
+        storage = stored_mass[:, pinned].nonzero()[0]
+        coupled = abs(stored_mass[storage]).sum(axis=0).A1
+        coupled[columns] = 0
+        if np.any(coupled):
+            columns[position] = int(np.argmax(coupled))
+    return columns

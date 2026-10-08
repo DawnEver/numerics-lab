@@ -9,6 +9,7 @@ from scipy.sparse.linalg import splu
 
 from motronics.gauss.linear.initial_rate_border import complete_rate_border
 from motronics.gauss.linear.initial_storage_border import stored_initial_correction
+from motronics.gauss.linear.storage_border import free_pinned_columns
 
 
 @dataclass(frozen=True)
@@ -138,6 +139,7 @@ def sparse_initial_pair(
             stored_change,
             partial_time,
             tolerance=tolerance,
+            state=initial,
         )
         return SparseInitialPair(initial + correction[:n], correction[n:], unique)
     matrix = sp.bmat(
@@ -303,7 +305,7 @@ def sparse_complete_initial_rate(
             acceleration_rhs=-partial - storage_second - jacobian @ pair.rate,
             rate_is_unique=pair.rate_is_unique,
             stored_rows=stored_rows,
-            stored_columns=stored_columns,
+            stored_columns=free_pinned_columns(stored_columns, mass[stored_rows], algebraic @ jacobian),
             evaluation_scale=evaluation_scale,
             tolerance=tolerance,
             acceleration_equation_start=n + algebraic.shape[0],

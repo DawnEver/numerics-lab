@@ -5,10 +5,11 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import splu
 
 from motronics.gauss.linear.border_rank import border_affine_space
+from motronics.gauss.linear.storage_border import free_pinned_columns
 
 
 def stored_initial_correction(
-    jacobian, residual, mass, algebraic, stored_rows, stored_columns, stored_change, partial, *, tolerance
+    jacobian, residual, mass, algebraic, stored_rows, stored_columns, stored_change, partial, *, tolerance, state
 ):
     """Eliminate stored state then stored rate; reveal only the actual free border."""
     n = mass.shape[0]
@@ -22,6 +23,7 @@ def stored_initial_correction(
     ):
         msg = 'joint storage elimination requires independently declared mass columns'
         raise ValueError(msg)
+    columns = free_pinned_columns(columns, mass[stored_rows], algebraic @ jacobian)
     free = np.setdiff1d(np.arange(n), columns)
     width = 2 * len(free)
     if not 0 < width <= 512:
@@ -89,6 +91,10 @@ def stored_initial_correction(
     )
     defect = matrix @ correction - rhs
     equation_scale = np.asarray(abs(matrix) @ abs(correction)).ravel() + abs(rhs)
+    # The residual was evaluated at the actual state: a row whose coordinates
+    # are all fixed by storage keeps that evaluation's size as its only scale,
+    # the same scale the nonlinear owner admits its algebraic state rows by.
+    equation_scale[:n] += np.asarray(abs(jacobian) @ abs(state)).ravel()
     if np.any(abs(defect) > tolerance * equation_scale):
         msg = 'joint stored state contradicts actual state/rate equations'
         raise ValueError(msg)
