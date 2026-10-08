@@ -2,8 +2,72 @@
 
 import numpy as np
 import scipy.sparse as sp
+from scipy.sparse.linalg import splu
 
 from motronics.gauss.linear.initial_sparse import sparse_initial_pair
+
+
+def constant_storage_right_state(
+    initial, *, residual_at, jacobian_at, mass_at, storage_rows, max_newton=30, tolerance=1e-10
+):
+    """Unique right algebraic state, without inventing a continuous outgoing rate.
+
+    Preserve the actual stored coordinates at a law change. This needs no
+    explicit-time derivative: moving geometry is evaluated at the same physical
+    instant, never at a perturbed clock. Operators must leave accepted history
+    unchanged throughout the projection.
+    """
+    initial = np.asarray(initial, dtype=float)
+    if (
+        initial.ndim != 1
+        or not np.isfinite(initial).all()
+        or max_newton < 1
+        or not np.isfinite(tolerance)
+        or tolerance <= 0
+    ):
+        msg = 'right projection requires finite state and positive numerical controls'
+        raise ValueError(msg)
+    mass = sp.csr_matrix(mass_at(initial))
+    algebraic = storage_rows.algebraic_rows
+    stored = mass[storage_rows.stored_rows]
+    state = initial.copy()
+    for _ in range(max_newton):
+        change = sp.csr_matrix(mass_at(state)) - mass
+        change.eliminate_zeros()
+        if change.nnz:
+            msg = 'state-dependent storage requires its actual finite stored-coordinate map'
+            raise ValueError(msg)
+        residual = np.asarray(residual_at(state))
+        jacobian = sp.csr_matrix(jacobian_at(state))
+        matrix = sp.vstack((algebraic @ jacobian, stored), format='csr')
+        rhs = np.concatenate((-algebraic @ residual, -stored @ (state - initial)))
+        row_norm = np.sqrt(np.asarray(matrix.multiply(matrix).sum(axis=1)).ravel())
+        row_norm[row_norm == 0] = 1.0
+        matrix, rhs = sp.diags(1 / row_norm) @ matrix, rhs / row_norm
+        try:
+            correction = splu(matrix.tocsc()).solve(rhs)
+        except RuntimeError as error:
+            msg = 'accepted right state needs additional physical algebraic/storage authority'
+            raise ValueError(msg) from error
+        state += correction
+        change = sp.csr_matrix(mass_at(state)) - mass
+        change.eliminate_zeros()
+        if change.nnz:
+            msg = 'state-dependent storage requires its actual finite stored-coordinate map'
+            raise ValueError(msg)
+        actual = np.asarray(algebraic @ residual_at(state))
+        scale = np.linalg.norm((algebraic @ jacobian).data) * np.linalg.norm(state) + np.linalg.norm(
+            algebraic @ residual
+        )
+        storage_defect = mass @ (state - initial)
+        storage_scale = np.linalg.norm(mass.data) * (np.linalg.norm(state) + np.linalg.norm(initial))
+        if np.linalg.norm(actual) <= tolerance * scale and np.linalg.norm(storage_defect) <= tolerance * storage_scale:
+            if not np.isfinite(state).all():
+                msg = 'accepted right projection produced a nonfinite state'
+                raise ValueError(msg)
+            return state
+    msg = 'actual stored-coordinate-preserving right projection did not converge'
+    raise ValueError(msg)
 
 
 def constant_storage_initial_pair(
