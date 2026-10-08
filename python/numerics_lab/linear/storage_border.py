@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import scipy.sparse as sp
-from scipy.linalg import qr, svd
+from scipy.linalg import qr, solve, svd
 from scipy.sparse.linalg import splu
 
 
@@ -46,12 +46,25 @@ def storage_border_rows(mass, *, bulk_indices, border_rows):
     norms[norms == 0] = 1.0
     normalized = tail / norms[:, None]
     if len(border):
-        left, singular, _ = svd(normalized, full_matrices=len(remaining) < len(border))
+        singular = svd(normalized, compute_uv=False)
         rank_bar = np.finfo(float).eps * max(normalized.shape) * (singular[0] if singular.size else 0.0)
         rank = int(np.count_nonzero(singular > rank_bar))
         _, _, pivots = qr(normalized.T, mode='economic', pivoting=True)
-        independent_border = border[pivots[:rank]]
-        null_border = left[:, rank:].T / norms[None, :]
+        independent = pivots[:rank]
+        independent_border = border[independent]
+        dependent = np.setdiff1d(np.arange(len(border)), independent)
+        null_border = np.zeros((len(dependent), len(border)))
+        null_border[np.arange(len(dependent)), dependent] = 1.0
+        if rank and len(dependent):
+            # Explicit actual row dependencies, not a dense SVD rotation of
+            # disconnected blocks. SVD roundoff otherwise invents nonzero rate
+            # columns through null-vector noise in an unrelated storage row.
+            basis = normalized[independent]
+            _, _, columns = qr(basis, mode='economic', pivoting=True)
+            minor = columns[:rank]
+            dependency = solve(basis[:, minor].T, normalized[dependent][:, minor].T).T
+            null_border[:, independent] = -dependency
+        null_border /= norms[None, :]
     else:
         independent_border = np.array([], dtype=int)
         null_border = np.zeros((0, 0))
