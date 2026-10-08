@@ -60,12 +60,16 @@ circuit, no device, no physics.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import numpy as np
+import psutil
 import scipy.sparse as sp
 from numpy.typing import NDArray
 
@@ -79,7 +83,7 @@ from motronics.gauss.time_integrators.factor_reuse import FactorCache
 
 logger = logging.getLogger(__name__)
 
-__all__ = ['StepNotConverged', 'StepTolerance', 'integrate_transient']
+__all__ = ['BudgetExceeded', 'RunBudget', 'StepNotConverged', 'StepTolerance', 'integrate_transient']
 
 #: Events tolerated inside ONE nominal cell before the function is declared chattering. A genuine
 #: circuit sees a handful of crossings per cell at most (a PWM edge and a state ripple); past this
@@ -110,6 +114,48 @@ class StepNotConverged(RuntimeError):
             'cause; pass on_nonconverged="label" only to RECORD such steps, never to hide them.'
         )
         self.t, self.residual, self.state, self.t_reached, self.u_reached = t, residual, state, t_reached, u_reached
+
+
+@dataclass(frozen=True)
+class RunBudget:
+    """Hard limits on one march: wall-clock seconds and resident memory bytes (``None`` = unlimited).
+
+    Checked after every accepted step. A march over budget RAISES :class:`BudgetExceeded` with the
+    state it reached -- a run reaped by the OS reports nothing, a run that stops itself reports where.
+    """
+
+    wall_seconds: float | None = None
+    memory_bytes: int | None = None
+
+
+class BudgetExceeded(RuntimeError):
+    """The march hit its :class:`RunBudget`; ``t_reached`` / ``u_reached`` / ``steps`` say how far it got."""
+
+    def __init__(self, reason: str, t_reached: float, u_reached, steps: int) -> None:
+        super().__init__(f'run budget exceeded ({reason}) at t={t_reached:g} after {steps} accepted steps')
+        self.reason, self.t_reached, self.u_reached, self.steps = reason, t_reached, u_reached, steps
+
+
+def _rss_bytes() -> int:
+    return int(psutil.Process().memory_info().rss)
+
+
+class _StepLog:
+    """One JSON object per line, OpenTelemetry log-record field names, to a caller-owned text stream."""
+
+    def __init__(self, stream) -> None:
+        self.stream = stream
+
+    def __call__(self, body: str, **attributes) -> None:
+        if self.stream is None:
+            return
+        record = {
+            'timestamp': datetime.now(UTC).isoformat(),
+            'severity_text': 'WARN' if body in {'reject', 'nonconverged'} else 'INFO',
+            'body': body,
+            'attributes': {f'march.{k}': v for k, v in attributes.items()},
+        }
+        print(json.dumps(record), file=self.stream)
 
 
 @dataclass(frozen=True)
@@ -303,6 +349,8 @@ def integrate_transient(
     h_min: float | None = None,
     step_control: StepTolerance | None = None,
     on_nonconverged: str = 'raise',
+    step_log=None,
+    budget: RunBudget | None = None,
     refactor_every: int | None = None,
 ) -> TransientSolution:
     """March ``problem`` over ``study``, stopping the grid at every zero of ``event_fns``.
@@ -337,6 +385,11 @@ def integrate_transient(
     ``nonconverged_times`` (with a warning), for a caller whose contract is to REPORT it. Discarded
     bisection probes never raise: they are not part of the trajectory.
 
+    ``step_log`` (a writable text stream the caller owns -- an artefact belongs under the caller's
+    output tree) receives one JSON line per solve, accepted step, rejection, event and landed
+    exhaustion, in OpenTelemetry log-record fields. ``budget`` (:class:`RunBudget`) aborts the march
+    with :class:`BudgetExceeded` and the state reached.
+
     ``step_control`` is LOCAL-ERROR control for every integrator: each converged step that lands
     without crossing an event has its truncation error estimated per unknown (:func:`_lte_ratio`)
     against the :class:`StepTolerance`; a step over tolerance is rejected and retried smaller, an
@@ -363,6 +416,8 @@ def integrate_transient(
     under-reads the system (the hole the module docstring names).
     """
     held = HeldFactor(refactor_every) if refactor_every is not None else None
+    emit = _StepLog(step_log)
+    started = time.perf_counter()
     if factor_cache is None and isinstance(problem, FactorReusableProblem):
         factor_cache = FactorCache()
     integrator = get_integrator(study.integrator)
@@ -452,6 +507,7 @@ def integrate_transient(
             solution.nonconverged_probe_times.append(t_new)
         latest_failed[t_new] = not converged
         failed_residual[t_new] = residual
+        emit('solve', t=t_new, dt=dt_step, residual=residual, converged=converged, iterations=out.iterations)
         return out.state, out.u, converged, out.rate
 
     def _commit(t_new: float, u_new: NDArray, rate: NDArray) -> None:
@@ -460,6 +516,14 @@ def integrate_transient(
         solution.states.append(u_new)
         assert solution.state_rates is not None
         solution.state_rates.append(rate)
+        emit('step', t=t_new, dt=t_new - solution.times[-2], index=len(solution.times) - 1)
+        if budget is not None:
+            if budget.wall_seconds is not None and time.perf_counter() - started > budget.wall_seconds:
+                msg_0 = f'wall > {budget.wall_seconds:g} s'
+                raise BudgetExceeded(msg_0, t_new, u_new, len(solution.times) - 1)
+            if budget.memory_bytes is not None and _rss_bytes() > budget.memory_bytes:
+                msg_0 = f'rss > {budget.memory_bytes} B'
+                raise BudgetExceeded(msg_0, t_new, u_new, len(solution.times) - 1)
         lte_history.append((t_new, u_new))
         del lte_history[: -(integrator.order + 1)]
         # THE STEP JOINED THE TRAJECTORY, so its material history is the one the next step starts
@@ -472,6 +536,7 @@ def integrate_transient(
         # that actually reached this instant converged (a retry's halves re-land a rejected target).
         if not latest_failed.get(t_new, False):
             return
+        emit('nonconverged', t=t_new, residual=failed_residual[t_new])
         if on_nonconverged == 'raise':
             raise StepNotConverged(t_new, failed_residual[t_new], u_new, solution.times[-2], solution.states[-2])
         for j in range(len(solution.nonconverged_probe_times) - 1, -1, -1):
@@ -588,6 +653,7 @@ def integrate_transient(
                             )
                             raise RuntimeError(msg)
                         h_ctrl = max(h_floor, _resize(step_dt, ratio, order))
+                        emit('reject', t=t_step, dt=step_dt, error_ratio=ratio, next_dt=h_ctrl)
                         continue
                     grown = _resize(step_dt, ratio, order)
                     h_ctrl = max(h_ctrl, grown) if step_dt < h_ctrl else grown
@@ -710,6 +776,7 @@ def integrate_transient(
             residual_state = u_star.copy() if on_event is not None and t_star > t_from else None
             for _root, i in simultaneous:
                 solution.events.append((i, t_star))
+                emit('event', t=t_star, function=i)
                 if on_event is not None:
                     on_event(i, t_star, u_star)
                 last_fired[i] = t_star

@@ -42,7 +42,13 @@ from motronics.gauss.time_integrators._integrators import (
 )
 from motronics.gauss.time_integrators._step import HeldFactor, directional_line_search
 from motronics.gauss.time_integrators.factor_reuse import FactorCache
-from motronics.gauss.time_integrators.march import StepNotConverged, StepTolerance, integrate_transient
+from motronics.gauss.time_integrators.march import (
+    BudgetExceeded,
+    RunBudget,
+    StepNotConverged,
+    StepTolerance,
+    integrate_transient,
+)
 from motronics.gauss.time_integrators.multirate import (
     Hold,
     RateTransition,
@@ -56,6 +62,7 @@ __all__ = [
     'INTEGRATOR_REGISTRY',
     'BDF1Integrator',
     'BDF2Integrator',
+    'BudgetExceeded',
     'FactorCache',
     'GeneralizedAlphaIntegrator',
     'HeldFactor',
@@ -63,6 +70,7 @@ __all__ = [
     'IntegratorState',
     'NewmarkIntegrator',
     'RateTransition',
+    'RunBudget',
     'SampledTask',
     'StepForm',
     'StepNotConverged',
