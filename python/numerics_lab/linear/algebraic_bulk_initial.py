@@ -70,6 +70,9 @@ def algebraic_bulk_initial_pair(
     if change.shape != (len(selected),) or not np.isfinite(change).all():
         msg = 'algebraic bulk must retain every actual independent border storage increment'
         raise ValueError(msg)
+    if not isinstance(fixed_state, (bool, np.bool_)) or (fixed_state and np.any(change != 0)):
+        msg = 'rate-only projection requires a fixed admitted state without a pending storage increment'
+        raise ValueError(msg)
     rhs = np.concatenate((
         -residual[k:][selected] if fixed_state else -reduced_residual,
         np.zeros(m) if fixed_state else change,
