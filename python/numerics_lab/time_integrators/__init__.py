@@ -297,8 +297,8 @@ def integrate_transient(
         if integrator.name not in ('bdf1', 'bdf2'):
             msg_0 = 'accepted landing history restart requires BDF1 or BDF2'
             raise ValueError(msg_0)
-    if on_accept is not None and (adaptive or eec_period is not None):
-        msg = 'accepted observation requires actual sequential fixed stepping without EEC'
+    if on_accept is not None and eec_period is not None:
+        msg = 'accepted observation requires a physical trajectory without EEC state corrections'
         raise ValueError(msg)
     u0 = np.asarray(u0, dtype=float)
     if on_checkpoint is not None and checkpoint_key is None:
@@ -429,6 +429,9 @@ def integrate_transient(
                 if isinstance(problem, HistoryProblem):
                     problem.commit_history(u_new, t_new)
                 h_prev = h
+                if on_accept is not None and accepted_observation(on_accept, t_new, u_new):
+                    solution.accepted_discontinuities.append(t_new)
+                    state = integrator.start(u_new, t_new, state.v, state.a)
                 if on_checkpoint is not None:
                     on_checkpoint(_checkpoint_of(problem, state, h_prev, checkpoint_key, integrator.name))
                 if (
@@ -574,11 +577,9 @@ def integrate_transient(
             if landed:
                 solution.landed_events.extend((int(index), t_new) for index in landed)
                 state = integrator.start(u_new, t_new, state.v, state.a)
-                previous_dt = None
         if on_accept is not None and accepted_observation(on_accept, t_new, u_new):
             solution.accepted_discontinuities.append(t_new)
             state = integrator.start(u_new, t_new, state.v, state.a)
-            previous_dt = None
         if eec_nonlinear_first_order:
             cycle_converged = cycle_converged and converged
             zero = np.zeros_like(u_new)

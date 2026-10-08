@@ -1,10 +1,13 @@
 """Accepted lattice commands restart BDF history without off-grid observations."""
 
+import json
+
 import numpy as np
 import pytest
 
 from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
 from motronics.gauss.time_integrators import integrate_transient
+from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint
 from motronics.gauss.time_integrators.events import integrate_transient_with_events
 
 pytestmark = pytest.mark.unit
@@ -101,3 +104,39 @@ def test_accepted_law_change_restarts_its_actual_history(eventful):
     )
     assert np.asarray(solution.states).ravel() == pytest.approx([0.0, 0.0, 0.0, 0.3, 0.6])
     assert solution.accepted_discontinuities == [pytest.approx(0.2)]
+
+
+@pytest.mark.parametrize('adaptive', [False, True])
+def test_law_change_checkpoint_retains_real_step_spacing_and_bootstraps_after_resume(adaptive):
+    problem = _Forced()
+    observed = []
+
+    def observe(time, state):
+        assert not state.flags.writeable
+        observed.append(time)
+        if time == pytest.approx(0.2):
+            problem.forcing = 3.0
+            return True
+        return False
+
+    options = {'adaptive': adaptive, 'h_min': 0.1, 'h_max': 0.1, 'checkpoint_key': 'forcing-transition'}
+    first = integrate_transient(
+        problem,
+        TransientStudy(t0=0.0, t1=0.2, dt=0.1, integrator=IntegratorKind.BDF2),
+        np.zeros(1),
+        on_accept=observe,
+        **options,
+    )
+    assert observed == first.times
+    assert first.accepted_discontinuities == [pytest.approx(0.2)]
+    saved = TransientCheckpoint.from_mapping(json.loads(json.dumps(first.checkpoint.to_mapping())))
+    assert saved.previous_dt == pytest.approx(0.1)
+    assert len(saved.states) == 1
+    resumed = integrate_transient(
+        problem,
+        TransientStudy(t0=0.2, t1=0.4, dt=0.1, integrator=IntegratorKind.BDF2),
+        np.zeros(1),
+        restart=saved,
+        **options,
+    )
+    assert np.asarray(resumed.states).ravel() == pytest.approx([0.0, 0.3, 0.6])
