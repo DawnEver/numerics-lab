@@ -50,6 +50,9 @@ def border_affine_space(matrix, rhs, *, mandatory_rows=()):
         magnitude[magnitude == 0] = 1
         ratios_all = np.where(reliable, np.abs(active) / magnitude[:, None], 0)
         eligible = np.flatnonzero(np.max(ratios_all, axis=0) > eps * bound)
+        if cursor < len(mandatory_rows) and np.max(ratios_all[0]) <= eps * bound:
+            msg = 'mandatory border constraints must retain independent actual equation authority'
+            raise ValueError(msg)
         if not eligible.size:
             break
         index = int(np.argmax(ratios_all[0])) if cursor < len(mandatory_rows) else int(eligible[0])
