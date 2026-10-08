@@ -3,7 +3,7 @@
 import numpy as np
 
 
-def border_affine_space(matrix, rhs):
+def border_affine_space(matrix, rhs, *, mandatory_rows=()):
     """Return a representative and explicit free directions of actual border equations.
 
     Re-equilibrate remaining rows after each elimination. A weak independent
@@ -12,7 +12,30 @@ def border_affine_space(matrix, rhs):
     error bounds before any normalization can turn their noise into authority.
     """
     matrix, rhs = np.asarray(matrix, dtype=float).copy(), np.asarray(rhs, dtype=float).copy()
+    if (
+        matrix.ndim != 2
+        or not all(matrix.shape)
+        or matrix.shape[1] > 512
+        or rhs.shape != (matrix.shape[0],)
+        or not np.isfinite(matrix).all()
+        or not np.isfinite(rhs).all()
+    ):
+        msg = 'border affine equations require a finite bounded matrix and aligned forcing'
+        raise ValueError(msg)
     rows, columns = matrix.shape
+    mandatory_rows = np.asarray(mandatory_rows)
+    if (
+        mandatory_rows.ndim != 1
+        or (mandatory_rows.size and mandatory_rows.dtype.kind not in 'iu')
+        or len(set(mandatory_rows.tolist())) != len(mandatory_rows)
+        or np.any(mandatory_rows < 0)
+        or np.any(mandatory_rows >= rows)
+    ):
+        msg = 'mandatory border constraints require unique actual equation rows'
+        raise ValueError(msg)
+    mandatory_rows = mandatory_rows.astype(int)
+    order = np.concatenate((mandatory_rows, np.setdiff1d(np.arange(rows), mandatory_rows)))
+    matrix, rhs = matrix[order], rhs[order]
     errors = np.zeros_like(matrix)
     eps = np.finfo(float).eps
     bound = 16 * max(matrix.shape)
@@ -29,10 +52,10 @@ def border_affine_space(matrix, rhs):
         eligible = np.flatnonzero(np.max(ratios_all, axis=0) > eps * bound)
         if not eligible.size:
             break
-        index = int(eligible[0])
+        index = int(np.argmax(ratios_all[0])) if cursor < len(mandatory_rows) else int(eligible[0])
         column = available.pop(index)
         ratios = ratios_all[:, index]
-        chosen = cursor + int(np.argmax(ratios))
+        chosen = cursor if cursor < len(mandatory_rows) else cursor + int(np.argmax(ratios))
         matrix[[cursor, chosen]] = matrix[[chosen, cursor]]
         errors[[cursor, chosen]] = errors[[chosen, cursor]]
         rhs[[cursor, chosen]] = rhs[[chosen, cursor]]

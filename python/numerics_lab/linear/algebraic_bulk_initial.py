@@ -1,5 +1,7 @@
 """Sparse algebraic bulk elimination with rank revelation confined to its declared border."""
 
+from numbers import Integral
+
 import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import splu
@@ -22,7 +24,22 @@ def algebraic_bulk_initial_pair(
     initial, residual, partial_time = map(np.asarray, (initial, residual, partial_time))
     n = initial.size
     k = bulk_size
-    if not 0 < k < n or n - k > 256 or mass[:k].nnz or mass[:, :k].nnz:
+    if (
+        isinstance(k, (bool, np.bool_))
+        or not isinstance(k, Integral)
+        or not 0 < k < n
+        or initial.shape != (n,)
+        or residual.shape != (n,)
+        or partial_time.shape != (n,)
+        or jacobian.shape != (n, n)
+        or mass.shape != (n, n)
+        or not all(np.isfinite(value).all() for value in (initial, residual, partial_time, jacobian.data, mass.data))
+        or not np.isfinite(tolerance)
+        or tolerance <= 0
+        or n - k > 256
+        or mass[:k].nnz
+        or mass[:, :k].nnz
+    ):
         msg = 'algebraic bulk requires explicit storage-free rows and columns and a bounded border'
         raise ValueError(msg)
     factor = splu(jacobian[:k, :k].tocsc())
@@ -44,7 +61,7 @@ def algebraic_bulk_initial_pair(
         [np.zeros((len(algebraic), m)), algebraic @ reduced_jacobian],
     ])
     change = np.asarray(stored_increment)
-    if change.shape != (len(selected),):
+    if change.shape != (len(selected),) or not np.isfinite(change).all():
         msg = 'algebraic bulk must retain every actual independent border storage increment'
         raise ValueError(msg)
     rhs = np.concatenate((-reduced_residual, change, -algebraic @ reduced_partial))
@@ -57,7 +74,7 @@ def algebraic_bulk_initial_pair(
     column_norms = np.linalg.norm(matrix, axis=0)
     column_norms[column_norms == 0] = 1
     equilibrated = matrix / column_norms
-    answer_scaled, free_scaled = border_affine_space(equilibrated, rhs)
+    answer_scaled, free_scaled = border_affine_space(equilibrated, rhs, mandatory_rows=np.arange(m, m + len(selected)))
     rank_bar = np.finfo(float).eps * max(matrix.shape) * 16
     if np.any(free_scaled[:m] != 0):
         msg = 'actual border initial state requires additional physical authority'
