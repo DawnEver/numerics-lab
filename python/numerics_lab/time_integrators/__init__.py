@@ -318,7 +318,9 @@ def integrate_transient(
     if next_breakpoint is not None and eec_period is not None:
         msg = 'live breakpoints cannot combine with EEC schedule corrections'
         raise ValueError(msg)
-    if project_accepted_state is not None and (on_accept is None or integrator.name not in ('bdf1', 'bdf2')):
+    if project_accepted_state is not None and (
+        (on_accept is None and on_landing is None) or integrator.name not in ('bdf1', 'bdf2')
+    ):
         msg = 'accepted state projection requires an accepted observer and BDF1 or BDF2'
         raise ValueError(msg)
     u0 = np.asarray(u0, dtype=float)
@@ -606,13 +608,16 @@ def integrate_transient(
         if isinstance(problem, HistoryProblem):
             problem.commit_history(u_new, t_new)
         previous_dt = dt
+        law_changed = False
         if on_landing is not None:
             landed = accepted_landing(on_landing, t_new, u_new)
             if landed:
                 solution.landed_events.extend((int(index), t_new) for index in landed)
-                state = integrator.start(u_new, t_new, state.v, state.a)
+                law_changed = True
         if on_accept is not None and accepted_observation(on_accept, t_new, u_new):
             solution.accepted_discontinuities.append(t_new)
+            law_changed = True
+        if law_changed:
             right_state = accepted_projection(project_accepted_state, t_new, u_new)
             if project_accepted_state is not None:
                 solution.rate_state_overrides[len(solution.state_rates) - 1] = u_new.copy()
