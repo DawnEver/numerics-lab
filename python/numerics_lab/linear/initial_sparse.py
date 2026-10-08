@@ -40,6 +40,19 @@ class SparseInitialPair:
         return value
 
 
+def projected_rate_consistent(jacobian, rate, partial_time, *, algebraic_rows, tolerance):
+    """Check each actual differentiated equation in its own projected units.
+
+    Null-basis row scales are arbitrary numerical coordinates, not physics.
+    A large constraint cannot hide a contradictory differently scaled row.
+    """
+    operator = algebraic_rows @ jacobian
+    forcing = algebraic_rows @ partial_time
+    defect = operator @ rate + forcing
+    scale = np.abs(operator) @ np.abs(rate) + np.abs(forcing)
+    return bool(np.all(np.abs(defect) <= tolerance * scale))
+
+
 def sparse_initial_pair(
     jacobian,
     residual,

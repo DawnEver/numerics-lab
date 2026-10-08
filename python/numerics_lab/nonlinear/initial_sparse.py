@@ -4,7 +4,7 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import splu
 
-from motronics.gauss.linear.initial_sparse import sparse_initial_pair
+from motronics.gauss.linear.initial_sparse import projected_rate_consistent, sparse_initial_pair
 
 
 def constant_storage_right_state(
@@ -115,14 +115,18 @@ def constant_storage_initial_pair(
         actual = np.asarray(residual_at(state, pair.rate))
         updated_jacobian = sp.csr_matrix(jacobian_at(state))
         updated_partial = np.asarray(partial_time_at(state))
-        rate_defect = storage_rows.algebraic_rows @ (updated_jacobian @ pair.rate + updated_partial)
         scale = (
             np.linalg.norm(residual)
             + np.linalg.norm(jacobian.data) * np.linalg.norm(state)
             + np.linalg.norm(mass @ pair.rate)
         )
-        rate_scale = np.linalg.norm(updated_jacobian.data) * np.linalg.norm(pair.rate) + np.linalg.norm(updated_partial)
-        if np.linalg.norm(actual) <= tolerance * scale and np.linalg.norm(rate_defect) <= tolerance * rate_scale:
+        if np.linalg.norm(actual) <= tolerance * scale and projected_rate_consistent(
+            updated_jacobian,
+            pair.rate,
+            updated_partial,
+            algebraic_rows=storage_rows.algebraic_rows,
+            tolerance=tolerance,
+        ):
             return pair
     msg = 'actual storage-preserving state/rate projection did not converge'
     raise ValueError(msg)
