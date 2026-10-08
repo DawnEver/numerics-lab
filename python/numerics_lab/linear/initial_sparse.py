@@ -41,7 +41,16 @@ class SparseInitialPair:
 
 
 def sparse_initial_pair(
-    jacobian, residual, mass, initial, *, algebraic_rows, stored_rows, partial_time, tolerance=1e-10
+    jacobian,
+    residual,
+    mass,
+    initial,
+    *,
+    algebraic_rows,
+    stored_rows,
+    partial_time,
+    stored_increment=None,
+    tolerance=1e-10,
 ):
     """Solve actual index-two equations without dense field-sized nullspaces.
 
@@ -55,6 +64,7 @@ def sparse_initial_pair(
     jacobian, mass, algebraic = map(sp.csr_matrix, (jacobian, mass, algebraic_rows))
     n = initial.size
     stored_rows = np.asarray(stored_rows)
+    stored_change = np.zeros(len(stored_rows)) if stored_increment is None else np.asarray(stored_increment)
     if (
         initial.shape != (n,)
         or residual.shape != (n,)
@@ -68,9 +78,10 @@ def sparse_initial_pair(
         or np.any(stored_rows < 0)
         or np.any(stored_rows >= n)
         or len(stored_rows) + algebraic.shape[0] != n
+        or stored_change.shape != stored_rows.shape
         or not all(
             np.isfinite(value).all()
-            for value in (initial, residual, partial_time, jacobian.data, mass.data, algebraic.data)
+            for value in (initial, residual, partial_time, stored_change, jacobian.data, mass.data, algebraic.data)
         )
         or not np.isfinite(tolerance)
         or tolerance <= 0
@@ -90,7 +101,7 @@ def sparse_initial_pair(
         ],
         format='csr',
     )
-    rhs = np.concatenate((-residual, np.zeros(len(stored_rows)), -algebraic @ partial_time))
+    rhs = np.concatenate((-residual, stored_change, -algebraic @ partial_time))
     matrix.eliminate_zeros()
     scale = np.sqrt(np.asarray(matrix.multiply(matrix).sum(axis=1)).ravel())
     scale[scale == 0] = 1.0

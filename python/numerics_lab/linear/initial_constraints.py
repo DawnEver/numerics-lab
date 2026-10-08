@@ -150,7 +150,9 @@ def linear_dae_initial_pair(jacobian, residual, mass, initial, *, partial_time, 
     return SparseInitialPair(initial + pair[:n], pair[n:], unique_rate)
 
 
-def complete_dae_initial_rate(jacobian, residual, mass, pair, *, partial_time, acceleration_remainder, tolerance=1e-10):
+def complete_dae_initial_rate(
+    jacobian, residual, mass, pair, *, partial_time, acceleration_remainder, storage_curvature=None, tolerance=1e-10
+):
     """Use declared second differentiated constraints, never choose free rates.
 
     This small-system owner eliminates the actual acceleration block. The
@@ -160,11 +162,12 @@ def complete_dae_initial_rate(jacobian, residual, mass, pair, *, partial_time, a
     residual, partial = np.asarray(residual), np.asarray(partial_time)
     remainder = np.asarray(acceleration_remainder)
     n = pair.state.size
+    storage_second = np.zeros(n) if storage_curvature is None else np.asarray(storage_curvature)
     if (
         jacobian.shape != (n, n)
         or mass.shape != (n, n)
-        or any(value.shape != (n,) for value in (residual, partial, remainder))
-        or not all(np.isfinite(value).all() for value in (jacobian, mass, residual, partial, remainder))
+        or any(value.shape != (n,) for value in (residual, partial, remainder, storage_second))
+        or not all(np.isfinite(value).all() for value in (jacobian, mass, residual, partial, remainder, storage_second))
         or not np.isfinite(tolerance)
         or tolerance <= 0
     ):
@@ -178,7 +181,11 @@ def complete_dae_initial_rate(jacobian, residual, mass, pair, *, partial_time, a
     scale[scale == 0] = 1
     left = null_space((acceleration / scale[:, None]).T).T / scale[None, :]
     matrix = np.vstack((mass, algebraic @ jacobian, left[:, :n] @ jacobian))
-    rhs = np.concatenate((-residual, -algebraic @ partial, -left @ np.concatenate((partial, algebraic @ remainder))))
+    rhs = np.concatenate((
+        -residual,
+        -algebraic @ partial,
+        -left @ np.concatenate((partial + storage_second, algebraic @ remainder)),
+    ))
     scale = np.linalg.norm(matrix, axis=1)
     scale[scale == 0] = 1
     matrix, rhs = matrix / scale[:, None], rhs / scale
@@ -193,4 +200,10 @@ def complete_dae_initial_rate(jacobian, residual, mass, pair, *, partial_time, a
     if np.any(pair.rate_is_unique & ~unique):
         msg = 'higher differentiated constraints lost previously proven rate authority'
         raise ValueError(msg)
-    return SparseInitialPair(pair.state, rate, unique)
+    proven = pair.rate_is_unique
+    if np.linalg.norm(rate[proven] - pair.rate[proven]) > tolerance * (
+        np.linalg.norm(rate) + np.linalg.norm(pair.rate[proven])
+    ):
+        msg = 'higher differentiated constraints changed previously proven physical rates'
+        raise ValueError(msg)
+    return SparseInitialPair(pair.state, np.where(proven, pair.rate, rate), unique)
