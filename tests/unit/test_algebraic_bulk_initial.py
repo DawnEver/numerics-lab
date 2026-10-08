@@ -6,10 +6,11 @@ import pytest
 from motronics.gauss.linear.algebraic_bulk_initial import algebraic_bulk_initial_pair
 
 
-def test_shared_rank_one_storage_preserves_state_and_marks_only_free_branch_rates():
+@pytest.mark.parametrize('inductance', [1e-9, 1.0, 1e9])
+def test_shared_rank_one_storage_preserves_state_and_marks_only_free_branch_rates(inductance):
     jacobian = np.array(
         [
-            [1, -1, 0.5, 0, 0],
+            [1 / inductance, -1, 0.5, 0, 0],
             [0, 2, 0, 0, 0],
             [0, 0, 5, 0, 0],
             [-1, 0, 0, 1, 0],
@@ -19,7 +20,7 @@ def test_shared_rank_one_storage_preserves_state_and_marks_only_free_branch_rate
     )
     mass = np.zeros((5, 5))
     mass[1, 3] = mass[2, 4] = 1
-    initial = np.array([0.04, 0.05, 0.02, 0.04, -0.02])
+    initial = np.array([0.04 * inductance, 0.05, 0.02, 0.04 * inductance, -0.02 * inductance])
     pair = algebraic_bulk_initial_pair(
         jacobian,
         np.zeros(5),
