@@ -5,6 +5,7 @@ import pytest
 import scipy.sparse as sp
 
 from motronics.gauss.linear.initial_sparse import sparse_initial_pair
+from motronics.gauss.linear.storage_border import storage_border_rows
 
 
 def test_an_ideal_source_current_rate_is_not_a_physical_zero_derivative():
@@ -68,3 +69,41 @@ def test_sparse_projection_refuses_an_actual_storage_source_contradiction():
             stored_rows=[0],
             partial_time=[0.0, -5.0],
         )
+
+
+def test_a_storage_border_eliminates_the_bulk_without_dropping_cross_rate_rows():
+    mass = sp.csr_matrix([
+        [2.0, 1.0, 0.0, 0.0, 0.0],
+        [1.0, 3.0, 0.0, 0.0, 0.0],
+        [4.0, 5.0, 2.0, 4.0, 0.0],
+        [6.0, 7.0, 1.0, 2.0, 0.0],
+        [0.0, 0.0, 0.0, 0.0, 0.0],
+    ])
+    rows = storage_border_rows(mass, bulk_indices=[0, 1], border_rows=[2, 3])
+    assert len(rows.stored_rows) == 3
+    assert rows.algebraic_rows.shape == (2, 5)
+    np.testing.assert_allclose((rows.algebraic_rows @ mass).toarray(), 0.0, atol=1e-14)
+    assert np.linalg.matrix_rank(mass[rows.stored_rows].toarray()) == 3
+
+
+def test_a_large_storage_bulk_only_densifies_the_explicit_small_border(monkeypatch):
+    original = sp.csr_matrix.toarray
+
+    def forbid_square(self, *args, **kwargs):
+        assert min(self.shape) <= 2, 'field-sized dense storage rank decomposition'
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(sp.csr_matrix, 'toarray', forbid_square)
+    n = 17000
+    mass = sp.bmat(
+        [[sp.eye(n, format='csr'), None], [sp.csr_matrix(np.ones((2, n))), sp.eye(2, format='csr')]],
+        format='csr',
+    )
+    rows = storage_border_rows(mass, bulk_indices=np.arange(n), border_rows=np.array([n, n + 1]))
+    assert rows.algebraic_rows.shape == (0, n + 2)
+    assert len(rows.stored_rows) == n + 2
+
+
+def test_storage_border_never_silently_discards_an_undeclared_storage_row():
+    with pytest.raises(ValueError, match='omits actual mass'):
+        storage_border_rows(sp.eye(3, format='csr'), bulk_indices=[0], border_rows=[1])
