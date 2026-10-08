@@ -269,7 +269,10 @@ def sparse_complete_initial_rate(
             raise ValueError(msg)
         evaluation_scale = (
             np.concatenate((
-                abs(residual) + abs(mass) @ abs(pair.rate),
+                # The admitted residual includes evaluated algebraic cancellations
+                # (including zero-mass linkage rows). Its own tiny remainder is
+                # not the backward-error scale of that physical equation.
+                abs(residual) + abs(jacobian) @ abs(pair.state) + abs(mass) @ abs(pair.rate),
                 abs(algebraic) @ (abs(jacobian) @ abs(pair.rate) + abs(partial)),
                 abs(partial) + abs(storage_second) + abs(jacobian) @ abs(pair.rate),
                 abs(algebraic) @ abs(remainder),
