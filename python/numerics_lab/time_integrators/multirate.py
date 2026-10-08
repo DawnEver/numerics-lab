@@ -189,6 +189,7 @@ def integrate_sampled(
     tasks: Sequence[SampledTask | ScheduledTask],
     *,
     consistent_start: bool = False,
+    segment_step_limit: Callable[[float, float], float] | None = None,
     **march,
 ) -> TransientSolution:
     """March ``problem`` over ``study`` with ``tasks`` firing at their hits and holding between them.
@@ -200,6 +201,8 @@ def integrate_sampled(
     ``consistent_start`` recomputes first-order rates after tasks update held inputs,
     holding all declared states fixed. Inconsistent algebraic states are refused rather
     than silently jumped; this option is for index-1 first-order systems, not acceleration.
+    ``segment_step_limit(start, stop)`` optionally tightens the study's maximum step
+    for each actual interval. It changes resolution, never task instants or priorities.
     """
     if consistent_start and study.integrator in (IntegratorKind.NEWMARK, IntegratorKind.GENERALIZED_ALPHA):
         msg = 'consistent_start initializes first-order rates, not second-order acceleration'
@@ -236,6 +239,13 @@ def integrate_sampled(
                 budget.check(started, out.times[-1], u, len(out.times) - 1)
         if t_b <= t_a:
             continue
+        dt = min(study.dt, t_b - t_a)
+        if segment_step_limit is not None:
+            limit = segment_step_limit(t_a, t_b)
+            if not np.isfinite(limit) or limit <= 0:
+                msg = f'segment step limit must be finite and positive, got {limit!r}'
+                raise ValueError(msg)
+            dt = min(dt, limit)
         if consistent_start:
             start = consistent_initial_condition(problem, u, t_a, fixed=range(u.size), tol=march.get('tol', 1e-10))
             v = start.u_dot
@@ -247,7 +257,7 @@ def integrate_sampled(
         try:
             seg = integrate_transient(
                 problem,
-                TransientStudy(t0=t_a, t1=t_b, dt=min(study.dt, t_b - t_a), integrator=study.integrator),
+                TransientStudy(t0=t_a, t1=t_b, dt=dt, integrator=study.integrator),
                 u,
                 v0=v,
                 a0=a,

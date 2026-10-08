@@ -30,6 +30,41 @@ from motronics.gauss.time_integrators import (
 _TAU, _W, _TS = 0.2, 3.0, 0.05
 
 
+def test_segment_step_limits_resolve_nonuniform_intervals_without_changing_clocks():
+    intervals = []
+    fired = []
+
+    def limit(start, stop):
+        intervals.append((start, stop))
+        return (stop - start) / 4
+
+    sol = integrate_sampled(
+        _RC(lambda _t: np.ones(1)),
+        TransientStudy(t0=0.0, t1=0.125, dt=0.02, integrator=IntegratorKind.BDF1),
+        np.zeros(1),
+        [ScheduledTask([0.0, 0.025, 0.075], lambda t, _u: fired.append(t))],
+        segment_step_limit=limit,
+    )
+    assert fired == [0.0, 0.025, 0.075]
+    assert intervals == [(0.0, 0.025), (0.025, 0.075), (0.075, 0.125)]
+    for start, stop in intervals:
+        times = np.asarray([t for t in sol.times if start <= t <= stop])
+        assert len(times) == 5
+        assert np.max(np.diff(times)) <= (stop - start) / 4 + 1e-16
+
+
+@pytest.mark.parametrize('limit', [0.0, -1.0, float('nan'), float('inf')])
+def test_segment_step_limits_refuse_invalid_resolution(limit):
+    with pytest.raises(ValueError, match='segment step limit'):
+        integrate_sampled(
+            _RC(lambda _t: np.ones(1)),
+            TransientStudy(t0=0.0, t1=0.1, dt=0.01),
+            np.zeros(1),
+            [],
+            segment_step_limit=lambda _a, _b: limit,
+        )
+
+
 def test_an_explicit_nonuniform_clock_holds_between_its_actual_hits() -> None:
     grid = np.array([0.0, 0.025, 0.075, 0.125])
     hold, fired = Hold(0.0), []
