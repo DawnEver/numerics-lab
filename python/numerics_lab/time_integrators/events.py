@@ -60,7 +60,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from numpy.typing import NDArray
 
-from motronics.contracts.spec.analysis_formulation import FactorReusableProblem
+from motronics.contracts.spec.analysis_formulation import FactorReusableProblem, HistoryProblem
 from motronics.contracts.spec.study_spec import TransientStudy
 from motronics.gauss.time_integrators import (
     FactorCache,
@@ -421,6 +421,11 @@ def integrate_transient_with_events(
     def _commit(t_new: float, u_new: NDArray, rate: NDArray, *, observe=True) -> None:
         """Append a point to the trajectory, promoting its exhaustion label from probe to landed."""
         nonlocal state, prev_dt
+        if latest_failed.get(t_new, False) and (isinstance(problem, HistoryProblem) or on_accept is not None):
+            msg = 'a nonconverged eventful step cannot advance physical history or accepted observations'
+            raise ValueError(msg)
+        if isinstance(problem, HistoryProblem):
+            problem.commit_history(u_new, t_new)
         solution.times.append(t_new)
         solution.states.append(u_new)
         assert solution.state_rates is not None
@@ -547,7 +552,7 @@ def integrate_transient_with_events(
                                     u_max = float(np.max(np.abs(u_probe))) if u_probe.size else 1.0
                                     scale = max(u_max, 1e-12)
                                     if float(np.max(np.abs(u_half - u_probe))) > refine * scale:
-                                        if on_accept is not None:
+                                        if on_accept is not None or isinstance(problem, HistoryProblem):
                                             # The midpoint can change the physical law. Commit it
                                             # with its own derivative state, then re-march: the
                                             # speculative second half is no longer authoritative.
