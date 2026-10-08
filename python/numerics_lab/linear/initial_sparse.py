@@ -129,9 +129,19 @@ def sparse_initial_pair(
     if np.linalg.norm(matrix @ pair - rhs) > bar:
         msg = 'stored initial state contradicts actual state/rate constraints'
         raise ValueError(msg)
-    # Validate every original storage row, not just the rank representative.
-    storage_defect = mass @ pair[:n]
-    if np.linalg.norm(storage_defect) > tolerance * np.linalg.norm(mass.data) * np.linalg.norm(pair[:n]):
+    # Recover the increment of EVERY original storage row from the declared
+    # independent rows and actual left nullspace. Finite-Q Newton corrections
+    # carry nonzero increments; requiring E*delta=0 would reject their target.
+    storage_coordinates = sp.vstack((sp.eye(n, format='csr')[stored_rows], algebraic), format='csc')
+    try:
+        storage_factor = splu(storage_coordinates)
+    except RuntimeError as error:
+        msg = 'declared storage rank decomposition does not provide complete independent coordinates'
+        raise ValueError(msg) from error
+    expected_storage = storage_factor.solve(np.concatenate((stored_change, np.zeros(algebraic.shape[0]))))
+    storage_defect = mass @ pair[:n] - expected_storage
+    storage_bar = tolerance * (np.linalg.norm(mass.data) * np.linalg.norm(pair[:n]) + np.linalg.norm(expected_storage))
+    if np.linalg.norm(storage_defect) > storage_bar:
         msg = 'declared storage rank decomposition does not preserve actual stored state'
         raise ValueError(msg)
     return SparseInitialPair(initial + pair[:n], pair[n:], nonzero[n:].copy())
