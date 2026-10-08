@@ -217,7 +217,11 @@ def sparse_complete_initial_rate(
     scale[scale == 0] = 1
     matrix, rhs = sp.diags(1 / scale) @ matrix, rhs / scale
     nonzero = np.asarray(matrix.getnnz(axis=0)).ravel() != 0
-    selected = np.flatnonzero(nonzero)
+    available = nonzero.copy()
+    # Proven physical rates are prescribed coordinates, not extra soft rows
+    # that an overdetermined subsystem may discard. Their correction is zero.
+    available[np.flatnonzero(pair.rate_is_unique)] = False
+    selected = np.flatnonzero(available)
     reduced = matrix[:, selected].tocsr()
     rows = maximum_bipartite_matching(reduced, perm_type='row')
     if np.any(rows < 0):

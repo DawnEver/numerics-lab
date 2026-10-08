@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear.initial_sparse import sparse_initial_pair
+from motronics.gauss.linear.initial_sparse import SparseInitialPair, sparse_complete_initial_rate, sparse_initial_pair
 
 
 @pytest.mark.parametrize('capacitance', [1.0, 1e-9])
@@ -42,3 +42,20 @@ def test_tiny_linkage_increment_cannot_be_dropped_beside_a_large_physical_rate_r
     )
     assert pair.state[1] == 0
     assert pair.state[2] == pytest.approx(increment, rel=1e-14, abs=0)
+
+
+def test_higher_constraint_closure_cannot_change_a_previously_proven_tiny_physical_rate():
+    known = 1e-20
+    initial = SparseInitialPair(np.zeros(2), np.array([known, 0.0]), np.array([True, False]))
+    pair = sparse_complete_initial_rate(
+        sp.csr_matrix([[0, 0], [0, 1]]),
+        np.array([-known, 0]),
+        sp.csr_matrix([[1, 0], [0, 0]]),
+        initial,
+        algebraic_rows=sp.csr_matrix([[0, 1]]),
+        partial_time=np.array([-2e8, -3.0]),
+        acceleration_remainder=np.zeros(2),
+    )
+    assert pair.rate[0] == known
+    assert pair.rate[1] == 3
+    assert pair.rate_is_unique.all()
