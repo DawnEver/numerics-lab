@@ -1,0 +1,70 @@
+"""Portable locator clocks preserve the genuine unfinished parent cell."""
+
+import json
+
+import numpy as np
+
+from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
+from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint
+from motronics.gauss.time_integrators.events import EventSurface, integrate_transient_with_events
+
+
+class _StoredRamp:
+    def __init__(self) -> None:
+        self.slope = 1.0
+
+    def residual(self, state, rate, acceleration, time):
+        return np.asarray(rate) - self.slope
+
+    def jacobian(self, state, rate, acceleration, time, weights):
+        return np.array([[weights.alpha1.real]])
+
+    def commit_history(self, state, time):
+        pass
+
+    def checkpoint_history(self):
+        return {'slope': self.slope}
+
+    def restore_checkpoint_history(self, data):
+        self.slope = data['slope']
+
+    def observe(self, state, time):
+        return float(state[0]) - 0.5 if self.slope > 0 else -1.0
+
+    def handle(self, index, time, state):
+        self.slope = -1.0
+
+
+def test_fresh_json_resume_after_event_keeps_right_history_and_unfinished_cell():
+    original = _StoredRamp()
+    captured = []
+    whole = integrate_transient_with_events(
+        original,
+        TransientStudy(0, 1, 0.3, IntegratorKind.BDF2),
+        np.array([0.0]),
+        event_fns=(EventSurface(original.observe, 1),),
+        on_event=original.handle,
+        time_breakpoints=(0.15,),
+        checkpoint_key='declared-ramp',
+        on_checkpoint=captured.append,
+    )
+    event_time = whole.events[0][1]
+    checkpoint = next(item for item in captured if item.time == event_time)
+    checkpoint = TransientCheckpoint.from_mapping(json.loads(json.dumps(checkpoint.to_mapping())))
+    assert checkpoint.event_state.pending_target > event_time
+    assert checkpoint.states == ((float(whole.states[whole.times.index(event_time)][0]),),)
+    fresh = _StoredRamp()
+    resumed = integrate_transient_with_events(
+        fresh,
+        TransientStudy(event_time, 1, 0.3, IntegratorKind.BDF2),
+        np.array(checkpoint.states[-1]),
+        event_fns=(EventSurface(fresh.observe, 1),),
+        on_event=fresh.handle,
+        checkpoint_key='declared-ramp',
+        restart=checkpoint,
+    )
+    start = whole.times.index(event_time)
+    assert resumed.times == whole.times[start:]
+    np.testing.assert_array_equal(resumed.states, whole.states[start:])
+    assert resumed.events == []
+    assert resumed.checkpoint.to_mapping() == whole.checkpoint.to_mapping()

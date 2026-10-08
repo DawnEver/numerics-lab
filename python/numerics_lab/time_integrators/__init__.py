@@ -333,6 +333,9 @@ def integrate_transient(
     if initial_history is not None:
         state = seeded_bdf2_state(state, initial_history, integrator, restart, study.dt)
     if restart is not None:
+        if restart.event_state is not None:
+            msg = 'event locator history must resume through the actual eventful integrator'
+            raise ValueError(msg)
         restart.validate_restart(checkpoint_key, integrator.name, study.t0, u0.size)
         validate_eec_restart(restart, eec_period, eec_sign, study.dt, eec_nonlinear_first_order)
         restore_history_checkpoint(problem, restart)

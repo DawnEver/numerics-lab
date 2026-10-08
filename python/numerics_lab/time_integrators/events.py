@@ -55,7 +55,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 from numpy.typing import NDArray
@@ -65,6 +65,7 @@ from motronics.contracts.spec.study_spec import TransientStudy
 from motronics.gauss.time_integrators import (
     FactorCache,
     _bdf2_variable_form,
+    _checkpoint_of,
     _default_solve,
     _full_fixed_steps,
     _solve_step,
@@ -73,6 +74,8 @@ from motronics.gauss.time_integrators import (
 from motronics.gauss.time_integrators._forms import IntegratorState, TransientSolution
 from motronics.gauss.time_integrators._landing import accepted_observation, accepted_projection, next_deadline
 from motronics.gauss.time_integrators._step import HeldFactor
+from motronics.gauss.time_integrators.checkpoint import restore_history_checkpoint, validate_history_owner
+from motronics.gauss.time_integrators.event_checkpoint import EventCheckpointState
 
 logger = logging.getLogger(__name__)
 
@@ -256,6 +259,9 @@ def integrate_transient_with_events(
     on_accept: Callable[[float, NDArray[np.floating]], bool] | None = None,
     next_breakpoint: Callable[[float], float | None] | None = None,
     project_accepted_state: Callable[[float, NDArray[np.floating]], NDArray[np.floating]] | None = None,
+    restart=None,
+    checkpoint_key: str | None = None,
+    on_checkpoint=None,
 ) -> EventfulTransientSolution:
     """March ``problem`` over ``study``, stopping the grid at every zero of ``event_fns``.
 
@@ -336,13 +342,47 @@ def integrate_transient_with_events(
         msg = f'time_tol must be finite and positive, got {time_tol!r}'
         raise ValueError(msg)
     bracket_tol = dt * 1.0e-6 if time_tol is None else time_tol
+    minimum_step = dt / 1000 if h_min is None else h_min
+    directions = tuple(surface.direction if isinstance(surface, EventSurface) else 0 for surface in event_fns)
+    if on_checkpoint is not None and checkpoint_key is None:
+        msg_0 = 'on_checkpoint requires checkpoint_key'
+        raise ValueError(msg_0)
+    if checkpoint_key is not None:
+        validate_history_owner(problem)
+    origin = study.t0
+    saved_cursor = None
+    if restart is not None:
+        restart.validate_restart(checkpoint_key, integrator.name, study.t0, u0.size)
+        saved_cursor = restart.event_state
+        if saved_cursor is None:
+            msg_0 = 'eventful restart requires its actual locator clocks'
+            raise ValueError(msg_0)
+        policy = (dt, bracket_tol, adaptive, minimum_step, refine, directions)
+        saved_policy = (
+            saved_cursor.step_dt,
+            saved_cursor.bracket_tolerance,
+            saved_cursor.adaptive,
+            saved_cursor.minimum_step,
+            saved_cursor.refine,
+            saved_cursor.surface_directions,
+        )
+        if policy != saved_policy:
+            msg_0 = 'eventful restart does not match its actual step and surface policies'
+            raise ValueError(msg_0)
+        restore_history_checkpoint(problem, restart)
+        state.us = [np.array(vector, dtype=float) for vector in restart.states]
+        state.v = None if restart.velocity is None else np.array(restart.velocity)
+        state.a = None if restart.acceleration is None else np.array(restart.acceleration)
+        u0 = state.last_u
+        origin = restart.step_origin
     solution = EventfulTransientSolution(times=[study.t0], states=[u0], state_rates=[], rate_state_overrides={})
-    if on_accept is not None and accepted_observation(on_accept, study.t0, u0):
+    if restart is None and on_accept is not None and accepted_observation(on_accept, study.t0, u0):
         u0 = accepted_projection(project_accepted_state, study.t0, u0)
         state = integrator.start(u0, study.t0, state.v, state.a)
         solution.states[0] = u0
     g_prev = [float(g(u0, study.t0)) for g in event_fns]
-    prev_dt: float | None = None
+    prev_dt: float | None = None if restart is None else restart.previous_dt
+    accepted_dt = None if restart is None else restart.previous_dt
     breakpoints = tuple(time_breakpoints)
     for i, bp in enumerate(breakpoints):
         if not study.t0 < bp <= study.t1:
@@ -369,7 +409,7 @@ def integrate_transient_with_events(
     # distance. NAMED HOLE: a GENUINE re-crossing inside one bracket_tol of the firing is
     # suppressed with the spurious one -- physically indistinguishable from chatter, which
     # _MAX_EVENTS_PER_CELL already refuses.
-    last_fired: dict[int, float] = {}
+    last_fired: dict[int, float] = {} if saved_cursor is None else dict(saved_cursor.last_fired)
     # Whether the MOST RECENT step to each instant failed. A rejected attempt and the shortened steps
     # that later reach the same instant share its time, so the time alone cannot say which one landed.
     latest_failed: dict[float, bool] = {}
@@ -420,7 +460,8 @@ def integrate_transient_with_events(
 
     def _commit(t_new: float, u_new: NDArray, rate: NDArray, *, observe=True) -> None:
         """Append a point to the trajectory, promoting its exhaustion label from probe to landed."""
-        nonlocal state, prev_dt
+        nonlocal state, prev_dt, accepted_dt
+        accepted_dt = t_new - solution.times[-1]
         if latest_failed.get(t_new, False) and (isinstance(problem, HistoryProblem) or on_accept is not None):
             msg = 'a nonconverged eventful step cannot advance physical history or accepted observations'
             raise ValueError(msg)
@@ -438,6 +479,8 @@ def integrate_transient_with_events(
                 solution.states[-1] = right_state
             state = integrator.start(right_state, t_new, state.v, state.a)
             prev_dt = None
+        if observe:
+            emit_checkpoint(t_target, events_this_cell)
         # The step that produced this point recorded any failure against t_new; it landed, so it
         # is a real non-converged STEP. Only the most recent such record is promoted -- an earlier
         # discarded probe at the same instant stays a probe, and so does every record when the step
@@ -451,9 +494,41 @@ def integrate_transient_with_events(
                 break
 
     # The plain march's full-cell count; the final cell is partial when needed.
-    n_steps = _full_fixed_steps(study)
-    resume_from: float | None = None
-    k = 0
+    n_steps = _full_fixed_steps(replace(study, t0=origin))
+    resume_from: float | None = None if saved_cursor is None else saved_cursor.next_reanchor
+    k = 0 if saved_cursor is None else saved_cursor.nominal_index
+    resumed_target = None if saved_cursor is None else saved_cursor.pending_target
+
+    def emit_checkpoint(target, event_count):
+        if checkpoint_key is None or accepted_dt is None:
+            return
+        pending = target if target > state.t else None
+        cursor = EventCheckpointState(
+            dt,
+            bracket_tol,
+            adaptive,
+            minimum_step,
+            refine,
+            k,
+            resume_from,
+            pending,
+            event_count if pending is not None else 0,
+            tuple(sorted(last_fired.items())),
+            directions,
+        )
+        checkpoint = _checkpoint_of(
+            problem,
+            state,
+            accepted_dt,
+            checkpoint_key,
+            integrator.name,
+            step_origin=origin,
+            event_state=cursor,
+        )
+        solution.checkpoint = checkpoint
+        if on_checkpoint is not None:
+            on_checkpoint(checkpoint)
+
     # A clipped cell RE-ANCHORS the nominal grid at the breakpoint (resume_from keeps the
     # uniform dt grid going from there); the plain nominal grid study.t0 + (k+1)*dt applies
     # only while nothing clipped. Without the re-anchor the nominal targets drift ahead of the
@@ -465,7 +540,12 @@ def integrate_transient_with_events(
     # window. Only roundoff at the declared end may terminate this march.
     end_tol = 1e-12 * max(abs(study.t0), abs(study.t1), study.t1 - study.t0)
     while state.t < study.t1 - end_tol:
-        if resume_from is not None:
+        continuing_cell = resumed_target is not None
+        if continuing_cell:
+            t_target = min(resumed_target, study.t1)
+            resumed_target = None
+            pending_dt = t_target - state.t
+        elif resume_from is not None:
             # The re-anchored grid continues from the last breakpoint; the t1 clamp makes the
             # FINAL re-anchored cell a PARTIAL step, so its dt is the true remainder -- a full
             # dt there advanced the physics past t1 while labelling it t1 (SR-025, measured
@@ -479,10 +559,11 @@ def integrate_transient_with_events(
             t_target = study.t1
             pending_dt = t_target - state.t
         else:
-            t_target = study.t0 + (k + 1) * dt
+            t_target = origin + (k + 1) * dt
             pending_dt = dt  # dt exactly (not t_target - state.t, which is off by ulps from dt)
-        k += 1
-        events_this_cell = 0
+        if not continuing_cell:
+            k += 1
+        events_this_cell = saved_cursor.pending_events if continuing_cell else 0
         while True:  # one nominal cell, possibly interrupted by events
             # W1b: a time breakpoint inside the cell clips the target -- a known non-smooth
             # instant is LANDED on the grid, never sampled past (a landed point is already
@@ -552,7 +633,11 @@ def integrate_transient_with_events(
                                     u_max = float(np.max(np.abs(u_probe))) if u_probe.size else 1.0
                                     scale = max(u_max, 1e-12)
                                     if float(np.max(np.abs(u_half - u_probe))) > refine * scale:
-                                        if on_accept is not None or isinstance(problem, HistoryProblem):
+                                        if (
+                                            on_accept is not None
+                                            or isinstance(problem, HistoryProblem)
+                                            or checkpoint_key is not None
+                                        ):
                                             # The midpoint can change the physical law. Commit it
                                             # with its own derivative state, then re-march: the
                                             # speculative second half is no longer authoritative.
@@ -717,6 +802,7 @@ def integrate_transient_with_events(
             g_prev = [float(g(u_star, t_star)) for g in event_fns]
             pending_dt = t_target - t_star  # the genuine remainder of this cell
             events_this_cell += 1
+            emit_checkpoint(t_target, events_this_cell)
             if events_this_cell > _MAX_EVENTS_PER_CELL:
                 msg = (
                     f'more than {_MAX_EVENTS_PER_CELL} events inside one nominal cell ending at '
