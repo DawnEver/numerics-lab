@@ -148,3 +148,49 @@ def linear_dae_initial_pair(jacobian, residual, mass, initial, *, partial_time, 
         raise ValueError(msg)
     unique_rate = np.linalg.norm(free[n:], axis=1) <= rank_bar
     return SparseInitialPair(initial + pair[:n], pair[n:], unique_rate)
+
+
+def complete_dae_initial_rate(jacobian, residual, mass, pair, *, partial_time, acceleration_remainder, tolerance=1e-10):
+    """Use declared second differentiated constraints, never choose free rates.
+
+    This small-system owner eliminates the actual acceleration block. The
+    caller owns residual Hessians/time chains; no finite difference is used.
+    """
+    jacobian, mass = csr_matrix(jacobian).toarray(), csr_matrix(mass).toarray()
+    residual, partial = np.asarray(residual), np.asarray(partial_time)
+    remainder = np.asarray(acceleration_remainder)
+    n = pair.state.size
+    if (
+        jacobian.shape != (n, n)
+        or mass.shape != (n, n)
+        or any(value.shape != (n,) for value in (residual, partial, remainder))
+        or not all(np.isfinite(value).all() for value in (jacobian, mass, residual, partial, remainder))
+        or not np.isfinite(tolerance)
+        or tolerance <= 0
+    ):
+        msg = 'differentiated rate consistency requires finite declared actual operators'
+        raise ValueError(msg)
+    norms = np.linalg.norm(mass, axis=1)
+    norms[norms == 0] = 1
+    algebraic = null_space((mass / norms[:, None]).T).T / norms[None, :]
+    acceleration = np.vstack((mass, algebraic @ jacobian))
+    scale = np.linalg.norm(acceleration, axis=1)
+    scale[scale == 0] = 1
+    left = null_space((acceleration / scale[:, None]).T).T / scale[None, :]
+    matrix = np.vstack((mass, algebraic @ jacobian, left[:, :n] @ jacobian))
+    rhs = np.concatenate((-residual, -algebraic @ partial, -left @ np.concatenate((partial, algebraic @ remainder))))
+    scale = np.linalg.norm(matrix, axis=1)
+    scale[scale == 0] = 1
+    matrix, rhs = matrix / scale[:, None], rhs / scale
+    rate, *_ = np.linalg.lstsq(matrix, rhs, rcond=None)
+    if np.linalg.norm(matrix @ rate - rhs) > tolerance * (
+        np.linalg.norm(matrix) * np.linalg.norm(rate) + np.linalg.norm(rhs)
+    ):
+        msg = 'declared source/device curvature contradicts actual differentiated DAE constraints'
+        raise ValueError(msg)
+    free = null_space(matrix)
+    unique = np.linalg.norm(free, axis=1) <= np.finfo(float).eps * max(matrix.shape) * 16
+    if np.any(pair.rate_is_unique & ~unique):
+        msg = 'higher differentiated constraints lost previously proven rate authority'
+        raise ValueError(msg)
+    return SparseInitialPair(pair.state, rate, unique)
