@@ -91,6 +91,20 @@ def algebraic_bulk_initial_pair(
             np.arange(len(selected)),
         ))
         matrix, rhs, evaluation_scale = matrix[order], rhs[order], evaluation_scale[order]
+    else:
+        # Preserve small algebraic state corrections (including actual linkage)
+        # before eliminating dynamic rows with potentially enormous rates.
+        # Otherwise a stiff derivative can lose a finite-Q correction in the
+        # arithmetic of an unrelated current/rate equation.
+        algebraic_indices = np.flatnonzero(np.asarray(reduced_mass.getnnz(axis=1)).ravel() == 0)
+        dynamic_indices = np.setdiff1d(np.arange(m), algebraic_indices)
+        order = np.concatenate((
+            np.arange(m, m + len(selected)),
+            algebraic_indices,
+            np.arange(m + len(selected), len(rhs)),
+            dynamic_indices,
+        ))
+        matrix, rhs, evaluation_scale = matrix[order], rhs[order], evaluation_scale[order]
     norms = np.linalg.norm(matrix, axis=1)
     norms[norms == 0] = 1
     matrix, rhs = matrix / norms[:, None], rhs / norms
@@ -104,7 +118,7 @@ def algebraic_bulk_initial_pair(
     answer_scaled, free_scaled = border_affine_space(
         equilibrated,
         rhs,
-        mandatory_rows=np.arange(m) if fixed_state else np.arange(m, m + len(selected)),
+        mandatory_rows=np.arange(m if fixed_state else len(selected)),
     )
     rank_bar = np.finfo(float).eps * max(matrix.shape) * 16
     if np.any(free_scaled[:m] != 0):
