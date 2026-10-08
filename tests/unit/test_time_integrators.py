@@ -286,7 +286,7 @@ def test_an_exhausted_newton_ceiling_labels_the_solution(caplog) -> None:
     problem = _QuadraticDrift()
     study = TransientStudy(t0=0.0, t1=0.5, dt=0.1, integrator=IntegratorKind.BDF2)
     with caplog.at_level('WARNING', logger='motronics.gauss.time_integrators'):
-        coarse = integrate_transient(problem, study, np.array([1.0]), max_newton=1, tol=1e-12)
+        coarse = integrate_transient(problem, study, np.array([1.0]), max_newton=1, tol=1e-12, on_nonconverged='label')
     assert not coarse.converged
     assert coarse.nonconverged_times, 'an exhausted step must be named on the solution'
     assert coarse.worst_step_residual > 0.0

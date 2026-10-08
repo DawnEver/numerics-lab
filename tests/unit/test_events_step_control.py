@@ -75,6 +75,7 @@ def test_the_eventful_march_REJECTS_a_step_its_newton_could_not_take() -> None:
         'max_newton': 6,
         'tol': 1.0e-10,
         'backtrack_cap': 0,
+        'on_nonconverged': 'label',
     }
     fixed = integrate_transient(_SharpLayer(), study, np.array([0.0]), **common)
     # The premise: without the retry this problem DOES exhaust. If it stopped doing so the test
@@ -119,7 +120,13 @@ def test_a_step_rejected_and_then_re_landed_converged_is_not_labelled_non_conver
     """
     dt = 0.1
     study = TransientStudy(t0=0.0, t1=0.3, dt=dt, integrator=IntegratorKind.BDF1)
-    common = {'event_fns': (_SharpLayer.never,), 'max_newton': 4, 'tol': 1e-10, 'backtrack_cap': 0}
+    common = {
+        'event_fns': (_SharpLayer.never,),
+        'max_newton': 4,
+        'tol': 1e-10,
+        'backtrack_cap': 0,
+        'on_nonconverged': 'label',
+    }
     fixed = integrate_transient(_StiffOnlyAtLargeSteps(), study, np.array([0.0]), **common)
     assert fixed.nonconverged_times, 'PREMISE: the nominal step must exhaust, or nothing is rescued'
     shrunk = integrate_transient(_StiffOnlyAtLargeSteps(), study, np.array([0.0]), adaptive=True, **common)

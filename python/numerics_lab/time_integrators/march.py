@@ -79,7 +79,7 @@ from motronics.gauss.time_integrators.factor_reuse import FactorCache
 
 logger = logging.getLogger(__name__)
 
-__all__ = ['StepTolerance', 'integrate_transient']
+__all__ = ['StepNotConverged', 'StepTolerance', 'integrate_transient']
 
 #: Events tolerated inside ONE nominal cell before the function is declared chattering. A genuine
 #: circuit sees a handful of crossings per cell at most (a PWM edge and a state ripple); past this
@@ -92,6 +92,24 @@ _MAX_EVENTS_PER_CELL = 512
 # A temporary performance cache, never a solve/acceptance threshold. Oversized trials are simply
 # recomputed; large field vectors must not make simultaneous event observers exhaust host memory.
 _EVENT_TRIAL_CACHE_BYTES = 64 * 1024**2
+
+
+class StepNotConverged(RuntimeError):
+    """A step the solver could not converge would have JOINED the trajectory: the state reached is here.
+
+    SOLVER HONESTY: a march never returns a trajectory containing a state its own Newton rejected
+    unless the caller asked for labels (``on_nonconverged='label'``). ``t`` is the step's instant,
+    ``residual`` its last residual norm, ``state`` the iterate it stopped at and ``t_reached`` /
+    ``u_reached`` the last state that DID converge.
+    """
+
+    def __init__(self, t: float, residual: float, state, t_reached: float, u_reached) -> None:
+        super().__init__(
+            f'the step to t={t:g} did not converge: residual {residual:.3e}; the march reached t={t_reached:g}. '
+            'A spurious or absent root (a gate-coupled source chattering between its modes) is the usual '
+            'cause; pass on_nonconverged="label" only to RECORD such steps, never to hide them.'
+        )
+        self.t, self.residual, self.state, self.t_reached, self.u_reached = t, residual, state, t_reached, u_reached
 
 
 @dataclass(frozen=True)
@@ -284,6 +302,7 @@ def integrate_transient(
     adaptive: bool = False,
     h_min: float | None = None,
     step_control: StepTolerance | None = None,
+    on_nonconverged: str = 'raise',
     refactor_every: int | None = None,
 ) -> TransientSolution:
     """March ``problem`` over ``study``, stopping the grid at every zero of ``event_fns``.
@@ -311,6 +330,12 @@ def integrate_transient(
     lands inside the cell and the march continues to the same nominal target, so the cell's
     endpoint is unchanged. Only a step that ACTUALLY failed is subdivided: blanket subdivision was
     measured WORSE (64 -> 98/148/268 exhausted on srdab_closed_loop).
+
+    ``on_nonconverged`` is SOLVER HONESTY: ``'raise'`` (the default) refuses to let a step whose
+    Newton exhausted join the trajectory -- :class:`StepNotConverged` carries the residual and the
+    state reached. ``'label'`` keeps the march going and records the instant in
+    ``nonconverged_times`` (with a warning), for a caller whose contract is to REPORT it. Discarded
+    bisection probes never raise: they are not part of the trajectory.
 
     ``step_control`` is LOCAL-ERROR control for every integrator: each converged step that lands
     without crossing an event has its truncation error estimated per unknown (:func:`_lte_ratio`)
@@ -384,6 +409,10 @@ def integrate_transient(
     # Whether the MOST RECENT step to each instant failed. A rejected attempt and the shortened steps
     # that later reach the same instant share its time, so the time alone cannot say which one landed.
     latest_failed: dict[float, bool] = {}
+    failed_residual: dict[float, float] = {}
+    if on_nonconverged not in {'raise', 'label'}:
+        msg = f"on_nonconverged must be 'raise' or 'label', got {on_nonconverged!r}"
+        raise ValueError(msg)
 
     def step_from(
         from_state: IntegratorState, dt_step: float, t_new: float
@@ -422,6 +451,7 @@ def integrate_transient(
         if not converged:
             solution.nonconverged_probe_times.append(t_new)
         latest_failed[t_new] = not converged
+        failed_residual[t_new] = residual
         return out.state, out.u, converged, out.rate
 
     def _commit(t_new: float, u_new: NDArray, rate: NDArray) -> None:
@@ -442,6 +472,8 @@ def integrate_transient(
         # that actually reached this instant converged (a retry's halves re-land a rejected target).
         if not latest_failed.get(t_new, False):
             return
+        if on_nonconverged == 'raise':
+            raise StepNotConverged(t_new, failed_residual[t_new], u_new, solution.times[-2], solution.states[-2])
         for j in range(len(solution.nonconverged_probe_times) - 1, -1, -1):
             if solution.nonconverged_probe_times[j] == t_new:
                 del solution.nonconverged_probe_times[j]

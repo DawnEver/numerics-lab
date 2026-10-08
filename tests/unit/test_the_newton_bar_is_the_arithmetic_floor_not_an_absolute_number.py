@@ -151,7 +151,7 @@ class _RootlessProblem:
 def test_a_planted_divergence_still_reports_not_converged_at_every_scale(offset: float) -> None:
     """The bar must REFUSE, at every scale, and the refusal must be far above the floor."""
     study = TransientStudy(t0=0.0, t1=5e-3, dt=1e-3, integrator=IntegratorKind.BDF2)
-    sol = integrate_transient(_RootlessProblem(offset), study, np.array([1.0]), max_newton=12)
+    sol = integrate_transient(_RootlessProblem(offset), study, np.array([1.0]), max_newton=12, on_nonconverged='label')
     assert sol.nonconverged_times, (
         f'offset {offset:.0e}: a residual bounded below by {offset:.0e} was labelled converged '
         f'at worst {sol.worst_step_residual:.3e}'
@@ -170,7 +170,7 @@ def test_the_planted_stall_is_orders_above_its_own_floor() -> None:
     offset = 1.0e4
     study = TransientStudy(t0=0.0, t1=5e-3, dt=1e-3, integrator=IntegratorKind.BDF2)
     problem = _RootlessProblem(offset)
-    sol = integrate_transient(problem, study, np.array([1.0]), max_newton=12)
+    sol = integrate_transient(problem, study, np.array([1.0]), max_newton=12, on_nonconverged='label')
     worst_u = np.array([max(abs(float(x[0])) for x in sol.states)])
     floor = residual_floor(np.atleast_2d(offset), worst_u)
     assert sol.worst_step_residual / floor > 1e8, (

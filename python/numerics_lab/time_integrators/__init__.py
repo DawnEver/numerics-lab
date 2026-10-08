@@ -42,7 +42,7 @@ from motronics.gauss.time_integrators._integrators import (
 )
 from motronics.gauss.time_integrators._step import HeldFactor, directional_line_search
 from motronics.gauss.time_integrators.factor_reuse import FactorCache
-from motronics.gauss.time_integrators.march import StepTolerance, integrate_transient
+from motronics.gauss.time_integrators.march import StepNotConverged, StepTolerance, integrate_transient
 from motronics.gauss.time_integrators.multirate import (
     Hold,
     RateTransition,
@@ -65,6 +65,7 @@ __all__ = [
     'RateTransition',
     'SampledTask',
     'StepForm',
+    'StepNotConverged',
     'StepTolerance',
     'TRBDF2Integrator',
     'TransientSolution',

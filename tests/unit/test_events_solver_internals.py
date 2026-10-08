@@ -332,6 +332,7 @@ def test_a_discarded_bisection_probe_does_not_count_as_a_nonconverged_STEP(monke
         on_event=lambda _i, _t, _u: problem.toggle(),
         max_newton=100,
         tol=1.0e-12,
+        on_nonconverged='label',
     )
     assert problem.toggles == 1, 'the event must actually fire (else the probe path never runs)'
     assert probe_failures, 'the locator must genuinely discard failed solve verdicts'
