@@ -2,9 +2,9 @@
 
 import numpy as np
 import scipy.sparse as sp
-from scipy.linalg import null_space
 from scipy.sparse.linalg import splu
 
+from motronics.gauss.linear.border_rank import border_affine_space
 from motronics.gauss.linear.initial_sparse import SparseInitialPair
 from motronics.gauss.linear.storage_border import storage_border_rows
 
@@ -57,12 +57,11 @@ def algebraic_bulk_initial_pair(
     column_norms = np.linalg.norm(matrix, axis=0)
     column_norms[column_norms == 0] = 1
     equilibrated = matrix / column_norms
-    free_scaled = null_space(equilibrated)
+    answer_scaled, free_scaled = border_affine_space(equilibrated, rhs)
     rank_bar = np.finfo(float).eps * max(matrix.shape) * 16
-    if np.any(np.linalg.norm(free_scaled[:m], axis=1) > rank_bar):
+    if np.any(free_scaled[:m] != 0):
         msg = 'actual border initial state requires additional physical authority'
         raise ValueError(msg)
-    answer_scaled, *_ = np.linalg.lstsq(equilibrated, rhs, rcond=None)
     answer = answer_scaled / column_norms
     free = free_scaled / column_norms[:, None]
     defect = matrix @ answer - rhs
@@ -73,7 +72,7 @@ def algebraic_bulk_initial_pair(
     state = initial + np.concatenate((-residual_bulk - sensitivity @ answer[:m], answer[:m]))
     rate = np.concatenate((-partial_bulk - sensitivity @ answer[m:], answer[m:]))
     rate_free = free[m:]
-    border_unique = np.linalg.norm(free_scaled[m:], axis=1) <= rank_bar
+    border_unique = np.all(free_scaled[m:] == 0, axis=1)
     bulk_free = sensitivity @ rate_free
     bulk_scale = np.abs(sensitivity) @ np.abs(rate_free)
     bulk_unique = np.all(np.abs(bulk_free) <= rank_bar * bulk_scale, axis=1)
