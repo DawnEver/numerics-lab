@@ -12,7 +12,7 @@ fixed bar on the relative residual is a disguised CONDITION test -- see
 ``test_the_direct_guard_separates_ill_conditioning_from_failure.py``. Nothing in THIS file changes:
 every system it plants is refused or accepted for the same reason it always was.)
 
-    motronics run cases/field/inductor/lipo_inductor --select fea,tri --mesh-size 6mm
+    motronics case run cases/field/inductor/lipo_inductor --select fea,tri --mesh-size 6mm
     -> failed: direct solve residual ||A x - b|| / ||b|| = 1.608e+01 exceeds 1e-06
 
 So "SuperLU ships finite garbage and the production Python path ships it" is WITHDRAWN as a claim

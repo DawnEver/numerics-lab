@@ -1,8 +1,4 @@
-"""ONE implicit step: the Newton solve with its held factor, the stall rule and the gmin continuation.
-
-Split out of the package `__init__` on 2026-09-29, which keeps `integrate_transient` -- the march
-this step is the unit of.
-"""
+"""One implicit-step Newton solve, factor holding, continuation and line searches."""
 
 from __future__ import annotations
 
@@ -14,22 +10,26 @@ import scipy.sparse as sp
 from numpy.typing import NDArray
 
 from motronics.contracts.spec.analysis_formulation import (
+    AffineConstraintProjectionProblem,
     AlternativeJacobianProblem,
     DerivativeWeights,
     FactorReusableProblem,
     HistoryProblem,
     ResidualFloorProblem,
     SemiDiscreteProblem,
+    StepEvaluationProblem,
 )
 from motronics.gauss.linear import reject_nonfinite_solution
 from motronics.gauss.time_integrators._forms import IntegratorState, StepForm, residual_floor
 from motronics.gauss.time_integrators.factor_reuse import FactorCache, apply_factor, factor_matrix
+from motronics.gauss.time_integrators.local_convergence import LocalIterationCheck
 
 __all__ = [
     'HELD_STALL_RATIO',
     'HeldFactor',
     'ProblemCapabilities',
     'StepOutcome',
+    'directional_line_search',
     'take_step',
 ]
 
@@ -88,7 +88,6 @@ def _roundoff_floor(problem, tangent, u: NDArray[np.floating], form, capabilitie
 #: jump 8-260, drop 0.004) trips twice consecutively (the creep + the jump) -- 0.9
 #: separates them; a monotone creep (0.968 per iteration, MANUAL-627 (d)) also trips.
 _STALL_RATIO = 0.9
-
 
 #: A held (modified-Newton) factor is refreshed when its last step contracted the residual by less
 #: than this -- the same bar the stationary ``newton-held-factor`` uses (``stall_ratio``).
@@ -174,12 +173,16 @@ def _gmin_continue(
     t = form.t_eval
     u = np.asarray(guess, dtype=float).copy()
     tangent = None  # the last tangent built here, for the exhaustion floor below
+    local = LocalIterationCheck(problem, tol_rel)
     for gmin in gmin_stages:
         for _it in range(max(2, max_newton)):
             u_arg, u_dot, u_ddot = form.u_arg(u), form.u_dot(u), form.u_ddot(u)
             r = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
             residual = float(np.linalg.norm(r))
-            if residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0):
+            initial = local.previous is None
+            stable = local.observe(u, t)
+            local_ok = local.accepts(stable, residual, initial=initial)
+            if local_ok and (residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0)):
                 return u, True, residual, False
             jac = problem.jacobian(u_arg, u_dot, u_ddot, t, form.weights)
             tangent = jac
@@ -192,9 +195,10 @@ def _gmin_continue(
     u_arg, u_dot, u_ddot = form.u_arg(u), form.u_dot(u), form.u_ddot(u)
     r = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
     residual = float(np.linalg.norm(r))
-    if residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0):
+    local_ok = local.observe(u, t)
+    if local_ok and (residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0)):
         return u, True, residual, False
-    if tangent is not None and residual <= residual_floor(tangent, u):
+    if local_ok and tangent is not None and residual <= residual_floor(tangent, u):
         return u, True, residual, True
     return u, False, residual, False
 
@@ -303,6 +307,13 @@ def _solve_step(
     arithmetic with nothing for a caller to read -- the shape ``taste.md`` forbids. The flag
     rides out to :attr:`TransientSolution.floor_converged_times`.
     """
+    if isinstance(problem, StepEvaluationProblem):
+        # The endpoint owner's problem is a different object: its protocols are its own.
+        problem = problem.step_problem(form.t_eval)
+        if not isinstance(problem, SemiDiscreteProblem):
+            msg = 'step endpoint owner must return a semi-discrete problem'
+            raise TypeError(msg)
+        capabilities = None
     if capabilities is None:
         capabilities = ProblemCapabilities.resolve(problem)
     reusable = factor_cache is not None and capabilities.factor_reusable
@@ -322,7 +333,23 @@ def _solve_step(
         else (alternative.jacobian_tangent if alternative is not None else None)
     )
     tangent_helpful = jacobian_tangent is not None or (alternative is not None and alternative.has_tangent_jacobian)
-    u = np.asarray(guess, dtype=float).copy()
+
+    def project_trial(value):
+        value = np.asarray(value, dtype=float)
+        if not isinstance(problem, AffineConstraintProjectionProblem):
+            return value
+        alpha = form.weights.alpha0
+        if alpha.imag != 0 or alpha.real == 0:
+            msg = 'affine state constraint projection requires a nonzero real state weight'
+            raise ValueError(msg)
+        argument = form.u_arg(value)
+        projected = np.asarray(problem.project_affine_state(argument.copy(), form.t_eval))
+        if projected.shape != argument.shape or not np.isrealobj(projected) or not np.isfinite(projected).all():
+            msg = 'affine constraint owner must return a same-shape finite real trial state'
+            raise ValueError(msg)
+        return value + (projected - argument) / alpha.real
+
+    u = project_trial(np.asarray(guess, dtype=float).copy())
     t = form.t_eval
     converged = False
     on_floor = False
@@ -340,11 +367,14 @@ def _solve_step(
     # HIT no matrix is built, so the cache's own -- valid by its contract that equal keys imply an
     # equal jacobian -- stands in, and a hit still never pays a build.
     tangent = None
+    local = LocalIterationCheck(problem, tol_rel)
     for _it in range(1, max_newton + 1):
         iterations = _it
         u_arg, u_dot, u_ddot = form.u_arg(u), form.u_dot(u), form.u_ddot(u)
         r = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
         residual = float(np.linalg.norm(r))
+        stable = local.observe(u, t)
+        local_ok = local.accepts(stable, residual, initial=_it == 1)
         if _it == 1:
             residual_0 = residual
         # The RELATIVE contract (MANUAL-628): the absolute tol is scale-blind -- a
@@ -353,7 +383,7 @@ def _solve_step(
         # The opt-in ``tol_rel`` accepts a step whose residual dropped below
         # ``tol_rel * r0`` (r0 = the first iteration's norm). Off by default: every
         # existing march keeps the absolute contract unchanged.
-        if residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0):
+        if local_ok and (residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0)):
             converged = True
             break
         # The STALL-POLISH (MANUAL-627 (i)): the fixed jacobian (the switch's chord i/v)
@@ -375,7 +405,11 @@ def _solve_step(
             # monotonically, so no stall ratio can be relied on to see it). It is the same floor
             # verdict the exhaustion branch below gives, reached before the ceiling instead of at
             # it (measured on ipm_uv's chopper: 50 iterations, ~30 s a step, at |r| ~ 4e-9).
-            if (floor := _roundoff_floor(problem, tangent, u, form, capabilities)) is not None and residual <= floor:
+            if (
+                local_ok
+                and (floor := _roundoff_floor(problem, tangent, u, form, capabilities)) is not None
+                and residual <= floor
+            ):
                 converged = True
                 on_floor = True
                 break
@@ -418,7 +452,7 @@ def _solve_step(
         elif max_newton > 1 and backtrack_cap > 0:
             raised = False
             for _ in range(backtrack_cap):
-                u_try = u + step
+                u_try = project_trial(u + step)
                 u_arg, u_dot, u_ddot = form.u_arg(u_try), form.u_dot(u_try), form.u_ddot(u_try)
                 r_try = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
                 limit = residual if backtrack_band is None else backtrack_band * residual
@@ -429,7 +463,7 @@ def _solve_step(
                     break
                 step = 0.5 * step
             else:
-                u = u + step
+                u = project_trial(u + step)
                 capped = True
             if tangent_active and (capped or raised):
                 # THE POLISH IS A TRIAL, NOT A ONE-WAY SWITCH: an alternative operator whose step
@@ -442,7 +476,7 @@ def _solve_step(
                 # t = 4.44 ms step 158 -> 445 over 100 iterations; withheld, it converged in 12.
                 tangent_active, polish_spent, slow = False, True, 0
         else:
-            u = u + step
+            u = project_trial(u + step)
     else:
         # The ceiling exhausted: re-evaluate the residual at the FINAL u (the last solve's
         # result). The loop's last check read the PRE-solve guess -- reporting that would
@@ -450,9 +484,14 @@ def _solve_step(
         u_arg, u_dot, u_ddot = form.u_arg(u), form.u_dot(u), form.u_ddot(u)
         r = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
         residual = float(np.linalg.norm(r))
-        if residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0):
+        local_ok = local.observe(u, t)
+        if local_ok and (residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0)):
             converged = True
-        elif (floor := _roundoff_floor(problem, tangent, u, form, capabilities)) is not None and residual <= floor:
+        elif (
+            local_ok
+            and (floor := _roundoff_floor(problem, tangent, u, form, capabilities)) is not None
+            and residual <= floor
+        ):
             on_floor = True
             # THE ARITHMETIC FLOOR, and the reason an exactly-solved LINEAR step no longer lies.
             # ``tol`` is ABSOLUTE on a residual whose scale is the supply, so the same one-Newton

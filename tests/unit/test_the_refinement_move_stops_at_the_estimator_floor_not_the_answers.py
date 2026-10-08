@@ -12,7 +12,7 @@ precision it carries an error of order ``eps * ||A|| ||x||``, so the move cannot
 1e-6 bar, and every solve above it was refused as "singular / rank-deficient" while holding an
 answer good to six digits.
 
-FOUND 2026-09-16 on `spm_ferrari_luce_rear --scope full --chart cartesian_3d --select fea,tet` at
+FOUND 2026-09-16 on `spm_ferrari_luce_rear --scope full --set solve.chart=cartesian_3d --select fea,tet` at
 3.0 mm: an n=207104 H(curl) magnetostatic solve refused at refinement = **1.635e-06**, i.e. 1.6x
 the bar -- against the committed singular plant's 4.7 and the well-posed sweep's 1e-13. A system
 that is genuinely rank-deficient does not land at 1.6x. The repair had run its four steps and the
@@ -48,7 +48,7 @@ from motronics.gauss.linear import (
 # is the low end of the band a ceiling may occupy here: above `PER_TEST_TIMEOUT_S['measure']` = 300,
 # so it grants MORE than an ordinary run rather than becoming the only thing that can kill its
 # worker under `timeout_method = "thread"`, and below `HEAVY_PER_TEST_TIMEOUT_S` = 3000.
-# THE READING WAS TAKEN CONTENDED (another agent held the box with a 3-D `motronics run`), which is
+# THE READING WAS TAKEN CONTENDED (another agent held the box with a 3-D `motronics case run`), which is
 # stated because a busy-box timing is not a property of the file. It can only INFLATE the number,
 # and the claim made from it -- that 600 s is three orders above the work -- only strengthens.
 pytestmark = pytest.mark.timeout(600)

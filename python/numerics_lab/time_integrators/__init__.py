@@ -29,7 +29,14 @@ mesh, no material, no solver.
 
 from __future__ import annotations
 
-from motronics.gauss.time_integrators._forms import IntegratorState, StepForm, TransientSolution
+from motronics.gauss.time_integrators._forms import (
+    IntegratorState,
+    ITimeIntegrator,
+    StepForm,
+    TransientSolution,
+    residual_floor,
+    residual_floor_of_magnitude,
+)
 from motronics.gauss.time_integrators._integrators import (
     INTEGRATOR_REGISTRY,
     BDF1Integrator,
@@ -40,10 +47,11 @@ from motronics.gauss.time_integrators._integrators import (
     TRBDF2Integrator,
     get_integrator,
 )
-from motronics.gauss.time_integrators._step import HeldFactor, directional_line_search
+from motronics.gauss.time_integrators._step import HELD_STALL_RATIO, HeldFactor, _solve_step, directional_line_search
 from motronics.gauss.time_integrators.factor_reuse import FactorCache
 from motronics.gauss.time_integrators.march import (
     BudgetExceeded,
+    EventSurface,
     RunBudget,
     StepNotConverged,
     StepTolerance,
@@ -60,14 +68,17 @@ from motronics.gauss.time_integrators.multirate import (
 )
 
 __all__ = [
+    'HELD_STALL_RATIO',
     'INTEGRATOR_REGISTRY',
     'BDF1Integrator',
     'BDF2Integrator',
     'BudgetExceeded',
+    'EventSurface',
     'FactorCache',
     'GeneralizedAlphaIntegrator',
     'HeldFactor',
     'Hold',
+    'ITimeIntegrator',
     'IntegratorState',
     'NewmarkIntegrator',
     'RateTransition',
@@ -80,10 +91,13 @@ __all__ = [
     'TRBDF2Integrator',
     'TransientSolution',
     'TrapezoidIntegrator',
+    '_solve_step',
     'base_sample_time',
     'directional_line_search',
     'get_integrator',
     'integrate_sampled',
     'integrate_transient',
+    'residual_floor',
+    'residual_floor_of_magnitude',
     'sample_hits',
 ]

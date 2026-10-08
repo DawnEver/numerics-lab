@@ -1,8 +1,7 @@
-"""The time-integration CONTRACT: the state, the step form, the integrator protocol, the transient
-solution, and the round-off floor a residual is judged against.
+"""Integrator state, affine step forms, trajectories and arithmetic-floor algebra.
 
-Split out of the package `__init__` on 2026-09-29, as the leaf the integrators and the step solve
-are both built on.
+No imports from the package facade: both the concrete integrators and the march
+consume this leaf, so importing a concrete scheme never creates a cycle.
 """
 
 from __future__ import annotations
@@ -14,9 +13,9 @@ import numpy as np
 import scipy.sparse as sp
 from numpy.typing import NDArray
 
-from motronics.contracts.spec.analysis_formulation import (
-    DerivativeWeights,
-)
+from motronics.contracts.spec.analysis_formulation import DerivativeWeights
+from motronics.gauss.linear import solve_linear_system
+from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint
 
 __all__ = [
     'ITimeIntegrator',
@@ -26,6 +25,7 @@ __all__ = [
     'residual_floor',
     'residual_floor_of_magnitude',
     'same_instant',
+    'seeded_bdf2_state',
 ]
 
 
@@ -36,7 +36,6 @@ __all__ = [
 #: and still sits ORDERS below any residual a stalled-but-wrong Newton shows -- measured
 #: 2026-09-12 at 1e8x on the planted stall, against a 64x allowance.
 _FLOOR_SAFETY = 64.0
-
 
 #: The machine epsilon the floor is written in (double precision -- the marcher is ``float64``).
 _EPS = float(np.finfo(float).eps)
@@ -208,6 +207,10 @@ class ITimeIntegrator(Protocol):
         ...
 
 
+#: THE CONCRETE INTEGRATORS AND THEIR REGISTRY live in `_integrators.py`, split 2026-08-22
+#: because this file crossed the 800-line band. It imports :class:`IntegratorState`,
+#: :class:`ITimeIntegrator` and :class:`StepForm` FROM THIS MODULE (a circular import that works
+#: because they are defined above this import); the public API is unchanged.
 @dataclass
 class TransientSolution:
     """The time march: parallel ``times`` and ``states`` including the initial condition.
@@ -260,6 +263,32 @@ class TransientSolution:
     #: Owned final integration state: segmented marches preserve continuous velocity/acceleration
     #: while restarting derivative history at a sampled-input discontinuity.
     final_integrator_state: IntegratorState | None = None
+    checkpoint: TransientCheckpoint | None = None
+    corrected_times: list[float] = field(default_factory=list)
+    #: Actual runtime coarse correction model; absent when correction is not enabled.
+    correction_model: str | None = None
+    #: Accepted steps whose predictor-curvature indicator exceeded its requested bar.
+    #: Independent of Newton convergence; a minimum step can force their acceptance.
+    indicator_unmet_times: list[float] = field(default_factory=list)
+    #: Discontinuities dispatched only at accepted fixed-lattice states, not located probes.
+    landed_events: list[tuple[int, float]] = field(default_factory=list)
+    #: Genuine accepted observer law changes that restarted derivative history, not located event IDs.
+    accepted_discontinuities: list[float] = field(default_factory=list)
+
+    @property
+    def history_restarts(self) -> tuple[float, ...]:
+        """Actual derivative-history restart times: accepted law changes, landed and located events."""
+        return tuple(
+            sorted(
+                set(self.accepted_discontinuities)
+                | {time for _index, time in self.landed_events}
+                | {time for _index, time in self.events}
+            )
+        )
+
+    @property
+    def indicator_satisfied(self) -> bool:
+        return not self.indicator_unmet_times
 
     @property
     def converged(self) -> bool:
@@ -276,3 +305,31 @@ class TransientSolution:
         the tag to read when deciding whether ``max_newton`` is set high enough.
         """
         return self.converged and not self.floor_converged_times
+
+
+def _default_solve(matrix: object, rhs: NDArray[np.floating]) -> NDArray[np.floating]:
+    """Solve ``matrix @ x = rhs`` for a dense ndarray or a scipy-sparse jacobian (physics-blind)."""
+    b = np.asarray(rhs, dtype=float)
+    if sp.issparse(matrix):
+        return np.asarray(solve_linear_system(sp.csc_matrix(matrix), b))
+    m = np.asarray(matrix, dtype=float)
+    if m.ndim == 0:  # scalar jacobian (1-DOF problem written as a plain number)
+        return b / float(m)
+    return np.linalg.solve(m, b)
+
+
+def seeded_bdf2_state(state, history, integrator, restart, dt):
+    """Validate a fixed-step two-state seed with history times t0-dt and t0."""
+    arrays = tuple(np.asarray(value, dtype=float) for value in history)
+    if (
+        integrator.name != 'bdf2'
+        or restart is not None
+        or len(arrays) != 2
+        or any(value.shape != state.last_u.shape or not np.all(np.isfinite(value)) for value in arrays)
+        or not np.array_equal(arrays[-1], state.last_u)
+        or not np.isfinite(dt)
+        or dt <= 0
+    ):
+        msg = 'initial_history requires exactly two finite BDF2 states ending at u0 without restart'
+        raise ValueError(msg)
+    return IntegratorState(us=[value.copy() for value in arrays], t=state.t, h=float(dt))

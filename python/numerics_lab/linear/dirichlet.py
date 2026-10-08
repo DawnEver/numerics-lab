@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.sparse import csr_matrix
+from scipy.sparse import csr_matrix, diags
 
 __all__ = ['apply_dirichlet_csr', 'apply_dirichlet_triplets', 'lift_dirichlet_rhs']
 
@@ -42,19 +42,15 @@ def apply_dirichlet_csr(
         return matrix, rhs
     lifted = lift_dirichlet_rhs(matrix, rhs, pinned, values)
 
-    rows = matrix.tolil()
-    for dof in pinned:
-        rows.rows[dof] = [int(dof)]
-        rows.data[dof] = [1.0]
-    constrained = rows.tocsr()
-    assert constrained.shape is not None
-
-    mask = np.ones(constrained.shape[0], dtype=float)
-    mask[pinned] = 0.0
-    constrained = constrained.multiply(csr_matrix(mask[None, :])).tolil()
-    for dof in pinned:
-        constrained[dof, dof] = 1.0
-    return constrained.tocsr(), lifted
+    # D A D + (I - D), D = diag(free mask): pinned rows and columns cleared, unit diagonal. Free
+    # entries are multiplied by exactly 1.0. Sparse products, not a per-dof LIL edit (ruling 30).
+    free = np.ones(matrix.shape[0], dtype=float)
+    free[pinned] = 0.0
+    keep = diags(free, format='csr')
+    constrained = (keep @ csr_matrix(matrix) @ keep + diags(1.0 - free, format='csr')).tocsr()
+    constrained.eliminate_zeros()
+    constrained.sort_indices()
+    return constrained, lifted
 
 
 def lift_dirichlet_rhs(

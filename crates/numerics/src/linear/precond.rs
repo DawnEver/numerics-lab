@@ -21,6 +21,7 @@
 //! a count that does not match.
 
 use contracts::sparse::{Csr, SparseError};
+use std::collections::BTreeMap;
 
 /// SSOR relaxation factor.
 ///
@@ -32,7 +33,7 @@ use contracts::sparse::{Csr, SparseError};
 pub const SSOR_OMEGA: f64 = 1.0;
 
 /// The registry's spellings, in one place so the resolver and its error cannot drift.
-pub const KNOWN_PRECONDITIONERS: [&str; 3] = ["ilu", "jacobi", "ssor"];
+pub const KNOWN_PRECONDITIONERS: [&str; 4] = ["ic0", "ilu", "jacobi", "ssor"];
 
 /// Every way building a preconditioner can refuse.
 #[derive(Debug, Clone, PartialEq)]
@@ -41,6 +42,8 @@ pub enum PreconditionerError {
     Unknown { name: String },
     /// The matrix could not be read as the preconditioner needs it.
     Sparse(SparseError),
+    /// IC0 requires symmetry and positive finite pivots; no diagonal shift is substituted.
+    InvalidIc0 { row: usize },
 }
 
 impl std::fmt::Display for PreconditionerError {
@@ -51,6 +54,10 @@ impl std::fmt::Display for PreconditionerError {
                 "unknown preconditioner {name:?}; known: {KNOWN_PRECONDITIONERS:?}"
             ),
             Self::Sparse(e) => write!(f, "preconditioner cannot read the matrix: {e}"),
+            Self::InvalidIc0 { row } => write!(
+                f,
+                "IC0 requires symmetry and a positive finite pivot at row {row}"
+            ),
         }
     }
 }
@@ -66,6 +73,8 @@ impl From<SparseError> for PreconditionerError {
 /// A built preconditioner, owning whatever factors it needs.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Preconditioner {
+    /// Zero-fill incomplete Cholesky, applied as two triangular substitutions.
+    Ic0 { lower: Triangular },
     /// `M = diag(A)^{-1}` — the cheapest useful one, and a NO-OP on a constant diagonal.
     Jacobi {
         /// Reciprocal diagonal, with a zero entry left as 1.
@@ -157,12 +166,87 @@ impl Preconditioner {
     pub fn build(name: &str, matrix: &Csr) -> Result<Self, PreconditionerError> {
         match name {
             "jacobi" => Ok(Self::jacobi(matrix)?),
+            "ic0" => Self::ic0(matrix),
             "ilu" => Ok(Self::ilu0(matrix)?),
             "ssor" => Ok(Self::ssor(matrix, SSOR_OMEGA)?),
             _ => Err(PreconditionerError::Unknown {
                 name: name.to_owned(),
             }),
         }
+    }
+
+    /// Zero-fill Cholesky with pairwise relative roundoff-only symmetry tolerance.
+    pub fn ic0(matrix: &Csr) -> Result<Self, PreconditionerError> {
+        let (n, cols) = matrix.shape();
+        if n != cols {
+            return Err(SparseError::NotSquare {
+                n_rows: n,
+                n_cols: cols,
+            }
+            .into());
+        }
+        let mut rows: Vec<BTreeMap<usize, f64>> = Vec::with_capacity(n);
+        for i in 0..n {
+            let mut row = BTreeMap::new();
+            for p in matrix.indptr()[i] as usize..matrix.indptr()[i + 1] as usize {
+                let j = matrix.indices()[p] as usize;
+                let value = matrix.values()[p];
+                let lo = matrix.indptr()[j] as usize;
+                let hi = matrix.indptr()[j + 1] as usize;
+                let mirror = matrix.indices()[lo..hi]
+                    .binary_search(&(i as u32))
+                    .map_or(0.0, |k| matrix.values()[lo + k]);
+                let scale = value.abs().max(mirror.abs());
+                if !value.is_finite()
+                    || !mirror.is_finite()
+                    || (value - mirror).abs() > 64.0 * f64::EPSILON * scale
+                {
+                    return Err(PreconditionerError::InvalidIc0 { row: i });
+                }
+                if j < i && value != 0.0 {
+                    let sum: f64 = row
+                        .iter()
+                        .filter(|(k, _)| **k < j)
+                        .map(|(k, v)| v * rows[j].get(k).unwrap_or(&0.0))
+                        .sum();
+                    row.insert(j, (0.5 * (value + mirror) - sum) / rows[j][&j]);
+                } else if j == i {
+                    row.insert(i, value);
+                }
+            }
+            let pivot = row.get(&i).copied().unwrap_or(0.0)
+                - row
+                    .iter()
+                    .filter(|(j, _)| **j < i)
+                    .map(|(_, v)| v * v)
+                    .sum::<f64>();
+            if !pivot.is_finite() || pivot <= 0.0 {
+                return Err(PreconditionerError::InvalidIc0 { row: i });
+            }
+            row.insert(i, pivot.sqrt());
+            rows.push(row);
+        }
+        let mut indptr = vec![0];
+        let mut cols = Vec::new();
+        let mut vals = Vec::new();
+        let mut diag = Vec::with_capacity(n);
+        for (i, row) in rows.iter().enumerate() {
+            diag.push(row[&i]);
+            for (&j, &value) in row.range(..i) {
+                cols.push(j as u32);
+                vals.push(value);
+            }
+            indptr.push(cols.len() as u32);
+        }
+        Ok(Self::Ic0 {
+            lower: Triangular {
+                indptr,
+                cols,
+                vals,
+                diag,
+                lower: true,
+            },
+        })
     }
 
     /// `M ~ diag(A)^{-1}`. A zero diagonal entry is left as 1 so `M` stays finite — a pinned
@@ -291,6 +375,7 @@ impl Preconditioner {
     #[must_use]
     pub fn apply(&self, v: &[f64]) -> Vec<f64> {
         match self {
+            Self::Ic0 { lower } => lower.solve_transpose(&lower.solve(v)),
             Self::Jacobi { inv_diag } => inv_diag.iter().zip(v).map(|(d, x)| d * x).collect(),
             Self::Ilu0 { lower, upper } => upper.solve(&lower.solve(v)),
             Self::Ssor {
@@ -311,7 +396,7 @@ impl Preconditioner {
     #[must_use]
     pub fn apply_transpose(&self, v: &[f64]) -> Vec<f64> {
         match self {
-            Self::Jacobi { .. } | Self::Ssor { .. } => self.apply(v),
+            Self::Jacobi { .. } | Self::Ssor { .. } | Self::Ic0 { .. } => self.apply(v),
             Self::Ilu0 { lower, upper } => lower.solve_transpose(&upper.solve_transpose(v)),
         }
     }

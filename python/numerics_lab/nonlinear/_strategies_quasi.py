@@ -29,6 +29,25 @@ __all__ = [
 ]
 
 
+def _two_loop(system, state, r, pairs):
+    """H r by the L-BFGS two-loop recursion over the stored secant pairs; H0 r = one secant solve.
+
+    ONE body for BFGS and L-BFGS: they differ only in how many pairs they keep, so the recursion
+    that applies them is the same and a fix to it must reach both.
+    """
+    q = r.copy()
+    alphas = []
+    for s_vec, y_vec, rho in reversed(pairs):
+        a = rho * float(s_vec @ q)
+        q = q - a * y_vec
+        alphas.append(a)
+    z = require_secant_system(system).solve_secant(state, q)  # H0 z = q
+    for (s_vec, y_vec, rho), a in zip(pairs, reversed(alphas), strict=True):
+        b = rho * float(y_vec @ z)
+        z = z + (a - b) * s_vec
+    return z
+
+
 class AndersonStrategy:
     """Anderson acceleration of the Picard fixed-point map (roadmap sec 1).
 
@@ -222,7 +241,7 @@ class BFGSStrategy:
                     pairs.append((prev_dx.copy(), y, 1.0 / ys))
                     if len(pairs) > self.m:
                         pairs.pop(0)
-            dx = -_two_loop_inverse(system, state, r, pairs)
+            dx = -_two_loop(system, state, r, pairs)
             x = x + dx
             prev_r, prev_dx = r, dx
             increment = increment_ratio(x_prev, x)
@@ -251,22 +270,5 @@ class LBFGSStrategy(BFGSStrategy):
     def __init__(self, m: int = 8) -> None:
         super().__init__(m)  # limited-memory depth (the last m secant pairs)
 
-
-def _two_loop_inverse(system, state, r, pairs):
-    """``H r`` by the L-BFGS two-loop recursion over the stored ``(s, y, rho)`` pairs.
-
-    THE ONE RECURSION both BFGS strategies use: the backward pass accumulates the alphas, ``H0`` is
-    one secant solve of ``system_matrix``, and the forward pass applies the corrections -- the dense
-    BFGS inverse update applied matrix-free, so no dense ``H`` is ever formed.
-    """
-    q = r.copy()
-    alphas = []
-    for s_vec, y_vec, rho in reversed(pairs):
-        a = rho * float(s_vec @ q)
-        q = q - a * y_vec
-        alphas.append(a)
-    z = require_secant_system(system).solve_secant(state, q)  # H0 z = q (one secant solve)
-    for (s_vec, y_vec, rho), a in zip(pairs, reversed(alphas), strict=True):
-        b = rho * float(y_vec @ z)
-        z = z + (a - b) * s_vec
-    return z
+    # `solve` is BFGS's own: the two differ only in `m`, the depth of the history the shared
+    # `_two_loop` recursion is applied over.

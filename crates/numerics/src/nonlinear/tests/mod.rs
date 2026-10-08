@@ -18,6 +18,8 @@ type PicardMap = Box<dyn Fn(&[f64], usize) -> Vec<f64>>;
 /// arithmetic rather than as a linear-algebra exercise. The secant operator is the identity, the
 /// same `H0 = I` the Python fixtures hand the quasi-Newton family.
 struct Synth {
+    local_fields: bool,
+    linear_tolerances: Vec<f64>,
     n: usize,
     x0: Vec<f64>,
     linear: bool,
@@ -41,6 +43,8 @@ impl Synth {
         map: impl Fn(&[f64], usize) -> Vec<f64> + 'static,
     ) -> Self {
         Self {
+            local_fields: false,
+            linear_tolerances: Vec::new(),
             n: x0.len(),
             x0,
             linear: false,
@@ -82,6 +86,25 @@ impl Synth {
 impl NonlinearSystem for Synth {
     type Matrix = Vec<f64>;
     type Payload = Vec<f64>;
+
+    fn local_values(&self, state: &StateOf<Self>) -> Result<LocalFields, NonlinearError> {
+        Ok(if self.local_fields {
+            vec![state
+                .payload
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|&x| vec![x])
+                .collect()]
+        } else {
+            Vec::new()
+        })
+    }
+
+    fn set_linear_tolerance(&mut self, atol: f64) -> Result<(), NonlinearError> {
+        self.linear_tolerances.push(atol);
+        Ok(())
+    }
 
     fn is_linear(&self) -> bool {
         self.linear
@@ -294,4 +317,5 @@ fn the_default_bar_is_newton_rtol_for_a_residual_stop_and_the_fixed_point_one_ot
     }
 }
 
+mod local;
 mod regressions;

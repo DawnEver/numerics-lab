@@ -26,6 +26,7 @@ use std::fmt;
 
 mod budget;
 mod convergence;
+mod local;
 mod newton;
 mod picard;
 mod quasi;
@@ -35,6 +36,7 @@ pub use convergence::{
     energy_error_pct, has_converged, has_converged_residual, increment_ratio, norm, IncrementTrend,
     StagnationWatch, INCREMENT_RISE_STEPS,
 };
+pub use local::{local_change, newton_linear_tolerance, LocalFields};
 pub use newton::{
     ContinuationStrategy, HeldFactorNewtonStrategy, ModifiedNewtonStrategy, NewtonKrylovStrategy,
     NewtonLineSearchStrategy, NewtonStrategy,
@@ -316,6 +318,18 @@ pub trait NonlinearSystem: Sized {
     /// As [`Self::assemble`].
     fn rhs_norm(&mut self, _state: &StateOf<Self>) -> Result<Option<f64>, NonlinearError> {
         Ok(None)
+    }
+
+    /// Independent fields, each storing one component vector per element/DOF.
+    /// Empty means the equation supplies no additional local convergence criterion.
+    fn local_values(&self, _state: &StateOf<Self>) -> Result<LocalFields, NonlinearError> {
+        Ok(Vec::new())
+    }
+
+    /// Absolute inner linear tolerance, scaled to the fixed original RHS reference.
+    /// A direct-only equation may ignore this policy; iterative equations consume it.
+    fn set_linear_tolerance(&mut self, _atol: f64) -> Result<(), NonlinearError> {
+        Ok(())
     }
 
     /// Optional Newton tangent operator; `None` makes a Newton strategy refuse the system.
