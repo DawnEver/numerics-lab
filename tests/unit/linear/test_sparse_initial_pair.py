@@ -8,6 +8,23 @@ from motronics.gauss.linear.initial_sparse import sparse_complete_initial_rate, 
 from motronics.gauss.linear.storage_border import storage_border_rows
 
 
+def test_identical_current_rate_columns_do_not_make_the_physical_state_free():
+    # Stored field and linkage fix the winding current through its dynamic
+    # resistance equation. KCL differentiates only the sum of the two currents.
+    pair = sparse_initial_pair(
+        [[0, 0, -1, 0], [0, 1, 1, 0], [0, 0, 2, 0], [-1, 0, 0, 1]],
+        [0, 0, 0, 0],
+        [[1, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 1], [0, 0, 0, 0]],
+        [0, 0, 0, 0],
+        algebraic_rows=[[0, 1, 0, 0], [0, 0, 0, 1]],
+        stored_rows=[0, 2],
+        partial_time=[0, 0, -6, 0],
+    )
+    assert np.array_equal(pair.state, np.zeros(4))
+    assert np.array_equal(pair.rate_is_unique, [True, False, False, True])
+    assert np.isnan(pair.physical_rate[1:3]).all()
+
+
 def test_an_ideal_source_current_rate_is_not_a_physical_zero_derivative():
     # C v_dot + g v + i_source = 0; v = declared ramp(t).
     # Source current is determined, but its outgoing rate needs ramp''.

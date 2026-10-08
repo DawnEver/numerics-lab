@@ -126,6 +126,22 @@ def sparse_initial_pair(
         msg = 'initial state requires additional physical authority'
         raise ValueError(msg)
     selected = np.flatnonzero(nonzero)
+    # Identical actual rate columns constrain their sum, not either rate.
+    # Remove only this exact sparse dependency; state columns are never
+    # quotiented and no numerical rank cutoff invents physical uniqueness.
+    columns = matrix.tocsc()
+    representatives = {}
+    duplicate_rates = set()
+    omitted = set()
+    for column in selected[selected >= n]:
+        start, stop = columns.indptr[column : column + 2]
+        key = (columns.indices[start:stop].tobytes(), columns.data[start:stop].tobytes())
+        if key in representatives:
+            duplicate_rates.update((column - n, representatives[key] - n))
+            omitted.add(column)
+        else:
+            representatives[key] = column
+    selected = np.asarray([column for column in selected if column not in omitted], dtype=int)
     reduced = matrix[:, selected].tocsr()
     # Storage equations are mandatory, even when their increments are tiny
     # compared with the dynamic RHS. Match them first, then verify that none
@@ -166,7 +182,9 @@ def sparse_initial_pair(
     if np.linalg.norm(storage_defect) > storage_bar:
         msg = 'declared storage rank decomposition does not preserve actual stored state'
         raise ValueError(msg)
-    return SparseInitialPair(initial + pair[:n], pair[n:], nonzero[n:].copy())
+    unique = nonzero[n:].copy()
+    unique[list(duplicate_rates)] = False
+    return SparseInitialPair(initial + pair[:n], pair[n:], unique)
 
 
 def sparse_complete_initial_rate(
