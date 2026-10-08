@@ -140,3 +140,32 @@ def test_law_change_checkpoint_retains_real_step_spacing_and_bootstraps_after_re
         **options,
     )
     assert np.asarray(resumed.states).ravel() == pytest.approx([0.0, 0.3, 0.6])
+
+
+def test_refined_midpoint_observation_invalidates_the_speculative_second_half():
+    class Curved(_Forced):
+        def residual(self, u, u_dot, u_ddot, t):
+            return u_dot - t * t - self.forcing
+
+    problem = Curved()
+    observed = []
+
+    def observe(time, state):
+        assert not state.flags.writeable
+        observed.append(time)
+        if time == pytest.approx(0.1):
+            problem.forcing = 3.0
+            return True
+        return False
+
+    solution = integrate_transient_with_events(
+        problem,
+        TransientStudy(t0=0.0, t1=0.2, dt=0.2, integrator=IntegratorKind.BDF2),
+        np.zeros(1),
+        refine=0.01,
+        on_accept=observe,
+    )
+    assert observed == solution.times
+    assert solution.times == pytest.approx([0.0, 0.1, 0.2])
+    assert np.asarray(solution.states).ravel() == pytest.approx([0.0, 0.001, 0.305])
+    assert solution.accepted_discontinuities == [pytest.approx(0.1)]

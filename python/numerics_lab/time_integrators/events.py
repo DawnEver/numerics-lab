@@ -289,9 +289,6 @@ def integrate_transient_with_events(
     held = HeldFactor(refactor_every) if refactor_every is not None else None
     if factor_cache is None and isinstance(problem, FactorReusableProblem):
         factor_cache = FactorCache()
-    if on_accept is not None and refine is not None:
-        msg = 'accepted observation requires sequential acceptance, not precomputed refinement half-steps'
-        raise ValueError(msg)
     integrator = get_integrator(study.integrator)
     u0 = np.asarray(u0, dtype=float)
     state = integrator.start(u0, study.t0, v0, a0)
@@ -499,6 +496,16 @@ def integrate_transient_with_events(
                                     u_max = float(np.max(np.abs(u_probe))) if u_probe.size else 1.0
                                     scale = max(u_max, 1e-12)
                                     if float(np.max(np.abs(u_half - u_probe))) > refine * scale:
+                                        if on_accept is not None:
+                                            # The midpoint can change the physical law. Commit it
+                                            # with its own derivative state, then re-march: the
+                                            # speculative second half is no longer authoritative.
+                                            state = mid_state
+                                            prev_dt = h2
+                                            _commit(t_mid, u_mid, mid_rate)
+                                            g_prev = [float(g(u_mid, t_mid)) for g in event_fns]
+                                            pending_dt = t_target - state.t
+                                            continue
                                         # Accept the two half-steps instead of the full step.
                                         state = half_state
                                         prev_dt = h2
