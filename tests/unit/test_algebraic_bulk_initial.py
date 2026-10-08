@@ -76,6 +76,20 @@ def test_shared_rank_one_storage_preserves_state_and_marks_only_free_branch_rate
             tolerance=1e-10,
             fixed_state=True,
         )
+    impossible_partial = np.zeros(5)
+    impossible_partial[4] = 0.001
+    with pytest.raises(ValueError, match='contradicts'):
+        algebraic_bulk_initial_pair(
+            jacobian,
+            np.zeros(5),
+            mass,
+            initial,
+            bulk_size=1,
+            partial_time=impossible_partial,
+            stored_increment=np.zeros(2),
+            tolerance=1e-10,
+            fixed_state=True,
+        )
     inconsistent = np.array([0.01, 0.0])
     with pytest.raises(ValueError, match='contradicts'):
         algebraic_bulk_initial_pair(
