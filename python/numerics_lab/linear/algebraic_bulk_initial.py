@@ -78,9 +78,23 @@ def algebraic_bulk_initial_pair(
         np.zeros(m) if fixed_state else change,
         -algebraic @ reduced_partial,
     ))
+    evaluation_scale = np.zeros(len(rhs))
+    if fixed_state:
+        # The admitted state can retain one ULP of dynamic residual after
+        # subtracting real physical terms. Its evaluation uncertainty is not
+        # the magnitude of that cancellation residual itself. Derived rate
+        # constraints and exact state/storage anchors receive NO such bound.
+        evaluation_scale[: len(selected)] = (np.abs(jacobian) @ np.abs(initial) + np.abs(residual))[k:][selected]
+        order = np.concatenate((
+            np.arange(len(selected), len(selected) + m),
+            np.arange(len(selected) + m, len(rhs)),
+            np.arange(len(selected)),
+        ))
+        matrix, rhs, evaluation_scale = matrix[order], rhs[order], evaluation_scale[order]
     norms = np.linalg.norm(matrix, axis=1)
     norms[norms == 0] = 1
     matrix, rhs = matrix / norms[:, None], rhs / norms
+    evaluation_scale /= norms
     # Rates and stored coordinates need not share units or magnitude. Rank
     # revelation uses dimensionless columns; otherwise a real small inductance
     # makes an algebraic rate column appear numerically absent.
@@ -90,7 +104,7 @@ def algebraic_bulk_initial_pair(
     answer_scaled, free_scaled = border_affine_space(
         equilibrated,
         rhs,
-        mandatory_rows=np.arange(len(selected), len(selected) + m) if fixed_state else np.arange(m, m + len(selected)),
+        mandatory_rows=np.arange(m) if fixed_state else np.arange(m, m + len(selected)),
     )
     rank_bar = np.finfo(float).eps * max(matrix.shape) * 16
     if np.any(free_scaled[:m] != 0):
@@ -99,7 +113,7 @@ def algebraic_bulk_initial_pair(
     answer = answer_scaled / column_norms
     free = free_scaled / column_norms[:, None]
     defect = matrix @ answer - rhs
-    scale = np.abs(matrix) @ np.abs(answer) + np.abs(rhs)
+    scale = np.abs(matrix) @ np.abs(answer) + np.abs(rhs) + evaluation_scale
     if np.any(np.abs(defect) > tolerance * scale):
         msg = 'actual border stored state contradicts its state/rate equations'
         raise ValueError(msg)
