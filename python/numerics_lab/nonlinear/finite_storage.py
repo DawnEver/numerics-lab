@@ -173,6 +173,14 @@ def finite_storage_initial_pair(
             np.linalg.norm(residual_defect) <= tolerance * state_scale
             and np.linalg.norm(actual - target) <= tolerance * storage_scale
         )
+        # Algebraic rows cannot subsequently be repaired by a rate correction.
+        # Do not let an unrelated large circuit coordinate hide their state
+        # constraint error, especially when the stored linkage is near zero.
+        zero_mass_rows = np.asarray(actual_mass.getnnz(axis=1)).ravel() == 0
+        equation_scale = np.asarray(abs(actual_jacobian) @ abs(state)).ravel() + abs(residual_defect)
+        state_admitted = state_admitted and np.all(
+            abs(residual_defect[zero_mass_rows]) <= tolerance * equation_scale[zero_mass_rows]
+        )
         if state_admitted and algebraic_bulk_size is not None:
             # Re-evaluate the true constitutive tangent at the now-admitted
             # finite-Q state, not at the preceding Newton loading iterate.
