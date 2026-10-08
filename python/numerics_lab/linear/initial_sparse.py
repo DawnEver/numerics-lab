@@ -162,7 +162,14 @@ def sparse_initial_pair(
         msg = 'initial state/rate equations lack a nonsingular sparse physical constraint subsystem'
         raise ValueError(msg) from error
     pair = np.zeros(2 * n)
-    pair[selected] = factor.solve(rhs[matched_rows])
+    subsystem = reduced[matched_rows]
+    answer = factor.solve(rhs[matched_rows])
+    # Sparse pivoting mixes a large dynamic RHS with exact stored-coordinate
+    # anchors. Refine the actual selected equations before judging those
+    # anchors; a tiny spurious state correction is not a physical Q change.
+    for _ in range(3):
+        answer += factor.solve(rhs[matched_rows] - subsystem @ answer)
+    pair[selected] = answer
     bar = tolerance * (np.linalg.norm(matrix.data) * np.linalg.norm(pair) + np.linalg.norm(rhs))
     if np.linalg.norm(matrix @ pair - rhs) > bar:
         msg = 'stored initial state contradicts actual state/rate constraints'
