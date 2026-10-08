@@ -227,6 +227,13 @@ class TransientSolution:
     indicator_unmet_times: list[float] = field(default_factory=list)
     #: Discontinuities dispatched only at accepted fixed-lattice states, not located probes.
     landed_events: list[tuple[int, float]] = field(default_factory=list)
+    #: Genuine accepted observer law changes that restarted derivative history, not located event IDs.
+    accepted_discontinuities: list[float] = field(default_factory=list)
+
+    @property
+    def history_restarts(self) -> tuple[float, ...]:
+        """Actual derivative-history restart times, without fabricating located event identifiers."""
+        return tuple(sorted(set(self.accepted_discontinuities) | {time for _index, time in self.landed_events}))
 
     @property
     def indicator_satisfied(self) -> bool:

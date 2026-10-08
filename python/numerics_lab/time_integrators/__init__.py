@@ -576,6 +576,7 @@ def integrate_transient(
                 state = integrator.start(u_new, t_new, state.v, state.a)
                 previous_dt = None
         if on_accept is not None and accepted_observation(on_accept, t_new, u_new):
+            solution.accepted_discontinuities.append(t_new)
             state = integrator.start(u_new, t_new, state.v, state.a)
             previous_dt = None
         if eec_nonlinear_first_order:

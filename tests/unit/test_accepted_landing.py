@@ -100,3 +100,4 @@ def test_accepted_law_change_restarts_its_actual_history(eventful):
         on_accept=observe,
     )
     assert np.asarray(solution.states).ravel() == pytest.approx([0.0, 0.0, 0.0, 0.3, 0.6])
+    assert solution.accepted_discontinuities == [pytest.approx(0.2)]

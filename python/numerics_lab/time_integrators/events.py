@@ -97,6 +97,10 @@ class EventfulTransientSolution(TransientSolution):
 
     events: list[tuple[int, float]] = field(default_factory=list)
 
+    @property
+    def history_restarts(self) -> tuple[float, ...]:
+        return tuple(sorted(set(super().history_restarts) | {time for _index, time in self.events}))
+
 
 @dataclass
 class _Checkpoint:
@@ -384,6 +388,7 @@ def integrate_transient_with_events(
         assert solution.state_rates is not None
         solution.state_rates.append(rate)
         if observe and on_accept is not None and accepted_observation(on_accept, t_new, u_new):
+            solution.accepted_discontinuities.append(t_new)
             state = integrator.start(u_new, t_new, state.v, state.a)
             prev_dt = None
         # The step that produced this point recorded any failure against t_new; it landed, so it
@@ -636,8 +641,8 @@ def integrate_transient_with_events(
             # integrators; for BDF they are None and the restart is a plain bootstrap.
             state = integrator.start(u_star, t_star, state.v, state.a)
             prev_dt = None
-            if on_accept is not None:
-                accepted_observation(on_accept, t_star, u_star)
+            if on_accept is not None and accepted_observation(on_accept, t_star, u_star):
+                solution.accepted_discontinuities.append(t_star)
             g_prev = [float(g(u_star, t_star)) for g in event_fns]
             pending_dt = t_target - t_star  # the genuine remainder of this cell
             events_this_cell += 1
