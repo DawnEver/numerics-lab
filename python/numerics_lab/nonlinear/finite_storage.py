@@ -178,9 +178,32 @@ def finite_storage_initial_pair(
         # constraint error, especially when the stored linkage is near zero.
         zero_mass_rows = np.asarray(actual_mass.getnnz(axis=1)).ravel() == 0
         equation_scale = np.asarray(abs(actual_jacobian) @ abs(state)).ravel() + abs(residual_defect)
-        state_admitted = state_admitted and np.all(
+        algebraic_state_admitted = np.all(
             abs(residual_defect[zero_mass_rows]) <= tolerance * equation_scale[zero_mass_rows]
         )
+        if state_admitted and not algebraic_state_admitted:
+            # Once dynamics are admitted, refine only physical state constraints
+            # and the original finite-Q target. Large rate coordinates must not
+            # pollute this small algebraic correction through the joint solve.
+            state_matrix = sp.vstack((algebraic @ actual_jacobian, actual_mass[selected]), format='csc')
+            state_rhs = -np.concatenate((
+                algebraic @ np.asarray(residual_at(state, zero)),
+                actual - target,
+            ))
+            try:
+                state_factor = splu(state_matrix)
+            except RuntimeError as error:
+                msg = 'finite storage state refinement requires independent physical constraints'
+                raise StorageRateAuthorityRequired(msg) from error
+            change = state_factor.solve(state_rhs)
+            for _ in range(3):
+                remaining = state_rhs - state_matrix @ change
+                if not np.any(remaining):
+                    break
+                change += state_factor.solve(remaining)
+            state += change
+            continue
+        state_admitted = state_admitted and algebraic_state_admitted
         if state_admitted and algebraic_bulk_size is not None:
             # Re-evaluate the true constitutive tangent at the now-admitted
             # finite-Q state, not at the preceding Newton loading iterate.
