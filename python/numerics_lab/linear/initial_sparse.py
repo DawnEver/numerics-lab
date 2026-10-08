@@ -8,6 +8,7 @@ from scipy.sparse.csgraph import maximum_bipartite_matching
 from scipy.sparse.linalg import splu
 
 from motronics.gauss.linear.initial_rate_border import complete_rate_border
+from motronics.gauss.linear.initial_storage_border import stored_initial_correction
 
 
 @dataclass(frozen=True)
@@ -82,6 +83,7 @@ def sparse_initial_pair(
     stored_rows,
     partial_time,
     stored_increment=None,
+    stored_columns=None,
     tolerance=1e-10,
 ):
     """Solve actual index-two equations without dense field-sized nullspaces.
@@ -125,6 +127,19 @@ def sparse_initial_pair(
         msg = 'declared algebraic rows are not in the actual mass left nullspace'
         raise ValueError(msg)
     stored = mass[stored_rows]
+    if stored_columns is not None:
+        correction, unique = stored_initial_correction(
+            jacobian,
+            residual,
+            mass,
+            algebraic,
+            stored_rows,
+            stored_columns,
+            stored_change,
+            partial_time,
+            tolerance=tolerance,
+        )
+        return SparseInitialPair(initial + correction[:n], correction[n:], unique)
     matrix = sp.bmat(
         [
             [jacobian, mass],

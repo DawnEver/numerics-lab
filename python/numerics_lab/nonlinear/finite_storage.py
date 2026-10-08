@@ -125,6 +125,7 @@ def finite_storage_initial_pair(
     max_newton=30,
     tolerance=1e-10,
     algebraic_bulk_size=None,
+    stored_columns=None,
 ):
     """Actual state/rate pair for finite Q with its invariant algebraic row space."""
     state = np.asarray(initial, dtype=float).copy()
@@ -143,7 +144,7 @@ def finite_storage_initial_pair(
         jacobian, residual = sp.csr_matrix(jacobian_at(state)), np.asarray(residual_at(state, zero))
         pair_solver = sparse_initial_pair if algebraic_bulk_size is None else algebraic_bulk_initial_pair
         coordinates = (
-            {'algebraic_rows': algebraic, 'stored_rows': selected}
+            {'algebraic_rows': algebraic, 'stored_rows': selected, 'stored_columns': stored_columns}
             if algebraic_bulk_size is None
             else {'bulk_size': algebraic_bulk_size}
         )
@@ -181,29 +182,8 @@ def finite_storage_initial_pair(
         algebraic_state_admitted = np.all(
             abs(residual_defect[zero_mass_rows]) <= tolerance * equation_scale[zero_mass_rows]
         )
-        if state_admitted and not algebraic_state_admitted:
-            # Once dynamics are admitted, refine only physical state constraints
-            # and the original finite-Q target. Large rate coordinates must not
-            # pollute this small algebraic correction through the joint solve.
-            state_matrix = sp.vstack((algebraic @ actual_jacobian, actual_mass[selected]), format='csc')
-            state_rhs = -np.concatenate((
-                algebraic @ np.asarray(residual_at(state, zero)),
-                actual - target,
-            ))
-            try:
-                state_factor = splu(state_matrix)
-            except RuntimeError as error:
-                msg = 'finite storage state refinement requires independent physical constraints'
-                raise StorageRateAuthorityRequired(msg) from error
-            change = state_factor.solve(state_rhs)
-            for _ in range(3):
-                remaining = state_rhs - state_matrix @ change
-                if not np.any(remaining):
-                    break
-                change += state_factor.solve(remaining)
-            state += change
-            continue
-        state_admitted = state_admitted and algebraic_state_admitted
+        if stored_columns is not None:
+            state_admitted = state_admitted and algebraic_state_admitted
         if state_admitted and algebraic_bulk_size is not None:
             # Re-evaluate the true constitutive tangent at the now-admitted
             # finite-Q state, not at the preceding Newton loading iterate.
