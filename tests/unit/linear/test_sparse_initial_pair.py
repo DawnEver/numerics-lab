@@ -8,32 +8,41 @@ from motronics.gauss.linear.initial_sparse import sparse_complete_initial_rate, 
 from motronics.gauss.linear.storage_border import storage_border_rows
 
 
-def test_identical_current_rate_columns_do_not_make_the_physical_state_free():
+@pytest.mark.parametrize(('stored_value', 'linkage_residual'), [(0.0, 0.0), (1.0, 1e-23), (1.0, 1e-3)])
+def test_identical_current_rate_columns_do_not_make_the_physical_state_free(stored_value, linkage_residual):
     # Stored field and linkage fix the winding current through its dynamic
     # resistance equation. KCL differentiates only the sum of the two currents.
     pair = sparse_initial_pair(
         [[0, 0, -1, 0], [0, 1, 1, 0], [0, 0, 2, 0], [-1, 0, 0, 1]],
         [0, 0, 0, 0],
         [[1, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 1], [0, 0, 0, 0]],
-        [0, 0, 0, 0],
+        [stored_value, 0, 0, stored_value],
         algebraic_rows=[[0, 1, 0, 0], [0, 0, 0, 1]],
         stored_rows=[0, 2],
         partial_time=[0, 0, -6, 0],
     )
-    assert np.array_equal(pair.state, np.zeros(4))
+    assert np.array_equal(pair.state, [stored_value, 0, 0, stored_value])
     assert np.array_equal(pair.rate_is_unique, [True, False, False, True])
     assert np.isnan(pair.physical_rate[1:3]).all()
-    proven = sparse_complete_initial_rate(
-        [[0, 0, -1, 0], [0, 1, 1, 0], [0, 0, 2, 0], [-1, 0, 0, 1]],
-        [0, 0, 0, 0],
-        [[1, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 1], [0, 0, 0, 0]],
-        pair,
-        algebraic_rows=[[0, 1, 0, 0], [0, 0, 0, 1]],
-        partial_time=[0, 0, -6, 0],
-        acceleration_remainder=np.zeros(4),
-        stored_rows=[0, 2],
-        stored_columns=[0, 3],
-    )
+
+    def complete():
+        return sparse_complete_initial_rate(
+            [[0, 0, -1, 0], [0, 1, 1, 0], [0, 0, 2, 0], [-1, 0, 0, 1]],
+            [0, 0, 0, linkage_residual],
+            [[1, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 1], [0, 0, 0, 0]],
+            pair,
+            algebraic_rows=[[0, 1, 0, 0], [0, 0, 0, 1]],
+            partial_time=[0, 0, -6, 0],
+            acceleration_remainder=np.zeros(4),
+            stored_rows=[0, 2],
+            stored_columns=[0, 3],
+        )
+
+    if linkage_residual == 1e-3:
+        with pytest.raises(ValueError, match='contradicts'):
+            complete()
+        return
+    proven = complete()
     assert proven.rate_is_unique.all()
     assert proven.rate == pytest.approx([0, -2, 2, 0])
     assert np.array_equal(proven.state, pair.state)
