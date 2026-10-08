@@ -354,6 +354,7 @@ def integrate_transient(
     on_event: Callable[[int, float, NDArray[np.floating]], None] | None = None,
     on_breakpoint: Callable[[float, NDArray[np.floating]], None] | None = None,
     time_breakpoints: Sequence[float] = (),
+    observation_times: Sequence[float] = (),
     v0: NDArray[np.floating] | None = None,
     a0: NDArray[np.floating] | None = None,
     solve=_default_solve,
@@ -435,6 +436,13 @@ def integrate_transient(
     history restart's bootstrap weights, and each bisection probe's unique ``dt`` all miss the
     cache on their own -- a stale factor across an event is impossible unless the key itself
     under-reads the system (the hole the module docstring names).
+
+    ``observation_times`` requires true solved endpoints on a continuous requested grid.
+    Like breakpoints these instants clip a step and re-anchor its nominal grid, but they
+    never take a left-limit evaluation or restart integrator/error history. No output
+    interpolation is performed; extra nominal/adaptive/event points remain in the result.
+    Values must increase strictly in ``(t0, t1]``. A coincident actual breakpoint keeps
+    its discontinuity semantics, irrespective of the requested observation.
     """
     held = HeldFactor(refactor_every) if refactor_every is not None else None
     emit = _StepLog(step_log)
@@ -459,17 +467,20 @@ def integrate_transient(
     lte_history: list[tuple[float, NDArray]] = [(study.t0, u0)]
     g_prev = [float(g(u0, study.t0)) for g in event_fns]
     breakpoints = tuple(time_breakpoints)
-    for i, bp in enumerate(breakpoints):
-        if not study.t0 < bp <= study.t1:
-            msg = f'time_breakpoints[{i}]={bp:g} is outside the study window ({study.t0:g}, {study.t1:g}]'
-            raise ValueError(msg)
-        if i and bp <= breakpoints[i - 1]:
-            msg = f'time_breakpoints must be strictly increasing, got {time_breakpoints}'
-            raise ValueError(msg)
+    observations = tuple(observation_times)
+    for label, instants in (('time_breakpoints', breakpoints), ('observation_times', observations)):
+        for i, instant in enumerate(instants):
+            if not study.t0 < instant <= study.t1:
+                msg = f'{label}[{i}]={instant:g} is outside the study window ({study.t0:g}, {study.t1:g}]'
+                raise ValueError(msg)
+            if i and instant <= instants[i - 1]:
+                msg = f'{label} must be strictly increasing, got {instants}'
+                raise ValueError(msg)
     # Consumption is a CURSOR advance, not a pop(0): popping shifts the list tail on every
     # consumed edge -- O(n^2) over a PWM march with thousands of edges (SR-014). Breakpoints
     # are only ever consumed front-to-back, so an index into the sorted tuple is equivalent.
     bp_index = 0
+    observation_index = 0
     breakpoint_set = frozenset(breakpoints)
     # The last time each function fired. A function lands on its own zero, so on the pass right
     # after firing its sign at the checkpoint is epsilon-arbitrary and reads as a fresh crossing
@@ -593,7 +604,7 @@ def integrate_transient(
     # The event locator's tolerance is not a licence to erase the observation
     # window. Only roundoff at the declared end may terminate this march.
     end_tol = 1e-12 * max(abs(study.t0), abs(study.t1), study.t1 - study.t0)
-    while state.t < study.t1 - end_tol:
+    while state.t < study.t1 - end_tol or (len(observations) > 0 and state.t < observations[-1]):
         if resume_from is not None:
             # The re-anchored grid continues from the last breakpoint; the t1 clamp makes the
             # FINAL re-anchored cell a PARTIAL step, so its dt is the true remainder -- a full
@@ -633,6 +644,21 @@ def integrate_transient(
                 t_target = breakpoints[bp_index]
                 pending_dt = t_target - state.t
                 resume_from = t_target + dt  # the uniform grid continues from the breakpoint
+            while observation_index < len(observations) and observations[observation_index] <= state.t:
+                observation_index += 1
+            lands_on_breakpoint = t_target in breakpoint_set
+            if observation_index < len(observations) and (
+                observations[observation_index] < t_target
+                or observations[observation_index] == t_target
+                or (not lands_on_breakpoint and same_instant(observations[observation_index], t_target))
+            ):
+                # A nominal endpoint and requested endpoint separated only by
+                # arithmetic roundoff are one cell, solved at the requested
+                # time. Never add an ULP-sized follow-up integration cell.
+                # A declared breakpoint is exact, so a distinct neighbour is its own cell.
+                t_target = observations[observation_index]
+                pending_dt = t_target - state.t
+                resume_from = t_target + dt
             checkpoint = _take_checkpoint(state, solution)
             t_from = state.t
             step_dt = pending_dt
