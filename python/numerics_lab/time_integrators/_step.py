@@ -13,6 +13,7 @@ from motronics.contracts.spec.analysis_formulation import (
     DerivativeWeights,
     FactorReusableProblem,
     SemiDiscreteProblem,
+    StepEvaluationProblem,
 )
 from motronics.gauss.linear import reject_nonfinite_solution
 from motronics.gauss.time_integrators._forms import StepForm, _roundoff_floor, residual_floor
@@ -246,6 +247,11 @@ def _solve_step(
     arithmetic with nothing for a caller to read -- the shape ``taste.md`` forbids. The flag
     rides out to :attr:`TransientSolution.floor_converged_times`.
     """
+    if isinstance(problem, StepEvaluationProblem):
+        problem = problem.step_problem(form.t_eval)
+        if not isinstance(problem, SemiDiscreteProblem):
+            msg = 'step endpoint owner must return a semi-discrete problem'
+            raise TypeError(msg)
     reusable = factor_cache is not None and isinstance(problem, FactorReusableProblem)
     # The stall-polish's phase-2 source (MANUAL-627 (i)): the problem's local-derivative
     # jacobian, engaged when the default jacobian's per-iteration creep marks a stalled

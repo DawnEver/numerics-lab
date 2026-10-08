@@ -23,6 +23,28 @@ class _Forced:
         return np.eye(1) * weights.alpha1.real
 
 
+def test_incoming_step_uses_owned_endpoint_law_without_perturbing_time():
+    times = []
+
+    class OwnedEndpoint(_Forced):
+        def step_problem(self, time):
+            times.append(time)
+            view = _Forced()
+            view.forcing = 1.0
+            return view
+
+        def residual(self, u, u_dot, u_ddot, t):
+            pytest.fail('an incoming solve must use its explicitly owned endpoint view')
+
+    solution = integrate_transient(
+        OwnedEndpoint(),
+        TransientStudy(t0=0.0, t1=0.2, dt=0.1, integrator=IntegratorKind.BDF1),
+        np.zeros(1),
+    )
+    assert times == [0.1, 0.2]
+    assert np.asarray(solution.states).ravel() == pytest.approx([0.0, 0.1, 0.2])
+
+
 @pytest.mark.parametrize('adaptive', [False, True])
 @pytest.mark.parametrize('eventful', [False, True])
 def test_right_state_projection_preserves_left_rate_and_bootstraps_from_right(adaptive, eventful):
