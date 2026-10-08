@@ -35,6 +35,18 @@ def test_shared_rank_one_storage_preserves_state_and_marks_only_free_branch_rate
     assert pair.rate_is_unique.tolist() == [True, False, False, True, True]
     assert np.isnan(pair.physical_rate[1:3]).all()
     assert np.array_equal(pair.physical_rate[[0, 3, 4]], np.zeros(3))
+    inconsistent = np.array([0.01, 0.0])
+    with pytest.raises(ValueError, match='contradicts'):
+        algebraic_bulk_initial_pair(
+            jacobian,
+            np.zeros(5),
+            mass,
+            initial,
+            bulk_size=1,
+            partial_time=np.zeros(5),
+            stored_increment=inconsistent,
+            tolerance=1e-10,
+        )
     mass[0, 0] = 0.01
     with pytest.raises(ValueError, match='storage-free'):
         algebraic_bulk_initial_pair(

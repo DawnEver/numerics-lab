@@ -12,7 +12,7 @@ from motronics.gauss.linear.storage_border import storage_border_rows
 
 
 def algebraic_bulk_initial_pair(
-    jacobian, residual, mass, initial, *, bulk_size, partial_time, stored_increment, tolerance
+    jacobian, residual, mass, initial, *, bulk_size, partial_time, stored_increment, tolerance, fixed_state=False
 ):
     """Eliminate proven storage-free bulk; never select a free physical state.
 
@@ -56,15 +56,25 @@ def algebraic_bulk_initial_pair(
     algebraic = storage.algebraic_rows.toarray()
     selected = storage.stored_rows
     matrix = np.block([
-        [reduced_jacobian, reduced_mass.toarray()],
-        [reduced_mass[selected].toarray(), np.zeros((len(selected), m))],
+        [
+            np.zeros((len(selected), m)) if fixed_state else reduced_jacobian,
+            reduced_mass[selected].toarray() if fixed_state else reduced_mass.toarray(),
+        ],
+        [
+            np.eye(m) if fixed_state else reduced_mass[selected].toarray(),
+            np.zeros((m if fixed_state else len(selected), m)),
+        ],
         [np.zeros((len(algebraic), m)), algebraic @ reduced_jacobian],
     ])
     change = np.asarray(stored_increment)
     if change.shape != (len(selected),) or not np.isfinite(change).all():
         msg = 'algebraic bulk must retain every actual independent border storage increment'
         raise ValueError(msg)
-    rhs = np.concatenate((-reduced_residual, change, -algebraic @ reduced_partial))
+    rhs = np.concatenate((
+        -residual[k:][selected] if fixed_state else -reduced_residual,
+        np.zeros(m) if fixed_state else change,
+        -algebraic @ reduced_partial,
+    ))
     norms = np.linalg.norm(matrix, axis=1)
     norms[norms == 0] = 1
     matrix, rhs = matrix / norms[:, None], rhs / norms
@@ -74,7 +84,11 @@ def algebraic_bulk_initial_pair(
     column_norms = np.linalg.norm(matrix, axis=0)
     column_norms[column_norms == 0] = 1
     equilibrated = matrix / column_norms
-    answer_scaled, free_scaled = border_affine_space(equilibrated, rhs, mandatory_rows=np.arange(m, m + len(selected)))
+    answer_scaled, free_scaled = border_affine_space(
+        equilibrated,
+        rhs,
+        mandatory_rows=np.arange(len(selected), len(selected) + m) if fixed_state else np.arange(m, m + len(selected)),
+    )
     rank_bar = np.finfo(float).eps * max(matrix.shape) * 16
     if np.any(free_scaled[:m] != 0):
         msg = 'actual border initial state requires additional physical authority'
@@ -86,7 +100,11 @@ def algebraic_bulk_initial_pair(
     if np.any(np.abs(defect) > tolerance * scale):
         msg = 'actual border stored state contradicts its state/rate equations'
         raise ValueError(msg)
-    state = initial + np.concatenate((-residual_bulk - sensitivity @ answer[:m], answer[:m]))
+    state = (
+        initial.copy()
+        if fixed_state
+        else initial + np.concatenate((-residual_bulk - sensitivity @ answer[:m], answer[:m]))
+    )
     rate = np.concatenate((-partial_bulk - sensitivity @ answer[m:], answer[m:]))
     rate_free = free[m:]
     border_unique = np.all(free_scaled[m:] == 0, axis=1)

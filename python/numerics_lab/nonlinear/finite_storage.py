@@ -169,9 +169,29 @@ def finite_storage_initial_pair(
             + np.linalg.norm(target)
             + np.linalg.norm(actual_mass[selected].data) * np.linalg.norm(state)
         )
-        if (
+        state_admitted = (
             np.linalg.norm(residual_defect) <= tolerance * state_scale
             and np.linalg.norm(actual - target) <= tolerance * storage_scale
+        )
+        if state_admitted and algebraic_bulk_size is not None:
+            # Re-evaluate the true constitutive tangent at the now-admitted
+            # finite-Q state, not at the preceding Newton loading iterate.
+            # Rate consistency must not perturb a state whose storage is fixed.
+            pair = algebraic_bulk_initial_pair(
+                actual_jacobian,
+                residual_at(state, zero),
+                actual_mass,
+                state,
+                bulk_size=algebraic_bulk_size,
+                partial_time=partial_time_at(state),
+                stored_increment=np.zeros(len(selected)),
+                tolerance=tolerance,
+                fixed_state=True,
+            )
+            residual_defect = np.asarray(residual_at(state, pair.rate))
+        if (
+            state_admitted
+            and np.linalg.norm(residual_defect) <= tolerance * state_scale
             and projected_rate_consistent(
                 actual_jacobian, pair.rate, partial_time_at(state), algebraic_rows=algebraic, tolerance=tolerance
             )
