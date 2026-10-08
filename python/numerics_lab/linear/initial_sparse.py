@@ -114,9 +114,18 @@ def sparse_initial_pair(
         raise ValueError(msg)
     selected = np.flatnonzero(nonzero)
     reduced = matrix[:, selected].tocsr()
-    matched_rows = maximum_bipartite_matching(reduced, perm_type='row')
-    if np.any(matched_rows < 0):
+    # Storage equations are mandatory, even when their increments are tiny
+    # compared with the dynamic RHS. Match them first, then verify that none
+    # was discarded by the structural reduction of free algebraic rates.
+    mandatory = np.arange(n, n + len(stored_rows))
+    row_order = np.concatenate((mandatory, np.arange(n + len(stored_rows), 2 * n), np.arange(n)))
+    matched = maximum_bipartite_matching(reduced[row_order], perm_type='row')
+    if np.any(matched < 0):
         msg = 'initial state/rate equations require additional physical authority'
+        raise ValueError(msg)
+    matched_rows = row_order[matched]
+    if not np.isin(mandatory, matched_rows).all():
+        msg = 'initial state/rate subsystem cannot discard actual stored-coordinate constraints'
         raise ValueError(msg)
     try:
         factor = splu(reduced[matched_rows].tocsc())
