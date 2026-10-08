@@ -79,12 +79,13 @@ def algebraic_bulk_initial_pair(
         -algebraic @ reduced_partial,
     ))
     evaluation_scale = np.zeros(len(rhs))
+    physical_evaluation = np.abs(jacobian) @ np.abs(initial) + np.abs(residual)
     if fixed_state:
         # The admitted state can retain one ULP of dynamic residual after
         # subtracting real physical terms. Its evaluation uncertainty is not
         # the magnitude of that cancellation residual itself. Derived rate
         # constraints and exact state/storage anchors receive NO such bound.
-        evaluation_scale[: len(selected)] = (np.abs(jacobian) @ np.abs(initial) + np.abs(residual))[k:][selected]
+        evaluation_scale[: len(selected)] = physical_evaluation[k:][selected]
         order = np.concatenate((
             np.arange(len(selected), len(selected) + m),
             np.arange(len(selected) + m, len(rhs)),
@@ -92,6 +93,11 @@ def algebraic_bulk_initial_pair(
         ))
         matrix, rhs, evaluation_scale = matrix[order], rhs[order], evaluation_scale[order]
     else:
+        # Propagate each original residual equation's evaluation bound through
+        # its actual Schur row operator. This bound belongs neither to stored
+        # increments nor to differentiated rate equations.
+        row_projection = factor.solve(coupling.T.toarray(), trans='T').T
+        evaluation_scale[:m] = physical_evaluation[k:] + np.abs(row_projection) @ physical_evaluation[:k]
         # Preserve small algebraic state corrections (including actual linkage)
         # before eliminating dynamic rows with potentially enormous rates.
         # Otherwise a stiff derivative can lose a finite-Q correction in the
