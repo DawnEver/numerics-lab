@@ -76,7 +76,28 @@ from motronics.gauss.time_integrators._step import HeldFactor
 
 logger = logging.getLogger(__name__)
 
-__all__ = ['EventfulTransientSolution', 'integrate_transient_with_events']
+__all__ = ['EventSurface', 'EventfulTransientSolution', 'integrate_transient_with_events']
+
+
+@dataclass(frozen=True)
+class EventSurface:
+    """A scalar observer with its actual declared crossing orientation.
+
+    Direction zero locates either sign change; +1/-1 admit rising/falling
+    crossings. An initial zero leaving into the stay region is not an event.
+    """
+
+    observe: Callable[[NDArray[np.floating], float], float]
+    direction: int = 0
+
+    def __post_init__(self) -> None:
+        if not callable(self.observe) or type(self.direction) is not int or self.direction not in (-1, 0, 1):
+            msg = 'event surfaces require a callable and an explicit -1/0/+1 direction'
+            raise ValueError(msg)
+
+    def __call__(self, state, time) -> float:
+        return float(self.observe(state, time))
+
 
 #: Events tolerated inside ONE nominal cell before the function is declared chattering. A genuine
 #: circuit sees a handful of crossings per cell at most (a PWM edge and a state ripple); past this
@@ -150,7 +171,20 @@ def _rollback(checkpoint: _Checkpoint, solution: TransientSolution) -> tuple[Int
 
 def _sign(value: float) -> bool:
     """The bisection's sign bit: ``g >= 0``. A landing exactly on zero reads as the far side."""
+    if not np.isfinite(value):
+        msg = 'event observations must be finite'
+        raise ValueError(msg)
     return value >= 0.0
+
+
+def _crossed(surface, before, after):
+    before_sign, after_sign = _sign(before), _sign(after)
+    direction = surface.direction if isinstance(surface, EventSurface) else 0
+    if direction > 0:
+        return before < 0.0 and after >= 0.0
+    if direction < 0:
+        return before > 0.0 and after <= 0.0
+    return before_sign != after_sign
 
 
 def _locate_bracket(
@@ -481,7 +515,7 @@ def integrate_transient_with_events(
             crossed = [
                 i
                 for i in range(len(event_fns))
-                if _sign(g_new[i]) != _sign(g_prev[i]) and t_step - last_fired.get(i, -np.inf) > bracket_tol
+                if _crossed(event_fns[i], g_prev[i], g_new[i]) and t_step - last_fired.get(i, -np.inf) > bracket_tol
             ]
             if not crossed:
                 if refine is not None:
@@ -500,12 +534,13 @@ def integrate_transient_with_events(
                                 gm = [float(g(u_mid, t_mid)) for g in event_fns]
                                 gh = [float(g(u_half, t_step)) for g in event_fns]
                                 crossed_mid = any(
-                                    _sign(gm[i]) != _sign(g_prev[i])
+                                    _crossed(event_fns[i], g_prev[i], gm[i])
                                     and t_mid - last_fired.get(i, -np.inf) > bracket_tol
                                     for i in range(len(event_fns))
                                 )
                                 crossed_half = any(
-                                    _sign(gh[i]) != _sign(gm[i]) and t_step - last_fired.get(i, -np.inf) > bracket_tol
+                                    _crossed(event_fns[i], gm[i], gh[i])
+                                    and t_step - last_fired.get(i, -np.inf) > bracket_tol
                                     for i in range(len(event_fns))
                                 )
                                 if not (crossed_mid or crossed_half):
