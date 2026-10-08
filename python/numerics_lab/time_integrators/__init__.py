@@ -306,8 +306,8 @@ def integrate_transient(
         msg = f'adaptive stepping is implemented for BDF2 only, got integrator {integrator.name}'
         raise ValueError(msg)
     if on_landing is not None:
-        if adaptive or eec_period is not None or restart is not None or checkpoint_key is not None:
-            msg_0 = 'accepted landing currently requires fixed stepping without EEC or checkpoints'
+        if adaptive or eec_period is not None:
+            msg_0 = 'accepted landing currently requires fixed stepping without EEC'
             raise ValueError(msg_0)
         if integrator.name not in ('bdf1', 'bdf2'):
             msg_0 = 'accepted landing history restart requires BDF1 or BDF2'

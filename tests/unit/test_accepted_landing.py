@@ -23,6 +23,51 @@ class _Forced:
         return np.eye(1) * weights.alpha1.real
 
 
+def test_checkpoint_after_actual_landing_restores_right_law_and_bootstrap_without_refiring():
+    class OwnedForce(_Forced):
+        has_history = True
+
+        def commit_history(self, state, time):
+            pass
+
+        def checkpoint_history(self):
+            return {'forcing': self.forcing}
+
+        def restore_checkpoint_history(self, data):
+            self.forcing = data['forcing']
+
+    observed = []
+
+    def run(t0, t1, restart=None):
+        owner = OwnedForce()
+
+        def landing(time, _state):
+            if time == 0.1:
+                observed.append(time)
+                owner.forcing = 2.0
+                return (0,)
+            return ()
+
+        return integrate_transient(
+            owner,
+            TransientStudy(t0, t1, 0.1, IntegratorKind.BDF2),
+            np.zeros(1),
+            on_landing=landing,
+            checkpoint_key='actual-owned-scheduled-law',
+            restart=restart,
+        )
+
+    whole = run(0.0, 0.3)
+    first = run(0.0, 0.1)
+    saved = TransientCheckpoint.from_mapping(json.loads(json.dumps(first.checkpoint.to_mapping())))
+    assert len(saved.states) == 1 and saved.material_history['forcing'] == 2.0
+    assert saved.previous_dt == 0.1
+    before = tuple(observed)
+    resumed = run(saved.time, 0.3, saved)
+    assert tuple(observed) == before
+    np.testing.assert_allclose(resumed.states, whole.states[1:], atol=1e-14)
+
+
 def test_incoming_step_uses_owned_endpoint_law_without_perturbing_time():
     times = []
 
