@@ -377,10 +377,12 @@ def integrate_transient(
         solution = TransientSolution(times=[study.t0], states=[u0], state_rates=[], rate_state_overrides={})
         while state.t < t_end - 1e-14:
             h = min(h, t_end - state.t)
-            t_new = next_deadline(next_breakpoint, state.t, state.t + h)
+            proposed_time = state.t + h
+            t_new = next_deadline(next_breakpoint, state.t, proposed_time)
             h = t_new - state.t
             if lattice is not None:
-                lattice.tick(t_new)
+                if t_new < proposed_time:
+                    lattice.tick(t_new)
                 current_tick = lattice.tick(state.t)
                 count = min(lattice.steps(h), lattice.tick(t_end) - current_tick)
                 h = count * lattice.quantum
