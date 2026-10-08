@@ -51,12 +51,20 @@ def algebraic_bulk_initial_pair(
     norms = np.linalg.norm(matrix, axis=1)
     norms[norms == 0] = 1
     matrix, rhs = matrix / norms[:, None], rhs / norms
-    free = null_space(matrix)
+    # Rates and stored coordinates need not share units or magnitude. Rank
+    # revelation uses dimensionless columns; otherwise a real small inductance
+    # makes an algebraic rate column appear numerically absent.
+    column_norms = np.linalg.norm(matrix, axis=0)
+    column_norms[column_norms == 0] = 1
+    equilibrated = matrix / column_norms
+    free_scaled = null_space(equilibrated)
     rank_bar = np.finfo(float).eps * max(matrix.shape) * 16
-    if np.any(np.linalg.norm(free[:m], axis=1) > rank_bar):
+    if np.any(np.linalg.norm(free_scaled[:m], axis=1) > rank_bar):
         msg = 'actual border initial state requires additional physical authority'
         raise ValueError(msg)
-    answer, *_ = np.linalg.lstsq(matrix, rhs, rcond=None)
+    answer_scaled, *_ = np.linalg.lstsq(equilibrated, rhs, rcond=None)
+    answer = answer_scaled / column_norms
+    free = free_scaled / column_norms[:, None]
     defect = matrix @ answer - rhs
     scale = np.abs(matrix) @ np.abs(answer) + np.abs(rhs)
     if np.any(np.abs(defect) > tolerance * scale):
@@ -65,7 +73,7 @@ def algebraic_bulk_initial_pair(
     state = initial + np.concatenate((-residual_bulk - sensitivity @ answer[:m], answer[:m]))
     rate = np.concatenate((-partial_bulk - sensitivity @ answer[m:], answer[m:]))
     rate_free = free[m:]
-    border_unique = np.linalg.norm(rate_free, axis=1) <= rank_bar
+    border_unique = np.linalg.norm(free_scaled[m:], axis=1) <= rank_bar
     bulk_free = sensitivity @ rate_free
     bulk_scale = np.abs(sensitivity) @ np.abs(rate_free)
     bulk_unique = np.all(np.abs(bulk_free) <= rank_bar * bulk_scale, axis=1)
