@@ -19,12 +19,13 @@ def nonlinear_dae_initial_state(
     max_iter,
     tolerance=1e-10,
     allow_preferred_changes=True,
+    stored_state=None,
 ):
     """Use the shared Newton/line-search owner; never guess a free preferred IC.
 
-    Storage coordinates and algebraic rate spaces must remain invariant during
-    projection. A state-dependent rotation of those spaces needs a declared
-    nonlinear stored-state map, not a frozen-mass approximation.
+    The algebraic rate space must remain invariant during projection. Without
+    stored_state the storage coordinates must also be invariant; with that
+    explicit primitive its actual Jacobian is mass, never a frozen surrogate.
     """
     initial = np.asarray(initial, dtype=float)
     initial_mass = csr_matrix(mass(initial)).toarray()
@@ -49,7 +50,9 @@ def nonlinear_dae_initial_state(
         rank_bar = np.finfo(float).eps * max(matrix.shape) * 16
         indices = indices[np.linalg.norm(free[indices], axis=1) > rank_bar]
     anchors = np.eye(initial.size)[indices]
-    system = _InitialConstraints(residual, jacobian, mass, initial, algebraic, stored, anchors, extra_rate_columns)
+    system = _InitialConstraints(
+        residual, jacobian, mass, initial, algebraic, stored, anchors, extra_rate_columns, stored_state
+    )
     result = NewtonStrategy().solve(system, max_iter=max_iter, rtol_energy_pct=tolerance * 100)
     if not result.converged:
         msg = 'nonlinear stored initial state did not close its actual algebraic DAE constraints'
@@ -70,12 +73,25 @@ def nonlinear_dae_initial_state(
 class _InitialConstraints:
     is_linear = False
 
-    def __init__(self, residual, jacobian, mass, initial, algebraic, stored, anchors, extra_rate_columns) -> None:
+    def __init__(
+        self, residual, jacobian, mass, initial, algebraic, stored, anchors, extra_rate_columns, stored_state
+    ) -> None:
         self.evaluate, self.evaluate_jacobian, self.evaluate_mass = residual, jacobian, mass
         self.initial = initial
         self.algebraic, self.stored, self.anchors = algebraic, stored, anchors
         self.extra_rate_columns = extra_rate_columns
         self.storage_free = null_space(stored)
+        self.evaluate_storage = stored_state
+        norms = np.linalg.norm(csr_matrix(mass(initial)).toarray(), axis=1)
+        self.storage_scale = np.where(norms == 0.0, 1.0, norms)
+        self.initial_storage = None if stored_state is None else self._storage(initial)
+
+    def _storage(self, state):
+        value = np.asarray(self.evaluate_storage(state), dtype=float)
+        if value.shape != self.initial.shape or not np.isfinite(value).all():
+            msg = 'finite initial storage must cover every actual equation with finite values'
+            raise ValueError(msg)
+        return value
 
     def initial_guess(self):
         return self.initial.copy()
@@ -88,16 +104,25 @@ class _InitialConstraints:
         if (
             np.linalg.norm(self.algebraic @ augmented)
             > 1e-10 * np.linalg.norm(self.algebraic) * np.linalg.norm(augmented)
-            or np.linalg.norm(actual_stored @ self.storage_free) > 1e-10 * np.linalg.norm(actual_stored)
+            or (
+                self.evaluate_storage is None
+                and np.linalg.norm(actual_stored @ self.storage_free) > 1e-10 * np.linalg.norm(actual_stored)
+            )
             or np.linalg.matrix_rank(actual_stored) != np.linalg.matrix_rank(self.stored)
         ):
             msg = 'nonlinear initial projection needs an invariant storage/rate space or an explicit stored-state map'
             raise ValueError(msg)
         jacobian = csr_matrix(self.evaluate_jacobian(x)).toarray()
-        matrix = np.vstack((self.algebraic @ jacobian, self.stored, self.anchors))
+        stored = self.stored if self.evaluate_storage is None else mass / self.storage_scale[:, None]
+        increment = (
+            self.stored @ (x - self.initial)
+            if self.evaluate_storage is None
+            else (self._storage(x) - self.initial_storage) / self.storage_scale
+        )
+        matrix = np.vstack((self.algebraic @ jacobian, stored, self.anchors))
         residual = np.concatenate((
             self.algebraic @ self.evaluate(x),
-            self.stored @ (x - self.initial),
+            increment,
             self.anchors @ (x - self.initial),
         ))
         norms = np.linalg.norm(matrix, axis=1)
