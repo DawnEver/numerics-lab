@@ -224,7 +224,7 @@ def integrate_sampled(
         due.insert(0, set())
     bounds = [*hits, study.t1]
     u = np.asarray(u0, dtype=float)
-    out = TransientSolution(times=[study.t0], states=[u], state_rates=[], rate_state_overrides={})
+    out = TransientSolution(times=[study.t0], states=[u], state_rates=[], residual_times=[], rate_state_overrides={})
     v, a = march.pop('v0', None), march.pop('a0', None)
     integrator = get_integrator(study.integrator)
     budget = march.pop('budget', None)
@@ -271,6 +271,8 @@ def integrate_sampled(
         assert out.state_rates is not None and seg.state_rates is not None
         base = len(out.state_rates)
         out.state_rates.extend(seg.state_rates)
+        assert out.residual_times is not None and seg.residual_times is not None
+        out.residual_times.extend(seg.residual_times)
         if out.rate_state_overrides is not None:
             if seg.rate_state_overrides is None:
                 out.rate_state_overrides = None

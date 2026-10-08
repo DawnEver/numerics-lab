@@ -17,6 +17,7 @@ from motronics.contracts.spec.analysis_formulation import (
     AlternativeJacobianProblem,
     DerivativeWeights,
     FactorReusableProblem,
+    HistoryProblem,
     ResidualFloorProblem,
     SemiDiscreteProblem,
 )
@@ -27,12 +28,36 @@ from motronics.gauss.time_integrators.factor_reuse import FactorCache, apply_fac
 __all__ = [
     'HELD_STALL_RATIO',
     'HeldFactor',
+    'ProblemCapabilities',
     'StepOutcome',
     'take_step',
 ]
 
 
-def _roundoff_floor(problem, tangent, u: NDArray[np.floating], form) -> float | None:
+@dataclass(frozen=True)
+class ProblemCapabilities:
+    """Structural optional protocols, resolved once per run, never physical values.
+
+    A direct step resolves its own scope. A march supplies one resolution to every
+    stage, retry and probe; the problem's protocol structure stays fixed in that run.
+    """
+
+    factor_reusable: bool
+    alternative_jacobian: bool
+    residual_floor: bool
+    history: bool
+
+    @classmethod
+    def resolve(cls, problem: SemiDiscreteProblem) -> ProblemCapabilities:
+        return cls(
+            isinstance(problem, FactorReusableProblem),
+            isinstance(problem, AlternativeJacobianProblem),
+            isinstance(problem, ResidualFloorProblem),
+            isinstance(problem, HistoryProblem),
+        )
+
+
+def _roundoff_floor(problem, tangent, u: NDArray[np.floating], form, capabilities) -> float | None:
     """The residual scale below which a converged solve cannot go, or ``None`` if unknowable.
 
     The problem's own `residual_roundoff_floor` is preferred: it is a statement about that
@@ -40,7 +65,7 @@ def _roundoff_floor(problem, tangent, u: NDArray[np.floating], form) -> float | 
     fallback and needs only the tangent. A non-finite reading from either is discarded rather
     than compared -- a floor that is not a number cannot bound anything.
     """
-    if isinstance(problem, ResidualFloorProblem):
+    if capabilities.residual_floor:
         # `None` IS AN ANSWER HERE -- "this problem cannot bound its own cancellation" -- and it
         # must fall through to the generic fallback rather than be accepted. It was not expressible
         # before: `float(...)` would have raised on it, so `mna_solves.transient_residual_floor`
@@ -235,6 +260,7 @@ def _solve_step(
     jacobian_tangent: Callable | None = None,
     gmin_stages: tuple[float, ...] | None = None,
     held: HeldFactor | None = None,
+    capabilities: ProblemCapabilities | None = None,
 ) -> NDArray[np.floating]:
     """Advance one step by a Newton loop on ``residual(u_arg, u_dot, u_ddot, t)`` for ``u_{n+1}``.
 
@@ -277,7 +303,9 @@ def _solve_step(
     arithmetic with nothing for a caller to read -- the shape ``taste.md`` forbids. The flag
     rides out to :attr:`TransientSolution.floor_converged_times`.
     """
-    reusable = factor_cache is not None and isinstance(problem, FactorReusableProblem)
+    if capabilities is None:
+        capabilities = ProblemCapabilities.resolve(problem)
+    reusable = factor_cache is not None and capabilities.factor_reusable
     # The stall-polish's phase-2 source (MANUAL-627 (i)): the problem's local-derivative
     # jacobian, engaged when the default jacobian's per-iteration creep marks a stalled
     # direction. The default ``None`` reads the problem's optional ``jacobian_tangent``
@@ -287,7 +315,7 @@ def _solve_step(
     # switches, the diodes -- their stamps already ARE the local derivative) would pay
     # the tangent phase's factor-cache bypass for nothing (measured: the buck's reuse
     # counts broke without the gate).
-    alternative = problem if isinstance(problem, AlternativeJacobianProblem) else None
+    alternative = problem if capabilities.alternative_jacobian else None
     tangent_source = (
         jacobian_tangent
         if jacobian_tangent is not None
@@ -347,7 +375,7 @@ def _solve_step(
             # monotonically, so no stall ratio can be relied on to see it). It is the same floor
             # verdict the exhaustion branch below gives, reached before the ceiling instead of at
             # it (measured on ipm_uv's chopper: 50 iterations, ~30 s a step, at |r| ~ 4e-9).
-            if (floor := _roundoff_floor(problem, tangent, u, form)) is not None and residual <= floor:
+            if (floor := _roundoff_floor(problem, tangent, u, form, capabilities)) is not None and residual <= floor:
                 converged = True
                 on_floor = True
                 break
@@ -424,7 +452,7 @@ def _solve_step(
         residual = float(np.linalg.norm(r))
         if residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0):
             converged = True
-        elif (floor := _roundoff_floor(problem, tangent, u, form)) is not None and residual <= floor:
+        elif (floor := _roundoff_floor(problem, tangent, u, form, capabilities)) is not None and residual <= floor:
             on_floor = True
             # THE ARITHMETIC FLOOR, and the reason an exactly-solved LINEAR step no longer lies.
             # ``tol`` is ABSOLUTE on a residual whose scale is the supply, so the same one-Newton
@@ -486,10 +514,19 @@ class StepOutcome:
     residual: float
     on_floor: bool
     rate: NDArray[np.floating]
+    residual_time: float
 
 
 def take_step(
-    problem, integrator, state: IntegratorState, dt: float, t_new: float, *, endpoint_left: bool = False, **solve_kw
+    problem,
+    integrator,
+    state: IntegratorState,
+    dt: float,
+    t_new: float,
+    *,
+    endpoint_left: bool = False,
+    capabilities: ProblemCapabilities | None = None,
+    **solve_kw,
 ) -> StepOutcome:
     """Advance ``state`` by ``dt`` to ``t_new`` through every stage of ``integrator``.
 
@@ -499,6 +536,8 @@ def take_step(
     ``endpoint_left`` lands a declared discontinuity using its left limit; the clock still lands
     exactly at ``t_new`` and the next restarted step evaluates the post-edge system.
     """
+    if capabilities is None:
+        capabilities = ProblemCapabilities.resolve(problem)
     converged, on_floor, iterations, worst = True, False, 0, 0.0
     u = state.last_u
     form = None
@@ -506,9 +545,9 @@ def take_step(
         form = integrator.prepare(state, dt, t_new)
         if endpoint_left and form.t_eval == t_new:
             form = replace(form, t_eval=float(np.nextafter(t_new, -np.inf)))
-        u, ok, its, residual, floor = _solve_step(problem, form, state.last_u, **solve_kw)
+        u, ok, its, residual, floor = _solve_step(problem, form, state.last_u, capabilities=capabilities, **solve_kw)
         converged, on_floor = converged and ok, on_floor or floor
         iterations, worst = iterations + its, max(worst, residual)
-        state = integrator.advance(state, u, dt, t_new)
+        state = integrator.advance(state, u, dt, t_new, form)
     assert form is not None
-    return StepOutcome(state, u, converged, iterations, worst, on_floor, form.u_dot(u))
+    return StepOutcome(state, u, converged, iterations, worst, on_floor, form.u_dot(u), form.t_eval)

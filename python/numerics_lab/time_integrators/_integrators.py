@@ -102,7 +102,7 @@ class BDF1Integrator:
     def prepare(self, state: IntegratorState, dt: float, t_new: float) -> StepForm:
         return _bdf1_form(state.last_u, dt, t_new)
 
-    def advance(self, state: IntegratorState, u_new, dt: float, t_new: float) -> IntegratorState:
+    def advance(self, state: IntegratorState, u_new, dt: float, t_new: float, form: StepForm) -> IntegratorState:
         return IntegratorState(us=[np.asarray(u_new, dtype=float)], t=t_new, h=dt)
 
     def restart(self, state: IntegratorState, u, t: float) -> IntegratorState:
@@ -143,7 +143,7 @@ class BDF2Integrator:
             rate_origin=u_n,
         )
 
-    def advance(self, state: IntegratorState, u_new, dt: float, t_new: float) -> IntegratorState:
+    def advance(self, state: IntegratorState, u_new, dt: float, t_new: float, form: StepForm) -> IntegratorState:
         us = [*state.us, np.asarray(u_new, dtype=float)][-2:]  # keep only the last two states
         return IntegratorState(us=us, t=t_new, h=dt)
 
@@ -186,9 +186,9 @@ class TrapezoidIntegrator:
             rate_origin=u_n,
         )
 
-    def advance(self, state: IntegratorState, u_new, dt: float, t_new: float) -> IntegratorState:
+    def advance(self, state: IntegratorState, u_new, dt: float, t_new: float, form: StepForm) -> IntegratorState:
         u_new = np.asarray(u_new, dtype=float)
-        rate = self.prepare(state, dt, t_new).u_dot(u_new)
+        rate = form.u_dot(u_new)
         return IntegratorState(us=[u_new], t=t_new, v=rate, h=dt)
 
     def restart(self, state: IntegratorState, u, t: float) -> IntegratorState:
@@ -234,12 +234,12 @@ class TRBDF2Integrator:
             rate_origin=u_n,
         )
 
-    def advance(self, state: IntegratorState, u_new, dt: float, t_new: float) -> IntegratorState:
+    def advance(self, state: IntegratorState, u_new, dt: float, t_new: float, form: StepForm) -> IntegratorState:
         u_new = np.asarray(u_new, dtype=float)
         if state.stage == 0:
             h_g = TR_BDF2_GAMMA * dt
             return IntegratorState(us=[state.last_u, u_new], t=state.t + h_g, v=state.v, h=h_g, stage=1)
-        rate = self.prepare(state, dt, t_new).u_dot(u_new)
+        rate = form.u_dot(u_new)
         return IntegratorState(us=[u_new], t=t_new, v=rate, h=dt)
 
     def restart(self, state: IntegratorState, u, t: float) -> IntegratorState:
@@ -297,10 +297,9 @@ class NewmarkIntegrator:
         h_dot = v_n + dt * (1.0 - gamma) * a_n + dt * gamma * h_ddot
         return StepForm(weights=self.weights(dt), h_u=_zeros_like(u_n), h_dot=h_dot, h_ddot=h_ddot, t_eval=t_new)
 
-    def advance(self, state: IntegratorState, u_new, dt: float, t_new: float) -> IntegratorState:
+    def advance(self, state: IntegratorState, u_new, dt: float, t_new: float, form: StepForm) -> IntegratorState:
         u_new = np.asarray(u_new, dtype=float)
         w = self.weights(dt)
-        form = self.prepare(state, dt, t_new)
         a_new = w.alpha2.real * u_new + form.h_ddot
         v_new = form.u_dot(u_new)
         return IntegratorState(us=[u_new], t=t_new, v=v_new, a=a_new, h=dt)
@@ -378,7 +377,7 @@ class GeneralizedAlphaIntegrator:
         h_ddot = (1.0 - am) * a_off + am * a_n
         return StepForm(weights=self.weights(dt), h_u=h_u, h_dot=h_dot, h_ddot=h_ddot, t_eval=t_new - af * dt)
 
-    def advance(self, state: IntegratorState, u_new, dt: float, t_new: float) -> IntegratorState:
+    def advance(self, state: IntegratorState, u_new, dt: float, t_new: float, form: StepForm) -> IntegratorState:
         u_new = np.asarray(u_new, dtype=float)
         a_slope, a_off, v_slope, v_off = self._newmark_form(state, dt)
         a_new = a_slope * u_new + a_off

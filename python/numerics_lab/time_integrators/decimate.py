@@ -91,11 +91,18 @@ def decimate(solution: TransientSolution, bound: float | NDArray[np.floating]) -
             msg = 'decimation needs one recorded rate per accepted state'
             raise ValueError(msg)
         rates = [solution.state_rates[i - 1] for i in kept[1:]]
+    residual_times = None
+    if solution.residual_times is not None:
+        if len(solution.residual_times) != t.size - 1:
+            msg = 'decimation needs one residual evaluation time per accepted state'
+            raise ValueError(msg)
+        residual_times = [solution.residual_times[i - 1] for i in kept[1:]]
     return replace(
         solution,
         times=[solution.times[i] for i in kept],
         states=[solution.states[i] for i in kept],
         state_rates=rates,
+        residual_times=residual_times,
         rate_state_overrides=(
             None if overrides is None else {j: overrides[i - 1] for j, i in enumerate(kept[1:]) if i - 1 in overrides}
         ),

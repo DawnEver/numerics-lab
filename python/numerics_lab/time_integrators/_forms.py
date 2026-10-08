@@ -200,7 +200,7 @@ class ITimeIntegrator(Protocol):
     def prepare(self, state: IntegratorState, dt: float, t_new: float) -> StepForm: ...
 
     def advance(
-        self, state: IntegratorState, u_new: NDArray[np.floating], dt: float, t_new: float
+        self, state: IntegratorState, u_new: NDArray[np.floating], dt: float, t_new: float, form: StepForm
     ) -> IntegratorState: ...
 
     def restart(self, state: IntegratorState, u: NDArray[np.floating], t: float) -> IntegratorState:
@@ -232,6 +232,9 @@ class TransientSolution:
     #: Actual residual-evaluation rates at committed times[1:], with no invented t0 rate.
     #: None means a producer did not record them; it is NOT an all-zero derivative.
     state_rates: list[NDArray[np.floating]] | None = None
+    #: Actual final-stage residual times at times[1:], including left limits at edges.
+    #: None means unrecorded; consumers must not infer them by tolerant matching.
+    residual_times: list[float] | None = None
     #: Sparse pre-handler residual states keyed by accepted rate index. None is unrecorded;
     #: an empty dict verifies that every published state retains its residual-side value.
     rate_state_overrides: dict[int, NDArray[np.floating]] | None = None

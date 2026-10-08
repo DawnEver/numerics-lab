@@ -73,12 +73,11 @@ import psutil
 import scipy.sparse as sp
 from numpy.typing import NDArray
 
-from motronics.contracts.spec.analysis_formulation import FactorReusableProblem, HistoryProblem
 from motronics.contracts.spec.study_spec import TransientStudy
 from motronics.gauss.linear import solve_linear_system
 from motronics.gauss.time_integrators._forms import IntegratorState, TransientSolution, same_instant
 from motronics.gauss.time_integrators._integrators import get_integrator
-from motronics.gauss.time_integrators._step import HeldFactor, take_step
+from motronics.gauss.time_integrators._step import HeldFactor, ProblemCapabilities, take_step
 from motronics.gauss.time_integrators.factor_reuse import FactorCache
 
 logger = logging.getLogger(__name__)
@@ -231,18 +230,18 @@ def _lte_ratio(
         return 0.0
     pts = history[-(order + 1) :]
     ts = [t for t, _u in pts]
-    pred = np.zeros_like(u_new)
+    pred = np.zeros(u_new.shape, dtype=u_new.dtype)
     for j, (tj, uj) in enumerate(pts):
         w = 1.0
         for m, tm in enumerate(ts):
             if m != j:
                 w *= (t_new - tm) / (tj - tm)
         pred = pred + w * uj
-    span = float(np.prod([t_new - t for t in ts]))
+    span = float(np.multiply.reduce([t_new - t for t in ts]))
     h = t_new - ts[-1]
     lte = error_constant * math.factorial(order + 1) * h ** (order + 1) / span * (u_new - pred)
     scale = tolerance.atol + tolerance.rtol * np.maximum(np.abs(pts[-1][1]), np.abs(u_new))
-    return float(np.max(np.abs(lte) / scale)) if lte.size else 0.0
+    return float((np.abs(lte) / scale).max()) if lte.size else 0.0
 
 
 #: Step-size controller limits: never grow past 2x or shrink below 0.2x in one decision, and aim
@@ -289,6 +288,8 @@ def _rollback(checkpoint: _Checkpoint, solution: TransientSolution) -> Integrato
     del solution.states[checkpoint.n_points :]
     if solution.state_rates is not None:
         del solution.state_rates[max(0, checkpoint.n_points - 1) :]
+    if solution.residual_times is not None:
+        del solution.residual_times[max(0, checkpoint.n_points - 1) :]
     if solution.rate_state_overrides is not None:
         for index in tuple(solution.rate_state_overrides):
             if index >= max(0, checkpoint.n_points - 1):
@@ -351,6 +352,7 @@ def integrate_transient(
     *,
     event_fns: Sequence[Callable[[NDArray[np.floating], float], float]] = (),
     on_event: Callable[[int, float, NDArray[np.floating]], None] | None = None,
+    on_breakpoint: Callable[[float, NDArray[np.floating]], None] | None = None,
     time_breakpoints: Sequence[float] = (),
     v0: NDArray[np.floating] | None = None,
     a0: NDArray[np.floating] | None = None,
@@ -437,7 +439,8 @@ def integrate_transient(
     held = HeldFactor(refactor_every) if refactor_every is not None else None
     emit = _StepLog(step_log)
     started = time.perf_counter()
-    if factor_cache is None and isinstance(problem, FactorReusableProblem):
+    capabilities = ProblemCapabilities.resolve(problem)
+    if factor_cache is None and capabilities.factor_reusable:
         factor_cache = FactorCache()
     integrator = get_integrator(study.integrator)
     h_floor = study.dt * 1e-6 if step_control is None or step_control.h_min is None else step_control.h_min
@@ -449,7 +452,9 @@ def integrate_transient(
         msg = f'time_tol must be finite and positive, got {time_tol!r}'
         raise ValueError(msg)
     bracket_tol = dt * 1.0e-6 if time_tol is None else time_tol
-    solution = TransientSolution(times=[study.t0], states=[u0], state_rates=[], rate_state_overrides={})
+    solution = TransientSolution(
+        times=[study.t0], states=[u0], state_rates=[], residual_times=[], rate_state_overrides={}
+    )
     # The accepted points since the last start/restart: the step-error predictor's history.
     lte_history: list[tuple[float, NDArray]] = [(study.t0, u0)]
     g_prev = [float(g(u0, study.t0)) for g in event_fns]
@@ -484,6 +489,7 @@ def integrate_transient(
     # Whether the MOST RECENT step to each instant failed. A rejected attempt and the shortened steps
     # that later reach the same instant share its time, so the time alone cannot say which one landed.
     latest_failed: dict[float, bool] = {}
+    residual_times: dict[float, float] = {}
     failed_residual: dict[float, float] = {}
     if on_nonconverged not in {'raise', 'label'}:
         msg = f"on_nonconverged must be 'raise' or 'label', got {on_nonconverged!r}"
@@ -503,6 +509,7 @@ def integrate_transient(
             from_state,
             dt_step,
             t_new,
+            capabilities=capabilities,
             endpoint_left=t_new in breakpoint_set,
             solve=solve,
             max_newton=max_newton,
@@ -517,6 +524,7 @@ def integrate_transient(
         )
         check_budget()
         converged, residual, on_floor = out.converged, out.residual, out.on_floor
+        residual_times[t_new] = out.residual_time
         # The convergence contract rides the eventful march too: an exhausted step is labelled on
         # the solution, never silent. But WHICH list it belongs in is not knowable here -- this
         # helper is called both for steps that will land and for bisection probes the rollback
@@ -543,13 +551,15 @@ def integrate_transient(
         solution.states.append(u_new)
         assert solution.state_rates is not None
         solution.state_rates.append(rate)
+        assert solution.residual_times is not None
+        solution.residual_times.append(residual_times[t_new])
         emit('step', t=t_new, dt=t_new - solution.times[-2], index=len(solution.times) - 1)
         check_budget()
         lte_history.append((t_new, u_new))
         del lte_history[: -(integrator.order + 1)]
         # THE STEP JOINED THE TRAJECTORY, so its material history is the one the next step starts
         # from -- including a step labelled non-converged: the march continues from `u_new`.
-        if isinstance(problem, HistoryProblem):
+        if capabilities.history:
             problem.commit_history(u_new, t_new)
         # The step that produced this point recorded any failure against t_new; it landed, so it
         # is a real non-converged STEP. Only the most recent such record is promoted -- an earlier
@@ -616,7 +626,10 @@ def integrate_transient(
             # reached, so it is consumed and the next one examined).
             while bp_index < len(breakpoints) and breakpoints[bp_index] <= state.t:
                 bp_index += 1
-            if bp_index < len(breakpoints) and breakpoints[bp_index] <= t_target:
+            if bp_index < len(breakpoints) and breakpoints[bp_index] <= t_target + bracket_tol:
+                # Prefer the exact declared edge to a nearly coincident nominal
+                # grid point. Land it from the preceding state, not via a tiny
+                # extra step, and never silently consume a known discontinuity.
                 t_target = breakpoints[bp_index]
                 pending_dt = t_target - state.t
                 resume_from = t_target + dt  # the uniform grid continues from the breakpoint
@@ -696,6 +709,17 @@ def integrate_transient(
                     state = probe_state
                     _commit(t_step, u_probe, probe_rate)
                 if bp_index < len(breakpoints) and t_step == breakpoints[bp_index]:
+                    if on_breakpoint is not None:
+                        if solution.nonconverged_times:
+                            msg = 'a physical breakpoint cannot consume a non-converged history'
+                            raise RuntimeError(msg)
+                        before = state.last_u.copy()
+                        on_breakpoint(t_step, state.last_u)
+                        if not np.isfinite(state.last_u).all():
+                            msg = 'a breakpoint handler produced a non-finite state'
+                            raise ValueError(msg)
+                        if not np.array_equal(before, state.last_u):
+                            solution.rate_state_overrides[len(solution.times) - 2] = before
                     # A declared source edge is as nonsmooth as a located state event; no
                     # integrator or error predictor may extrapolate its pre-edge history.
                     state = integrator.restart(state, state.last_u, t_step)
