@@ -9,6 +9,7 @@ import scipy.sparse as sp
 from numpy.typing import NDArray
 
 from motronics.contracts.spec.analysis_formulation import (
+    AffineConstraintProjectionProblem,
     AlternativeJacobianProblem,
     DerivativeWeights,
     FactorReusableProblem,
@@ -269,7 +270,23 @@ def _solve_step(
         else (alternative.jacobian_tangent if alternative is not None else None)
     )
     tangent_helpful = jacobian_tangent is not None or (alternative is not None and alternative.has_tangent_jacobian)
-    u = np.asarray(guess, dtype=float).copy()
+
+    def project_trial(value):
+        value = np.asarray(value, dtype=float)
+        if not isinstance(problem, AffineConstraintProjectionProblem):
+            return value
+        alpha = form.weights.alpha0
+        if alpha.imag != 0 or alpha.real == 0:
+            msg = 'affine state constraint projection requires a nonzero real state weight'
+            raise ValueError(msg)
+        argument = form.u_arg(value)
+        projected = np.asarray(problem.project_affine_state(argument.copy(), form.t_eval))
+        if projected.shape != argument.shape or not np.isrealobj(projected) or not np.isfinite(projected).all():
+            msg = 'affine constraint owner must return a same-shape finite real trial state'
+            raise ValueError(msg)
+        return value + (projected - argument) / alpha.real
+
+    u = project_trial(np.asarray(guess, dtype=float).copy())
     t = form.t_eval
     converged = False
     on_floor = False
@@ -368,7 +385,7 @@ def _solve_step(
         elif max_newton > 1 and backtrack_cap > 0:
             raised = False
             for _ in range(backtrack_cap):
-                u_try = u + step
+                u_try = project_trial(u + step)
                 u_arg, u_dot, u_ddot = form.u_arg(u_try), form.u_dot(u_try), form.u_ddot(u_try)
                 r_try = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
                 limit = residual if backtrack_band is None else backtrack_band * residual
@@ -379,7 +396,7 @@ def _solve_step(
                     break
                 step = 0.5 * step
             else:
-                u = u + step
+                u = project_trial(u + step)
                 capped = True
             if tangent_active and (capped or raised):
                 # THE POLISH IS A TRIAL, NOT A ONE-WAY SWITCH: an alternative operator whose step
@@ -392,7 +409,7 @@ def _solve_step(
                 # t = 4.44 ms step 158 -> 445 over 100 iterations; withheld, it converged in 12.
                 tangent_active, polish_spent, slow = False, True, 0
         else:
-            u = u + step
+            u = project_trial(u + step)
     else:
         # The ceiling exhausted: re-evaluate the residual at the FINAL u (the last solve's
         # result). The loop's last check read the PRE-solve guess -- reporting that would
