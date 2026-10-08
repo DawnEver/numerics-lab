@@ -138,7 +138,16 @@ def sparse_initial_pair(
 
 
 def sparse_complete_initial_rate(
-    jacobian, residual, mass, pair, *, algebraic_rows, partial_time, acceleration_remainder, tolerance=1e-10
+    jacobian,
+    residual,
+    mass,
+    pair,
+    *,
+    algebraic_rows,
+    partial_time,
+    acceleration_remainder,
+    storage_curvature=None,
+    tolerance=1e-10,
 ):
     """Differentiate actual sparse DAE rows again without a dense field nullspace.
 
@@ -149,14 +158,15 @@ def sparse_complete_initial_rate(
     jacobian, mass, algebraic = map(sp.csr_matrix, (jacobian, mass, algebraic_rows))
     residual, partial, remainder = map(np.asarray, (residual, partial_time, acceleration_remainder))
     n = pair.state.size
+    storage_second = np.zeros(n) if storage_curvature is None else np.asarray(storage_curvature)
     if (
         jacobian.shape != (n, n)
         or mass.shape != (n, n)
         or algebraic.shape[1] != n
-        or any(value.shape != (n,) for value in (residual, partial, remainder))
+        or any(value.shape != (n,) for value in (residual, partial, remainder, storage_second))
         or not all(
             np.isfinite(value).all()
-            for value in (jacobian.data, mass.data, algebraic.data, residual, partial, remainder)
+            for value in (jacobian.data, mass.data, algebraic.data, residual, partial, remainder, storage_second)
         )
         or not np.isfinite(tolerance)
         or tolerance <= 0
@@ -179,7 +189,7 @@ def sparse_complete_initial_rate(
     rhs = np.concatenate((
         -residual - mass @ pair.rate,
         -algebraic @ (jacobian @ pair.rate + partial),
-        -partial - jacobian @ pair.rate,
+        -partial - storage_second - jacobian @ pair.rate,
         -algebraic @ remainder,
         np.zeros(anchors.shape[0]),
     ))
