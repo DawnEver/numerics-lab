@@ -154,7 +154,9 @@ def finite_storage_initial_pair(
         actual_mass, actual_jacobian = sp.csr_matrix(mass_at(state)), sp.csr_matrix(jacobian_at(state))
         actual = np.asarray(storage_at(state))[selected]
         residual_defect = np.asarray(residual_at(state, pair.rate))
-        rate_defect = algebraic @ (actual_jacobian @ pair.rate + partial_time_at(state))
+        rate_operator = algebraic @ actual_jacobian
+        rate_forcing = algebraic @ partial_time_at(state)
+        rate_defect = rate_operator @ pair.rate + rate_forcing
         state_scale = np.linalg.norm(actual_jacobian.data) * np.linalg.norm(state) + np.linalg.norm(
             actual_mass @ pair.rate
         )
@@ -163,13 +165,14 @@ def finite_storage_initial_pair(
             + np.linalg.norm(target)
             + np.linalg.norm(actual_mass[selected].data) * np.linalg.norm(state)
         )
-        rate_scale = np.linalg.norm(actual_jacobian.data) * np.linalg.norm(pair.rate) + np.linalg.norm(
-            partial_time_at(state)
-        )
+        # Each differentiated constraint has its own projected units. A free
+        # left-null basis rescaling must scale BOTH its residual and its bound,
+        # and must not hide a different constraint behind a global row norm.
+        rate_scale = np.abs(rate_operator) @ np.abs(pair.rate) + np.abs(rate_forcing)
         if (
             np.linalg.norm(residual_defect) <= tolerance * state_scale
             and np.linalg.norm(actual - target) <= tolerance * storage_scale
-            and np.linalg.norm(rate_defect) <= tolerance * rate_scale
+            and np.all(np.abs(rate_defect) <= tolerance * rate_scale)
         ):
             final_defect = algebraic @ actual_mass
             if np.linalg.norm(final_defect.data) <= tolerance * np.linalg.norm(algebraic.data) * np.linalg.norm(
