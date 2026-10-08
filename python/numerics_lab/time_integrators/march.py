@@ -76,7 +76,7 @@ from numpy.typing import NDArray
 from motronics.contracts.spec.analysis_formulation import FactorReusableProblem, HistoryProblem
 from motronics.contracts.spec.study_spec import TransientStudy
 from motronics.gauss.linear import solve_linear_system
-from motronics.gauss.time_integrators._forms import IntegratorState, TransientSolution
+from motronics.gauss.time_integrators._forms import IntegratorState, TransientSolution, same_instant
 from motronics.gauss.time_integrators._integrators import get_integrator
 from motronics.gauss.time_integrators._step import HeldFactor, take_step
 from motronics.gauss.time_integrators.factor_reuse import FactorCache
@@ -600,6 +600,14 @@ def integrate_transient(
         else:
             t_target = study.t0 + (k + 1) * dt
             pending_dt = dt  # dt exactly (not t_target - state.t, which is off by ulps from dt)
+            if same_instant(t_target, study.t1):
+                # A full nominal cell retains its weights; its time label is the
+                # declared endpoint, not an ULP beyond/before it. A genuinely
+                # partial final cell still uses its true remainder above.
+                t_target = study.t1
+            elif t_target > study.t1:
+                t_target = study.t1
+                pending_dt = t_target - state.t
         k += 1
         events_this_cell = 0
         while True:  # one nominal cell, possibly interrupted by events

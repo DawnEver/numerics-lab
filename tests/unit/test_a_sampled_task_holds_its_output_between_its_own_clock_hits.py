@@ -19,6 +19,7 @@ from motronics.gauss.time_integrators import (
     RateTransition,
     RunBudget,
     SampledTask,
+    ScheduledTask,
     StepTolerance,
     base_sample_time,
     integrate_sampled,
@@ -27,6 +28,53 @@ from motronics.gauss.time_integrators import (
 )
 
 _TAU, _W, _TS = 0.2, 3.0, 0.05
+
+
+def test_an_explicit_nonuniform_clock_holds_between_its_actual_hits() -> None:
+    grid = np.array([0.0, 0.025, 0.075, 0.125])
+    hold, fired = Hold(0.0), []
+
+    def update(t, _state):
+        fired.append(t)
+        hold.value = 1.0 + t
+
+    task = ScheduledTask(grid, update)
+    grid[:] = 99.0  # The schedule owns its declaration, not a caller's mutable buffer.
+    solution = integrate_sampled(
+        _RC(lambda _t: np.array([hold.value])),
+        TransientStudy(t0=0.0, t1=0.125, dt=0.01, integrator=IntegratorKind.TR_BDF2),
+        np.zeros(1),
+        [task],
+        step_control=StepTolerance(rtol=1e-12, atol=1e-14),
+    )
+    assert fired == [0.0, 0.025, 0.075]
+    state = 0.0
+    for start, stop in zip(fired, [0.025, 0.075, 0.125], strict=True):
+        value = 1.0 + start
+        state = value + (state - value) * math.exp(-(stop - start) / _TAU)
+        index = solution.times.index(stop)
+        assert solution.states[index][0] == pytest.approx(state, abs=1e-8, rel=0)
+
+
+@pytest.mark.parametrize('hits', [[0.1, 0.0], [0.0, 0.0], [float('nan')], [float('inf')], [[0.0]]])
+def test_explicit_clocks_refuse_nonfinite_unordered_or_nonscalar_hits(hits) -> None:
+    with pytest.raises(ValueError, match='finite.*strictly increasing'):
+        ScheduledTask(hits, lambda _t, _state: None)
+
+
+def test_explicit_and_periodic_tasks_share_priority_and_exact_window() -> None:
+    fired = []
+    tasks = [
+        SampledTask(0.05, lambda t, _u: fired.append(('inner', t))),
+        ScheduledTask([0.0, 0.05, 0.1], lambda t, _u: fired.append(('outer', t)), priority=-1),
+    ]
+    integrate_sampled(
+        _RC(lambda _t: np.zeros(1)),
+        TransientStudy(t0=0.05, t1=0.1, dt=0.01),
+        np.zeros(1),
+        tasks,
+    )
+    assert fired == [('outer', 0.05), ('inner', 0.05)]
 
 
 class _RC:

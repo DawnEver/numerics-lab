@@ -25,6 +25,7 @@ __all__ = [
     'TransientSolution',
     'residual_floor',
     'residual_floor_of_magnitude',
+    'same_instant',
 ]
 
 
@@ -39,6 +40,11 @@ _FLOOR_SAFETY = 64.0
 
 #: The machine epsilon the floor is written in (double precision -- the marcher is ``float64``).
 _EPS = float(np.finfo(float).eps)
+
+
+def same_instant(a: float, b: float) -> bool:
+    """Join only arithmetic roundoff, not physically distinct clock instants."""
+    return abs(a - b) <= 4 * max(abs(np.spacing(a)), abs(np.spacing(b)))
 
 
 def residual_floor(tangent, u: NDArray[np.floating]) -> float:

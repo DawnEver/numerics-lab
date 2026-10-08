@@ -29,12 +29,20 @@ import numpy as np
 from numpy.typing import NDArray
 
 from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
-from motronics.gauss.time_integrators._forms import TransientSolution
+from motronics.gauss.time_integrators._forms import TransientSolution, same_instant
 from motronics.gauss.time_integrators._integrators import get_integrator
 from motronics.gauss.time_integrators.initial import consistent_initial_condition
 from motronics.gauss.time_integrators.march import BudgetExceeded, integrate_transient
 
-__all__ = ['Hold', 'RateTransition', 'SampledTask', 'base_sample_time', 'integrate_sampled', 'sample_hits']
+__all__ = [
+    'Hold',
+    'RateTransition',
+    'SampledTask',
+    'ScheduledTask',
+    'base_sample_time',
+    'integrate_sampled',
+    'sample_hits',
+]
 
 #: Relative slack for "this instant is a clock hit": far below any physical period ratio, far above
 #: the round-off of ``offset + k * period``.
@@ -48,10 +56,6 @@ def _validate_clock(period: float, offset: float) -> None:
     if not np.isfinite(offset):
         msg = f'a sampled clock needs a finite offset, got {offset!r}'
         raise ValueError(msg)
-
-
-def _same_instant(a: float, b: float) -> bool:
-    return abs(a - b) <= 4 * max(abs(np.spacing(a)), abs(np.spacing(b)))
 
 
 @dataclass
@@ -79,7 +83,43 @@ class SampledTask:
         if not np.isfinite(t):
             return False
         k = round((t - self.offset) / self.period)
-        return k >= 0 and _same_instant(t, self.offset + k * self.period)
+        return k >= 0 and same_instant(t, self.offset + k * self.period)
+
+    @property
+    def order_key(self) -> tuple[int, float]:
+        return self.priority, self.period
+
+    def hits(self, t0: float, t1: float) -> NDArray[np.float64]:
+        return sample_hits(t0, t1, self.period, self.offset)
+
+
+@dataclass(frozen=True)
+class ScheduledTask:
+    """A block on declared, possibly nonuniform instants; no fictitious period.
+
+    Within one priority periodic tasks retain fastest-clock order, followed by
+    explicit schedules in declaration order. Use priority for causal dependencies.
+    Instants are owned and validated once; the study uses exactly [t0, t1).
+    """
+
+    times: Sequence[float]
+    update: Callable[[float, NDArray[np.floating]], None]
+    priority: int = 0
+
+    def __post_init__(self) -> None:
+        times = np.asarray(self.times, dtype=float)
+        if times.ndim != 1 or not np.all(np.isfinite(times)) or np.any(np.diff(times) <= 0):
+            msg = 'scheduled instants must be finite, scalar and strictly increasing'
+            raise ValueError(msg)
+        object.__setattr__(self, 'times', tuple(float(t) for t in times))
+
+    @property
+    def order_key(self) -> tuple[int, float]:
+        return self.priority, float('inf')
+
+    def hits(self, t0: float, t1: float) -> NDArray[np.float64]:
+        times = np.asarray(self.times, dtype=float)
+        return times[(times >= t0) & (times < t1)]
 
 
 @dataclass
@@ -146,7 +186,7 @@ def integrate_sampled(
     problem,
     study: TransientStudy,
     u0: NDArray[np.floating],
-    tasks: Sequence[SampledTask],
+    tasks: Sequence[SampledTask | ScheduledTask],
     *,
     consistent_start: bool = False,
     **march,
@@ -164,18 +204,14 @@ def integrate_sampled(
     if consistent_start and study.integrator in (IntegratorKind.NEWMARK, IntegratorKind.GENERALIZED_ALPHA):
         msg = 'consistent_start initializes first-order rates, not second-order acceleration'
         raise ValueError(msg)
-    order = sorted(tasks, key=lambda task: (task.priority, task.period))
-    scheduled = sorted(
-        (float(h), index)
-        for index, task in enumerate(order)
-        for h in sample_hits(study.t0, study.t1, task.period, task.offset)
-    )
+    order = sorted(tasks, key=lambda task: task.order_key)
+    scheduled = sorted((float(h), index) for index, task in enumerate(order) for h in task.hits(study.t0, study.t1))
     hits: list[float] = []
     due: list[set[int]] = []
     for hit, index in scheduled:
         # Only arithmetic roundoff joins clock instants; the much wider hit-recognition
         # tolerance must not merge physically distinct offsets or fire a task at another clock.
-        if hits and _same_instant(hit, hits[-1]):
+        if hits and same_instant(hit, hits[-1]):
             due[-1].add(index)
         else:
             hits.append(hit)
