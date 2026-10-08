@@ -24,7 +24,8 @@ class _Forced:
 
 
 @pytest.mark.parametrize('adaptive', [False, True])
-def test_right_state_projection_preserves_left_rate_and_bootstraps_from_right(adaptive):
+@pytest.mark.parametrize('eventful', [False, True])
+def test_right_state_projection_preserves_left_rate_and_bootstraps_from_right(adaptive, eventful):
     class Algebraic:
         forcing = 0.0
 
@@ -46,7 +47,8 @@ def test_right_state_projection_preserves_left_rate_and_bootstraps_from_right(ad
         assert not state.flags.writeable
         return np.array([state[0], problem.forcing])
 
-    solution = integrate_transient(
+    march = integrate_transient_with_events if eventful else integrate_transient
+    solution = march(
         problem,
         TransientStudy(t0=0.0, t1=0.2, dt=0.1, integrator=IntegratorKind.BDF2),
         np.zeros(2),
@@ -61,7 +63,8 @@ def test_right_state_projection_preserves_left_rate_and_bootstraps_from_right(ad
 
 
 @pytest.mark.parametrize('adaptive', [False, True])
-def test_live_breakpoint_created_on_accept_is_not_skipped(adaptive):
+@pytest.mark.parametrize('eventful', [False, True])
+def test_live_breakpoint_created_on_accept_is_not_skipped(adaptive, eventful):
     deadlines = []
     observed = []
 
@@ -73,7 +76,8 @@ def test_live_breakpoint_created_on_accept_is_not_skipped(adaptive):
             deadlines.append(0.007)
         return False
 
-    solution = integrate_transient(
+    march = integrate_transient_with_events if eventful else integrate_transient
+    solution = march(
         _Forced(),
         TransientStudy(t0=0.0, t1=0.1, dt=0.1, integrator=IntegratorKind.BDF2),
         np.zeros(1),

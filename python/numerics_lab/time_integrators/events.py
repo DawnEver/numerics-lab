@@ -71,7 +71,7 @@ from motronics.gauss.time_integrators import (
     get_integrator,
 )
 from motronics.gauss.time_integrators._forms import IntegratorState, TransientSolution
-from motronics.gauss.time_integrators._landing import accepted_observation
+from motronics.gauss.time_integrators._landing import accepted_observation, accepted_projection, next_deadline
 from motronics.gauss.time_integrators._step import HeldFactor
 
 logger = logging.getLogger(__name__)
@@ -220,6 +220,8 @@ def integrate_transient_with_events(
     refine: float | None = None,
     refactor_every: int | None = None,
     on_accept: Callable[[float, NDArray[np.floating]], bool] | None = None,
+    next_breakpoint: Callable[[float], float | None] | None = None,
+    project_accepted_state: Callable[[float, NDArray[np.floating]], NDArray[np.floating]] | None = None,
 ) -> EventfulTransientSolution:
     """March ``problem`` over ``study``, stopping the grid at every zero of ``event_fns``.
 
@@ -290,6 +292,9 @@ def integrate_transient_with_events(
     if factor_cache is None and isinstance(problem, FactorReusableProblem):
         factor_cache = FactorCache()
     integrator = get_integrator(study.integrator)
+    if project_accepted_state is not None and (on_accept is None or integrator.name not in ('bdf1', 'bdf2')):
+        msg = 'accepted state projection requires an accepted observer and BDF1 or BDF2'
+        raise ValueError(msg)
     u0 = np.asarray(u0, dtype=float)
     state = integrator.start(u0, study.t0, v0, a0)
     dt = study.dt
@@ -298,8 +303,10 @@ def integrate_transient_with_events(
         raise ValueError(msg)
     bracket_tol = dt * 1.0e-6 if time_tol is None else time_tol
     solution = EventfulTransientSolution(times=[study.t0], states=[u0], state_rates=[], rate_state_overrides={})
-    if on_accept is not None:
-        accepted_observation(on_accept, study.t0, u0)
+    if on_accept is not None and accepted_observation(on_accept, study.t0, u0):
+        u0 = accepted_projection(project_accepted_state, study.t0, u0)
+        state = integrator.start(u0, study.t0, state.v, state.a)
+        solution.states[0] = u0
     g_prev = [float(g(u0, study.t0)) for g in event_fns]
     prev_dt: float | None = None
     breakpoints = tuple(time_breakpoints)
@@ -386,7 +393,11 @@ def integrate_transient_with_events(
         solution.state_rates.append(rate)
         if observe and on_accept is not None and accepted_observation(on_accept, t_new, u_new):
             solution.accepted_discontinuities.append(t_new)
-            state = integrator.start(u_new, t_new, state.v, state.a)
+            right_state = accepted_projection(project_accepted_state, t_new, u_new)
+            if project_accepted_state is not None:
+                solution.rate_state_overrides[len(solution.state_rates) - 1] = u_new.copy()
+                solution.states[-1] = right_state
+            state = integrator.start(right_state, t_new, state.v, state.a)
             prev_dt = None
         # The step that produced this point recorded any failure against t_new; it landed, so it
         # is a real non-converged STEP. Only the most recent such record is promoted -- an earlier
@@ -443,6 +454,11 @@ def integrate_transient_with_events(
                 t_target = breakpoints[bp_index]
                 pending_dt = t_target - state.t
                 resume_from = t_target + dt  # the uniform grid continues from the breakpoint
+            deadline = next_deadline(next_breakpoint, state.t, t_target)
+            if deadline < t_target:
+                t_target = deadline
+                pending_dt = t_target - state.t
+                resume_from = t_target + dt
             checkpoint = _take_checkpoint(state, prev_dt, solution)
             t_from = state.t
             step_dt = pending_dt
@@ -503,7 +519,7 @@ def integrate_transient_with_events(
                                             state = mid_state
                                             prev_dt = h2
                                             _commit(t_mid, u_mid, mid_rate)
-                                            g_prev = [float(g(u_mid, t_mid)) for g in event_fns]
+                                            g_prev = [float(g(state.last_u, t_mid)) for g in event_fns]
                                             pending_dt = t_target - state.t
                                             continue
                                         # Accept the two half-steps instead of the full step.
@@ -519,7 +535,7 @@ def integrate_transient_with_events(
                 state = probe_state
                 prev_dt = step_dt
                 _commit(t_step, u_probe, probe_rate)
-                g_prev = g_new
+                g_prev = [float(g(state.last_u, t_step)) for g in event_fns]
                 if t_step < t_target - bracket_tol:
                     # A SHORTENED step landed inside the cell: the cell is not finished, so the
                     # march continues toward the same nominal target with the true remainder.
@@ -603,7 +619,7 @@ def integrate_transient_with_events(
                 state = probe_state
                 prev_dt = step_dt
                 _commit(t_step, u_probe, probe_rate)
-                g_prev = g_new
+                g_prev = [float(g(state.last_u, t_step)) for g in event_fns]
                 if t_step < t_target - bracket_tol:
                     pending_dt = t_target - state.t
                     continue
@@ -650,6 +666,14 @@ def integrate_transient_with_events(
             prev_dt = None
             if on_accept is not None and accepted_observation(on_accept, t_star, u_star):
                 solution.accepted_discontinuities.append(t_star)
+            if project_accepted_state is not None:
+                right_state = accepted_projection(project_accepted_state, t_star, u_star)
+                rate_index = len(solution.state_rates) - 1
+                if t_star > t_from and rate_index not in solution.rate_state_overrides:
+                    solution.rate_state_overrides[rate_index] = u_star.copy()
+                solution.states[-1] = right_state
+                u_star = right_state
+                state = integrator.start(right_state, t_star, state.v, state.a)
             g_prev = [float(g(u_star, t_star)) for g in event_fns]
             pending_dt = t_target - t_star  # the genuine remainder of this cell
             events_this_cell += 1
