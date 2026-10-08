@@ -43,6 +43,7 @@ from motronics.contracts.spec.analysis_formulation import (
     SemiDiscreteProblem,
 )
 from motronics.contracts.spec.study_spec import TransientStudy
+from motronics.gauss.time_integrators._fixed_lattice import fixed_lattice_step_size, fixed_lattice_targets
 from motronics.gauss.time_integrators._forms import _FLOOR_SAFETY as _FLOOR_SAFETY
 from motronics.gauss.time_integrators._forms import (
     IntegratorState,
@@ -222,15 +223,26 @@ def integrate_transient(
     if steady_atol < 0 or steady_rtol < 0 or not np.isfinite(steady_atol + steady_rtol):
         msg = 'steady tolerances must be finite and nonnegative'
         raise ValueError(msg)
+    if (
+        checkpoint_key is not None
+        and not adaptive
+        and eec_period is None
+        and step_times is None
+        and step_origin is None
+    ):
+        step_origin = study.t0 if restart is None else restart.step_origin
+        if step_origin is None:
+            msg = 'fixed checkpoint restart requires its original parent step_origin'
+            raise ValueError(msg)
     if step_origin is not None and (
-        step_times is None
+        adaptive
         or isinstance(step_origin, bool)
         or not isinstance(step_origin, Real)
         or not np.isfinite(step_origin)
         or step_origin > study.t0
         or eec_period is not None
     ):
-        msg = 'step_origin requires an explicit finite fixed schedule without EEC'
+        msg = 'step_origin requires a finite fixed parent lattice without EEC'
         raise ValueError(msg)
     if restart is not None and restart.step_origin != step_origin:
         msg = 'checkpoint step_origin does not match the explicit schedule'
@@ -503,6 +515,8 @@ def integrate_transient(
         if step_times is not None
         else [target_origin + (first_tick + k + 1) * dt for k in range(n_steps)] + ([study.t1] if has_remainder else [])
     )
+    if step_times is None and step_origin is not None:
+        targets = fixed_lattice_targets(step_origin, study.t0, study.t1, study.dt)
     if step_times is None and (not targets or study.t1 - targets[-1] > 1e-12 * max(dt, abs(study.t1 - study.t0))):
         targets.append(study.t1)
     next_correction = (
@@ -558,9 +572,13 @@ def integrate_transient(
 
     for t_new in live_targets(targets, lambda: state.t, next_breakpoint):
         dt = (
-            study.dt
-            if next_breakpoint is None and step_times is None and not (has_remainder and t_new == targets[-1])
-            else t_new - state.t
+            fixed_lattice_step_size(step_origin, state.t, t_new, study.dt)
+            if step_origin is not None and step_times is None
+            else (
+                study.dt
+                if next_breakpoint is None and step_times is None and not (has_remainder and t_new == targets[-1])
+                else t_new - state.t
+            )
         )
         if integrator.name == 'bdf2' and len(state.us) >= 2 and dt != previous_dt:
             form = _bdf2_variable_form(state, dt, previous_dt, t_new)

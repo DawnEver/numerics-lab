@@ -88,6 +88,30 @@ def test_bdf2_restart_matches_an_uninterrupted_march():
     np.testing.assert_allclose(last.states, whole.states[5:], rtol=1e-13, atol=1e-14)
 
 
+def test_fixed_json_restart_preserves_absolute_parent_products_exactly():
+    dt = 0.25e-6
+    split = 10 * dt
+    end = 20 * dt
+    whole = integrate_transient(
+        DecayProblem(1.0), TransientStudy(0.0, end, dt), np.array([1.0]), checkpoint_key='decay'
+    )
+    first = integrate_transient(
+        DecayProblem(1.0), TransientStudy(0.0, split, dt), np.array([1.0]), checkpoint_key='decay'
+    )
+    restored = TransientCheckpoint.from_mapping(json.loads(json.dumps(first.checkpoint.to_mapping())))
+    resumed = integrate_transient(
+        DecayProblem(1.0),
+        TransientStudy(split, end, dt),
+        first.states[-1],
+        checkpoint_key='decay',
+        restart=restored,
+    )
+    assert restored.step_origin == 0.0
+    assert resumed.times == whole.times[10:]
+    assert np.array_equal(resumed.states, whole.states[10:])
+    assert resumed.checkpoint.to_mapping() == whole.checkpoint.to_mapping()
+
+
 def test_restart_refuses_a_different_integrator():
     record = TransientCheckpoint('decay', 'bdf2', 0.2, 0.1, ((1.0,), (0.9,)))
     with pytest.raises(ValueError, match='does not match'):
