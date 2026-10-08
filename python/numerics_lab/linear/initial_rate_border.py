@@ -104,6 +104,22 @@ def complete_rate_border(
     answer_scaled, free_scaled = border_affine_space(reduced / column_norms, forcing)
     answer = answer_scaled / column_norms
     correction = np.asarray(mapping @ answer).ravel() + base
+    # Re-evaluate the actual stored equations with the final border values.
+    # Summing base and sensitivity solves can lose a small prescribed
+    # acceleration between huge opposing storage/source contributions.
+    stored_rhs = (
+        acceleration_rhs[rows]
+        - jacobian[rows] @ correction[:n]
+        - mass[rows][:, free_acceleration] @ correction[n + free_acceleration]
+    )
+    stored_block = mass[rows][:, columns]
+    stored_acceleration = factor.solve(stored_rhs)
+    for _ in range(3):
+        stored_defect = stored_rhs - stored_block @ stored_acceleration
+        if not np.any(stored_defect):
+            break
+        stored_acceleration += factor.solve(stored_defect)
+    correction[n + columns] = stored_acceleration
     defect = matrix @ correction - rhs
     scale = np.asarray(abs(matrix) @ abs(correction)).ravel() + abs(rhs) + evaluation_scale
     if np.any(abs(defect) > tolerance * scale):
