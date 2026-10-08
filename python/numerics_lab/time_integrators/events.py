@@ -251,6 +251,7 @@ def integrate_transient_with_events(
     factor_cache: FactorCache | None = None,
     backtrack_band: float | None = None,
     backtrack_cap: int = 8,
+    line_search: str = 'backtrack',
     gmin_stages: tuple[float, ...] | None = None,
     adaptive: bool = False,
     h_min: float | None = None,
@@ -345,7 +346,7 @@ def integrate_transient_with_events(
     minimum_step = dt / 1000 if h_min is None else h_min
     directions = tuple(surface.direction if isinstance(surface, EventSurface) else 0 for surface in event_fns)
     locator_policy = EventCheckpointState(
-        dt, bracket_tol, adaptive, minimum_step, refine, 0, None, None, 0, (), directions
+        dt, bracket_tol, adaptive, minimum_step, refine, 0, None, None, 0, (), directions, line_search
     )
     if on_checkpoint is not None and checkpoint_key is None:
         msg_0 = 'on_checkpoint requires checkpoint_key'
@@ -360,7 +361,7 @@ def integrate_transient_with_events(
         if saved_cursor is None:
             msg_0 = 'eventful restart requires its actual locator clocks'
             raise ValueError(msg_0)
-        policy = (dt, bracket_tol, adaptive, minimum_step, refine, directions)
+        policy = (dt, bracket_tol, adaptive, minimum_step, refine, directions, line_search)
         saved_policy = (
             saved_cursor.step_dt,
             saved_cursor.bracket_tolerance,
@@ -368,6 +369,7 @@ def integrate_transient_with_events(
             saved_cursor.minimum_step,
             saved_cursor.refine,
             saved_cursor.surface_directions,
+            saved_cursor.line_search,
         )
         if policy != saved_policy:
             msg_0 = 'eventful restart does not match its actual step and surface policies'
@@ -440,6 +442,7 @@ def integrate_transient_with_events(
             factor_cache=factor_cache,
             backtrack_band=backtrack_band,
             backtrack_cap=backtrack_cap,
+            line_search=line_search,
             gmin_stages=gmin_stages,
             held=held,
         )

@@ -17,6 +17,7 @@ class EventCheckpointState:
     pending_events: int
     last_fired: tuple[tuple[int, float], ...]
     surface_directions: tuple[int, ...]
+    line_search: str = 'backtrack'
 
     def __post_init__(self) -> None:
         for value in (self.step_dt, self.bracket_tolerance, self.minimum_step):
@@ -34,6 +35,9 @@ class EventCheckpointState:
             raise ValueError(msg)
         if type(self.adaptive) is not bool:
             msg = 'event checkpoint adaptive policy must be a boolean'
+            raise ValueError(msg)
+        if self.line_search not in ('backtrack', 'directional'):
+            msg = 'event checkpoint requires its actual supported line-search policy'
             raise ValueError(msg)
         if any(type(value) is not int or value < 0 for value in (self.nominal_index, self.pending_events)):
             msg = 'event checkpoint cell counters must be nonnegative integers'

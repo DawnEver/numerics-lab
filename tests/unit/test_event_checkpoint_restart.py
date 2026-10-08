@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
+from motronics.gauss.time_integrators import events
 from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint
 from motronics.gauss.time_integrators.events import EventSurface, integrate_transient_with_events
 
@@ -100,3 +101,24 @@ def test_live_locator_and_persisted_cursor_share_the_same_strict_step_policy(con
             np.array([0.0]),
             **controls,
         )
+
+
+@pytest.mark.parametrize('strategy', ['backtrack', 'directional'])
+def test_actual_event_step_and_checkpoint_preserve_the_declared_history_line_search(monkeypatch, strategy):
+    seen = []
+    original = events._solve_step
+
+    def observe(*args, **kwargs):
+        seen.append(kwargs['line_search'])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(events, '_solve_step', observe)
+    solution = integrate_transient_with_events(
+        _StoredRamp(),
+        TransientStudy(0, 0.2, 0.1, IntegratorKind.BDF2),
+        np.array([0.0]),
+        line_search=strategy,
+        checkpoint_key='declared-ramp',
+    )
+    assert seen and all(value == strategy for value in seen)
+    assert solution.checkpoint.event_state.line_search == strategy
