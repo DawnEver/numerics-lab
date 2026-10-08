@@ -10,6 +10,7 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import splu
 
 from motronics.gauss.linear.initial_sparse import sparse_initial_pair
+from motronics.gauss.nonlinear import AssembledState, NewtonStrategy
 
 
 class StorageRateAuthorityRequired(ValueError):
@@ -31,42 +32,84 @@ def finite_storage_right_state(
         msg = 'finite storage projection requires finite state and positive iteration controls'
         raise ValueError(msg)
     algebraic, selected = storage_rows.algebraic_rows, storage_rows.stored_rows
-    target = np.asarray(storage_at(initial))[selected]
-    state = initial.copy()
-    for _iteration in range(max_newton):
-        mass = sp.csr_matrix(mass_at(state))
-        defect = algebraic @ mass
-        if np.linalg.norm(defect.data) > tolerance * np.linalg.norm(algebraic.data) * np.linalg.norm(mass.data):
+    system = _FiniteRightSystem(initial, residual_at, jacobian_at, mass_at, storage_at, algebraic, selected, tolerance)
+    result = NewtonStrategy().solve(system, max_iter=max_newton, rtol_energy_pct=tolerance * 100)
+    final = system.assemble(result.x)
+    reference = np.linalg.norm(final.system_matrix.data) * np.linalg.norm(result.x) + system.rhs_norm(final)
+    if not result.converged or system.residual_norm(result.x, final) > tolerance * reference:
+        msg = 'actual finite stored-coordinate projection did not converge'
+        raise ValueError(msg)
+    return result.x
+
+
+class _FiniteRightSystem:
+    """Physical constraints supplied to the sole shared line-search Newton owner."""
+
+    is_linear = False
+
+    def __init__(self, initial, residual, jacobian, mass, storage, algebraic, selected, tolerance) -> None:
+        self.initial, self.evaluate_residual, self.evaluate_jacobian = initial, residual, jacobian
+        self.evaluate_mass, self.evaluate_storage = mass, storage
+        self.algebraic, self.selected, self.tolerance = algebraic, selected, tolerance
+        self.target = np.asarray(storage(initial))[selected]
+        matrix = self._matrix(initial)
+        norms = np.sqrt(np.asarray(matrix.multiply(matrix).sum(axis=1)).ravel())
+        self.scale = np.where(norms == 0, 1, norms)
+        self.source_norm = np.linalg.norm((sp.diags(1 / self.scale) @ matrix).data) * np.linalg.norm(
+            initial
+        ) + np.linalg.norm(self._residual(initial) / self.scale)
+
+    def _matrix(self, state):
+        mass = sp.csr_matrix(self.evaluate_mass(state))
+        defect = self.algebraic @ mass
+        if np.linalg.norm(defect.data) > self.tolerance * np.linalg.norm(self.algebraic.data) * np.linalg.norm(
+            mass.data
+        ):
             msg = 'finite storage nullspace changed; its actual nonlinear coordinate owner is required'
             raise ValueError(msg)
-        jacobian = sp.csr_matrix(jacobian_at(state))
-        residual = np.asarray(residual_at(state))
-        stored = np.asarray(storage_at(state))[selected]
-        matrix = sp.vstack((algebraic @ jacobian, mass[selected]), format='csr')
-        rhs = np.concatenate((-algebraic @ residual, target - stored))
-        scale = np.sqrt(np.asarray(matrix.multiply(matrix).sum(axis=1)).ravel())
-        scale[scale == 0] = 1
-        normalized, normalized_rhs = sp.diags(1 / scale) @ matrix, rhs / scale
+        return sp.vstack(
+            (self.algebraic @ sp.csr_matrix(self.evaluate_jacobian(state)), mass[self.selected]), format='csr'
+        )
+
+    def _residual(self, state):
+        return np.concatenate((
+            self.algebraic @ self.evaluate_residual(state),
+            np.asarray(self.evaluate_storage(state))[self.selected] - self.target,
+        ))
+
+    def initial_guess(self):
+        return self.initial.copy()
+
+    def assemble(self, state):
+        matrix = sp.diags(1 / self.scale) @ self._matrix(state)
+        residual = self._residual(state) / self.scale
+        return AssembledState(matrix, 0.5 * float(residual @ residual), payload=residual)
+
+    def residual(self, state, assembled):
+        return assembled.payload
+
+    def residual_norm(self, state, assembled):
+        return float(np.linalg.norm(assembled.payload))
+
+    def rhs_norm(self, assembled):
+        return self.source_norm
+
+    def tangent(self, state, assembled):
+        return assembled.system_matrix
+
+    def solve_system(self, matrix, rhs):
         try:
-            correction = splu(normalized.tocsc()).solve(normalized_rhs)
+            return splu(matrix.tocsc()).solve(rhs)
         except RuntimeError as error:
             msg = 'finite stored-coordinate projection lacks a nonsingular physical algebraic subsystem'
             raise StorageRateAuthorityRequired(msg) from error
-        state += correction
-        if not np.isfinite(state).all():
-            msg = 'finite storage projection produced a nonfinite physical state'
-            raise ValueError(msg)
-        actual = np.concatenate((algebraic @ residual_at(state), np.asarray(storage_at(state))[selected] - target))
-        reference = np.linalg.norm(normalized.data) * np.linalg.norm(state) + np.linalg.norm(normalized_rhs)
-        if np.linalg.norm(actual / scale) <= tolerance * reference:
-            final_mass = sp.csr_matrix(mass_at(state))
-            final_defect = algebraic @ final_mass
-            if np.linalg.norm(final_defect.data) <= tolerance * np.linalg.norm(algebraic.data) * np.linalg.norm(
-                final_mass.data
-            ):
-                return state
-    msg = 'actual finite stored-coordinate projection did not converge'
-    raise ValueError(msg)
+
+    def solve_linear(self, assembled):
+        msg = 'finite stored coordinates require the actual nonlinear Newton owner'
+        raise TypeError(msg)
+
+    def on_iteration(self, index, assembled, error, alpha, increment):
+        pass
 
 
 def finite_storage_initial_pair(
