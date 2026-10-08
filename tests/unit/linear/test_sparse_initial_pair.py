@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear.initial_sparse import sparse_initial_pair
+from motronics.gauss.linear.initial_sparse import sparse_complete_initial_rate, sparse_initial_pair
 from motronics.gauss.linear.storage_border import storage_border_rows
 
 
@@ -25,6 +25,31 @@ def test_an_ideal_source_current_rate_is_not_a_physical_zero_derivative():
     np.testing.assert_array_equal(pair.rate_is_unique, [True, False])
 
 
+def test_declared_curvature_proves_source_current_rate_without_an_acceleration_guess():
+    jacobian, mass, algebraic = [[3.0, 1.0], [1.0, 0.0]], [[4.0, 0.0], [0.0, 0.0]], [[0.0, 1.0]]
+    pair = sparse_initial_pair(
+        jacobian,
+        [6.0, 0.0],
+        mass,
+        [2.0, 0.0],
+        algebraic_rows=algebraic,
+        stored_rows=[0],
+        partial_time=[0.0, -5.0],
+    )
+    proven = sparse_complete_initial_rate(
+        jacobian,
+        [-20.0, 0.0],
+        mass,
+        pair,
+        algebraic_rows=algebraic,
+        partial_time=[0.0, -5.0],
+        acceleration_remainder=[0.0, -2.0],
+    )
+    np.testing.assert_allclose(proven.state, pair.state)
+    np.testing.assert_allclose(proven.rate, [5.0, -23.0])
+    assert proven.rate_is_unique.all()
+
+
 def test_sparse_initial_pair_never_densifies_a_large_differential_field(monkeypatch):
     def refuse_dense(*_args, **_kwargs):
         pytest.fail('field-sized dense initial decomposition is forbidden')
@@ -43,6 +68,17 @@ def test_sparse_initial_pair_never_densifies_a_large_differential_field(monkeypa
     np.testing.assert_allclose(pair.state, 1.0)
     np.testing.assert_allclose(pair.rate, -2.0)
     assert pair.rate_is_unique.all()
+    proven = sparse_complete_initial_rate(
+        2 * sp.eye(n, format='csr'),
+        np.full(n, 2.0),
+        sp.eye(n, format='csr'),
+        pair,
+        algebraic_rows=sp.csr_matrix((0, n)),
+        partial_time=np.zeros(n),
+        acceleration_remainder=np.zeros(n),
+    )
+    np.testing.assert_allclose(proven.rate, pair.rate)
+    assert proven.rate_is_unique.all()
 
 
 def test_sparse_projection_does_not_guess_an_undetermined_current_split():

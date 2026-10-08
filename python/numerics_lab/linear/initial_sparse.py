@@ -124,3 +124,74 @@ def sparse_initial_pair(
         msg = 'declared storage rank decomposition does not preserve actual stored state'
         raise ValueError(msg)
     return SparseInitialPair(initial + pair[:n], pair[n:], nonzero[n:].copy())
+
+
+def sparse_complete_initial_rate(
+    jacobian, residual, mass, pair, *, algebraic_rows, partial_time, acceleration_remainder, tolerance=1e-10
+):
+    """Differentiate actual sparse DAE rows again without a dense field nullspace.
+
+    Preserve proven rates, solve the actual acceleration equations, and retain
+    unknown acceleration coordinates only as explicit non-authoritative values.
+    Structurally free rate columns remain unknown, never guessed as physical zero.
+    """
+    jacobian, mass, algebraic = map(sp.csr_matrix, (jacobian, mass, algebraic_rows))
+    residual, partial, remainder = map(np.asarray, (residual, partial_time, acceleration_remainder))
+    n = pair.state.size
+    if (
+        jacobian.shape != (n, n)
+        or mass.shape != (n, n)
+        or algebraic.shape[1] != n
+        or any(value.shape != (n,) for value in (residual, partial, remainder))
+        or not all(
+            np.isfinite(value).all()
+            for value in (jacobian.data, mass.data, algebraic.data, residual, partial, remainder)
+        )
+        or not np.isfinite(tolerance)
+        or tolerance <= 0
+    ):
+        msg = 'sparse differentiated rates require finite declared actual operators and curvature'
+        raise ValueError(msg)
+    zero = sp.csr_matrix((n, n))
+    algebraic_zero = sp.csr_matrix(algebraic.shape)
+    anchors = sp.eye(n, format='csr')[np.flatnonzero(pair.rate_is_unique)]
+    matrix = sp.bmat(
+        [
+            [mass, zero],
+            [algebraic @ jacobian, algebraic_zero],
+            [jacobian, mass],
+            [algebraic_zero, algebraic @ jacobian],
+            [anchors, sp.csr_matrix(anchors.shape)],
+        ],
+        format='csr',
+    )
+    rhs = np.concatenate((
+        -residual - mass @ pair.rate,
+        -algebraic @ (jacobian @ pair.rate + partial),
+        -partial - jacobian @ pair.rate,
+        -algebraic @ remainder,
+        np.zeros(anchors.shape[0]),
+    ))
+    matrix.eliminate_zeros()
+    scale = np.sqrt(np.asarray(matrix.multiply(matrix).sum(axis=1)).ravel())
+    scale[scale == 0] = 1
+    matrix, rhs = sp.diags(1 / scale) @ matrix, rhs / scale
+    nonzero = np.asarray(matrix.getnnz(axis=0)).ravel() != 0
+    selected = np.flatnonzero(nonzero)
+    reduced = matrix[:, selected].tocsr()
+    rows = maximum_bipartite_matching(reduced, perm_type='row')
+    if np.any(rows < 0):
+        msg = 'differentiated sparse rates need additional physical acceleration authority'
+        raise NotImplementedError(msg)
+    try:
+        factor = splu(reduced[rows].tocsc())
+    except RuntimeError as error:
+        msg = 'differentiated sparse rates lack a proven nonsingular acceleration subsystem'
+        raise NotImplementedError(msg) from error
+    correction = np.zeros(2 * n)
+    correction[selected] = factor.solve(rhs[rows])
+    bar = tolerance * (np.linalg.norm(matrix.data) * np.linalg.norm(correction) + np.linalg.norm(rhs))
+    if np.linalg.norm(matrix @ correction - rhs) > bar:
+        msg = 'declared curvature contradicts actual sparse differentiated DAE constraints'
+        raise ValueError(msg)
+    return SparseInitialPair(pair.state, pair.rate + correction[:n], nonzero[:n])
