@@ -4,6 +4,8 @@ import numpy as np
 from scipy.linalg import null_space
 from scipy.sparse import csr_matrix
 
+from motronics.gauss.linear.initial_sparse import SparseInitialPair
+
 
 def initial_subspaces(mass, extra_rate_columns):
     """Numerically scaled algebraic rows and differential-state coordinates."""
@@ -144,4 +146,5 @@ def linear_dae_initial_pair(jacobian, residual, mass, initial, *, partial_time, 
     if np.linalg.norm(free[:n]) > rank_bar or np.linalg.norm(normalized_mass @ free[n:]) > rank_bar:
         msg = 'initial state or stored-state rate requires additional physical initial authority'
         raise ValueError(msg)
-    return initial + pair[:n], pair[n:]
+    unique_rate = np.linalg.norm(free[n:], axis=1) <= rank_bar
+    return SparseInitialPair(initial + pair[:n], pair[n:], unique_rate)

@@ -14,6 +14,31 @@ class SparseInitialPair:
     rate: np.ndarray
     rate_is_unique: np.ndarray
 
+    def __post_init__(self) -> None:
+        state, rate, unique = np.asarray(self.state), np.asarray(self.rate), np.asarray(self.rate_is_unique)
+        if (
+            state.ndim != 1
+            or rate.shape != state.shape
+            or unique.shape != state.shape
+            or unique.dtype != np.dtype(bool)
+        ):
+            msg = 'initial pair requires aligned state/rate and explicit boolean uniqueness authority'
+            raise ValueError(msg)
+        if not np.isfinite(state).all() or not np.isfinite(rate[unique]).all():
+            msg = 'initial pair requires finite physical state and every proven rate'
+            raise ValueError(msg)
+        for name, value in (('state', state), ('rate', rate), ('rate_is_unique', unique)):
+            owned = value.copy()
+            owned.setflags(write=False)
+            object.__setattr__(self, name, owned)
+
+    @property
+    def physical_rate(self):
+        """Proven component rates; unknown algebraic coordinates are explicitly unavailable."""
+        value = np.where(self.rate_is_unique, self.rate, np.nan)
+        value.setflags(write=False)
+        return value
+
 
 def sparse_initial_pair(
     jacobian, residual, mass, initial, *, algebraic_rows, stored_rows, partial_time, tolerance=1e-10
