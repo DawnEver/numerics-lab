@@ -7,6 +7,8 @@ import scipy.sparse as sp
 from scipy.sparse.csgraph import maximum_bipartite_matching
 from scipy.sparse.linalg import splu
 
+from motronics.gauss.linear.initial_rate_border import complete_rate_border
+
 
 @dataclass(frozen=True)
 class SparseInitialPair:
@@ -209,6 +211,8 @@ def sparse_complete_initial_rate(
     partial_time,
     acceleration_remainder,
     storage_curvature=None,
+    stored_rows=None,
+    stored_columns=None,
     tolerance=1e-10,
 ):
     """Differentiate actual sparse DAE rows again without a dense field nullspace.
@@ -259,6 +263,34 @@ def sparse_complete_initial_rate(
     scale = np.sqrt(np.asarray(matrix.multiply(matrix).sum(axis=1)).ravel())
     scale[scale == 0] = 1
     matrix, rhs = sp.diags(1 / scale) @ matrix, rhs / scale
+    if stored_rows is not None or stored_columns is not None:
+        if stored_rows is None or stored_columns is None:
+            msg = 'stored acceleration requires both actual independent rows and columns'
+            raise ValueError(msg)
+        evaluation_scale = (
+            np.concatenate((
+                abs(residual) + abs(mass) @ abs(pair.rate),
+                abs(algebraic) @ (abs(jacobian) @ abs(pair.rate) + abs(partial)),
+                abs(partial) + abs(storage_second) + abs(jacobian) @ abs(pair.rate),
+                abs(algebraic) @ abs(remainder),
+                np.zeros(anchors.shape[0]),
+            ))
+            / scale
+        )
+        correction, unique = complete_rate_border(
+            matrix,
+            rhs,
+            mass=mass,
+            jacobian=jacobian,
+            acceleration_rhs=-partial - storage_second - jacobian @ pair.rate,
+            rate_is_unique=pair.rate_is_unique,
+            stored_rows=stored_rows,
+            stored_columns=stored_columns,
+            evaluation_scale=evaluation_scale,
+            tolerance=tolerance,
+            acceleration_equation_start=n + algebraic.shape[0],
+        )
+        return SparseInitialPair(pair.state, pair.rate + correction[:n], unique)
     nonzero = np.asarray(matrix.getnnz(axis=0)).ravel() != 0
     available = nonzero.copy()
     # Proven physical rates are prescribed coordinates, not extra soft rows

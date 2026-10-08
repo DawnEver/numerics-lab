@@ -23,6 +23,20 @@ def test_identical_current_rate_columns_do_not_make_the_physical_state_free():
     assert np.array_equal(pair.state, np.zeros(4))
     assert np.array_equal(pair.rate_is_unique, [True, False, False, True])
     assert np.isnan(pair.physical_rate[1:3]).all()
+    proven = sparse_complete_initial_rate(
+        [[0, 0, -1, 0], [0, 1, 1, 0], [0, 0, 2, 0], [-1, 0, 0, 1]],
+        [0, 0, 0, 0],
+        [[1, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 1], [0, 0, 0, 0]],
+        pair,
+        algebraic_rows=[[0, 1, 0, 0], [0, 0, 0, 1]],
+        partial_time=[0, 0, -6, 0],
+        acceleration_remainder=np.zeros(4),
+        stored_rows=[0, 2],
+        stored_columns=[0, 3],
+    )
+    assert proven.rate_is_unique.all()
+    assert proven.rate == pytest.approx([0, -2, 2, 0])
+    assert np.array_equal(proven.state, pair.state)
 
 
 def test_an_ideal_source_current_rate_is_not_a_physical_zero_derivative():
