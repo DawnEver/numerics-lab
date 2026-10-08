@@ -225,6 +225,8 @@ class TransientSolution:
     #: Accepted steps whose predictor-curvature indicator exceeded its requested bar.
     #: Independent of Newton convergence; a minimum step can force their acceptance.
     indicator_unmet_times: list[float] = field(default_factory=list)
+    #: Discontinuities dispatched only at accepted fixed-lattice states, not located probes.
+    landed_events: list[tuple[int, float]] = field(default_factory=list)
 
     @property
     def indicator_satisfied(self) -> bool:

@@ -64,6 +64,7 @@ from motronics.gauss.time_integrators._integrators import (
     NewmarkIntegrator,
     get_integrator,
 )
+from motronics.gauss.time_integrators._landing import accepted_landing
 from motronics.gauss.time_integrators._step import _GMIN_RETRY_STAGES as _GMIN_RETRY_STAGES
 from motronics.gauss.time_integrators._step import _STALL_RATIO as _STALL_RATIO
 from motronics.gauss.time_integrators._step import (
@@ -159,6 +160,7 @@ def integrate_transient(
     initial_history: tuple[np.ndarray, ...] | None = None,
     timestep_quantum: float | None = None,
     timestep_origin: float | None = None,
+    on_landing: Callable[[float, NDArray[np.floating]], tuple[int, ...]] | None = None,
 ) -> TransientSolution:
     """March ``problem`` from ``study.t0`` to ``study.t1`` by ``study.dt`` with ``study.integrator``.
 
@@ -287,6 +289,13 @@ def integrate_transient(
     if adaptive and integrator.name != 'bdf2':
         msg = f'adaptive stepping is implemented for BDF2 only, got integrator {integrator.name}'
         raise ValueError(msg)
+    if on_landing is not None:
+        if adaptive or eec_period is not None or restart is not None or checkpoint_key is not None:
+            msg_0 = 'accepted landing currently requires fixed stepping without EEC or checkpoints'
+            raise ValueError(msg_0)
+        if integrator.name not in ('bdf1', 'bdf2'):
+            msg_0 = 'accepted landing history restart requires BDF1 or BDF2'
+            raise ValueError(msg_0)
     u0 = np.asarray(u0, dtype=float)
     if on_checkpoint is not None and checkpoint_key is None:
         msg = 'on_checkpoint requires checkpoint_key'
@@ -554,6 +563,12 @@ def integrate_transient(
         if isinstance(problem, HistoryProblem):
             problem.commit_history(u_new, t_new)
         previous_dt = dt
+        if on_landing is not None:
+            landed = accepted_landing(on_landing, t_new, u_new)
+            if landed:
+                solution.landed_events.extend((int(index), t_new) for index in landed)
+                state = integrator.start(u_new, t_new, state.v, state.a)
+                previous_dt = None
         if eec_nonlinear_first_order:
             cycle_converged = cycle_converged and converged
             zero = np.zeros_like(u_new)
