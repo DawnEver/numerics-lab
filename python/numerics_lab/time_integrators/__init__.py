@@ -67,6 +67,7 @@ from motronics.gauss.time_integrators._integrators import (
 from motronics.gauss.time_integrators._landing import (
     accepted_landing,
     accepted_observation,
+    accepted_projection,
     live_targets,
     next_deadline,
 )
@@ -168,6 +169,7 @@ def integrate_transient(
     on_landing: Callable[[float, NDArray[np.floating]], tuple[int, ...]] | None = None,
     on_accept: Callable[[float, NDArray[np.floating]], bool] | None = None,
     next_breakpoint: Callable[[float], float | None] | None = None,
+    project_accepted_state: Callable[[float, NDArray[np.floating]], NDArray[np.floating]] | None = None,
 ) -> TransientSolution:
     """March ``problem`` from ``study.t0`` to ``study.t1`` by ``study.dt`` with ``study.integrator``.
 
@@ -180,6 +182,9 @@ def integrate_transient(
     ``next_breakpoint`` supplies the owner's next known future time, re-read after
     accepted states. It clips steps without changing endpoint laws or projecting
     algebraic states; those remain the physical owner's responsibility.
+    ``project_accepted_state`` supplies the owner's right-side state after a declared
+    law change. The incoming step's rate retains its left state in
+    ``rate_state_overrides``; the outgoing BDF history starts from the right state.
 
     ``factor_cache`` (W6) reuses one factorization per reuse key across the march (see
     :mod:`~motronics.gauss.time_integrators.factor_reuse`); the default ``None`` builds a fresh
@@ -313,6 +318,9 @@ def integrate_transient(
     if next_breakpoint is not None and eec_period is not None:
         msg = 'live breakpoints cannot combine with EEC schedule corrections'
         raise ValueError(msg)
+    if project_accepted_state is not None and (on_accept is None or integrator.name not in ('bdf1', 'bdf2')):
+        msg = 'accepted state projection requires an accepted observer and BDF1 or BDF2'
+        raise ValueError(msg)
     u0 = np.asarray(u0, dtype=float)
     if on_checkpoint is not None and checkpoint_key is None:
         msg = 'on_checkpoint requires checkpoint_key'
@@ -334,8 +342,9 @@ def integrate_transient(
         )
         u0 = state.last_u
     dt = study.dt
-    if on_accept is not None:
-        accepted_observation(on_accept, state.t, state.last_u)
+    if on_accept is not None and accepted_observation(on_accept, state.t, state.last_u):
+        u0 = accepted_projection(project_accepted_state, state.t, state.last_u)
+        state = integrator.start(u0, state.t, state.v, state.a)
     lattice = adaptive_lattice(
         study, adaptive, timestep_quantum, timestep_origin, dt if restart is None else restart.previous_dt
     )
@@ -446,7 +455,11 @@ def integrate_transient(
                 h_prev = h
                 if on_accept is not None and accepted_observation(on_accept, t_new, u_new):
                     solution.accepted_discontinuities.append(t_new)
-                    state = integrator.start(u_new, t_new, state.v, state.a)
+                    right_state = accepted_projection(project_accepted_state, t_new, u_new)
+                    if project_accepted_state is not None:
+                        solution.rate_state_overrides[len(solution.state_rates) - 1] = u_new.copy()
+                        solution.states[-1] = right_state
+                    state = integrator.start(right_state, t_new, state.v, state.a)
                 if on_checkpoint is not None:
                     on_checkpoint(_checkpoint_of(problem, state, h_prev, checkpoint_key, integrator.name))
                 if (
@@ -598,7 +611,11 @@ def integrate_transient(
                 state = integrator.start(u_new, t_new, state.v, state.a)
         if on_accept is not None and accepted_observation(on_accept, t_new, u_new):
             solution.accepted_discontinuities.append(t_new)
-            state = integrator.start(u_new, t_new, state.v, state.a)
+            right_state = accepted_projection(project_accepted_state, t_new, u_new)
+            if project_accepted_state is not None:
+                solution.rate_state_overrides[len(solution.state_rates) - 1] = u_new.copy()
+                solution.states[-1] = right_state
+            state = integrator.start(right_state, t_new, state.v, state.a)
         if eec_nonlinear_first_order:
             cycle_converged = cycle_converged and converged
             zero = np.zeros_like(u_new)

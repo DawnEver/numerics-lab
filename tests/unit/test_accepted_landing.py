@@ -24,6 +24,43 @@ class _Forced:
 
 
 @pytest.mark.parametrize('adaptive', [False, True])
+def test_right_state_projection_preserves_left_rate_and_bootstraps_from_right(adaptive):
+    class Algebraic:
+        forcing = 0.0
+
+        def residual(self, u, u_dot, u_ddot, t):
+            return np.array([u_dot[0], u[1] - self.forcing])
+
+        def jacobian(self, u, u_dot, u_ddot, t, weights):
+            return np.diag([weights.alpha1.real, weights.alpha0.real])
+
+    problem = Algebraic()
+
+    def observe(time, _state):
+        if time == 0.1:
+            problem.forcing = 3.0
+            return True
+        return False
+
+    def project(_time, state):
+        assert not state.flags.writeable
+        return np.array([state[0], problem.forcing])
+
+    solution = integrate_transient(
+        problem,
+        TransientStudy(t0=0.0, t1=0.2, dt=0.1, integrator=IntegratorKind.BDF2),
+        np.zeros(2),
+        adaptive=adaptive,
+        on_accept=observe,
+        project_accepted_state=project,
+    )
+    assert solution.times == pytest.approx([0.0, 0.1, 0.2])
+    assert solution.states[1] == pytest.approx([0.0, 3.0])
+    assert solution.rate_state_overrides[0] == pytest.approx([0.0, 0.0])
+    assert np.asarray(solution.state_rates) == pytest.approx(np.zeros((2, 2)))
+
+
+@pytest.mark.parametrize('adaptive', [False, True])
 def test_live_breakpoint_created_on_accept_is_not_skipped(adaptive):
     deadlines = []
     observed = []

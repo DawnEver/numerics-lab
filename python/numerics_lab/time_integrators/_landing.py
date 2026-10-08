@@ -30,6 +30,19 @@ def live_targets(targets, current_time, callback):
             yield next_deadline(callback, current_time(), target)
 
 
+def accepted_projection(callback, time, state):
+    """Validate the owner's right-side state without assigning any physical rate."""
+    if callback is None:
+        return state
+    observation = state.copy()
+    observation.flags.writeable = False
+    projected = np.asarray(callback(time, observation))
+    if projected.shape != state.shape or not np.isrealobj(projected) or not np.all(np.isfinite(projected)):
+        msg = 'accepted projection must return a finite real state with unchanged shape'
+        raise ValueError(msg)
+    return np.array(projected, dtype=float, copy=True)
+
+
 def accepted_observation(callback, time, state):
     """Observe canonical state, never a Newton/event probe; report a genuine law change."""
     observation = state.copy()
