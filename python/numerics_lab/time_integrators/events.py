@@ -344,6 +344,9 @@ def integrate_transient_with_events(
     bracket_tol = dt * 1.0e-6 if time_tol is None else time_tol
     minimum_step = dt / 1000 if h_min is None else h_min
     directions = tuple(surface.direction if isinstance(surface, EventSurface) else 0 for surface in event_fns)
+    locator_policy = EventCheckpointState(
+        dt, bracket_tol, adaptive, minimum_step, refine, 0, None, None, 0, (), directions
+    )
     if on_checkpoint is not None and checkpoint_key is None:
         msg_0 = 'on_checkpoint requires checkpoint_key'
         raise ValueError(msg_0)
@@ -505,18 +508,13 @@ def integrate_transient_with_events(
         if checkpoint_key is None or accepted_dt is None:
             return
         pending = target if target > state.t else None
-        cursor = EventCheckpointState(
-            dt,
-            bracket_tol,
-            adaptive,
-            minimum_step,
-            refine,
-            k,
-            resume_from,
-            pending,
-            event_count if pending is not None else 0,
-            tuple(sorted(last_fired.items())),
-            directions,
+        cursor = replace(
+            locator_policy,
+            nominal_index=k,
+            next_reanchor=resume_from,
+            pending_target=pending,
+            pending_events=event_count if pending is not None else 0,
+            last_fired=tuple(sorted(last_fired.items())),
         )
         checkpoint = _checkpoint_of(
             problem,
@@ -594,7 +592,7 @@ def integrate_transient_with_events(
                 # blanket subdivision was MEASURED WORSE (64 -> 98/148/268 exhausted). Each rejected
                 # attempt stays in `nonconverged_probe_times`, which is exactly what that list
                 # means: an iterate the trajectory does not include.
-                floor = h_min if h_min is not None else dt / 1000.0
+                floor = minimum_step
                 while not step_ok and 0.5 * step_dt >= floor:
                     step_dt *= 0.5
                     t_step = t_from + step_dt
@@ -607,7 +605,7 @@ def integrate_transient_with_events(
             ]
             if not crossed:
                 if refine is not None:
-                    floor = h_min if h_min is not None else dt / 1000.0
+                    floor = minimum_step
                     if step_dt > 2.0 * floor:
                         # Accuracy-controlled refinement: re-take the step at half size from the
                         # same checkpoint and compare. A large discrepancy means the full step

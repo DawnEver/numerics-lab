@@ -89,3 +89,14 @@ def test_exhausted_step_cannot_be_persisted_as_accepted_locator_history():
             on_checkpoint=captured.append,
         )
     assert captured == []
+
+
+@pytest.mark.parametrize('controls', [{'h_min': float('nan')}, {'h_min': 0}, {'adaptive': 1}, {'refine': -1}])
+def test_live_locator_and_persisted_cursor_share_the_same_strict_step_policy(controls):
+    with pytest.raises(ValueError, match='event checkpoint'):
+        integrate_transient_with_events(
+            _StoredRamp(),
+            TransientStudy(0, 1, 0.1, IntegratorKind.BDF1),
+            np.array([0.0]),
+            **controls,
+        )
