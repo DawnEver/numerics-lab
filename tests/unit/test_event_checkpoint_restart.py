@@ -37,6 +37,40 @@ class _StoredRamp:
         self.slope = -1.0
 
 
+def test_exact_clock_landing_after_state_event_is_committed_before_checkpoint():
+    problem = _StoredRamp()
+    observed = []
+    captured = []
+
+    def landing(time, state):
+        assert not state.flags.writeable
+        observed.append(time)
+        if time == 0.75:
+            problem.slope = -2.0
+            return (1,)
+        return ()
+
+    whole = integrate_transient_with_events(
+        problem,
+        TransientStudy(0, 1, 0.3, IntegratorKind.BDF2),
+        np.zeros(1),
+        event_fns=(EventSurface(problem.observe, 1),),
+        on_event=problem.handle,
+        next_breakpoint=lambda time: 0.75 if time < 0.75 else None,
+        on_landing=landing,
+        checkpoint_key='event-and-clock',
+        on_checkpoint=captured.append,
+    )
+    assert 0.75 in whole.times
+    assert observed == whole.times[1:]
+    assert len(observed) == len(set(observed))
+    checkpoint = next(item for item in captured if item.time == 0.75)
+    assert checkpoint.material_history == {'slope': -2.0}
+    assert len(checkpoint.states) == 1
+    assert 0.75 in whole.accepted_discontinuities
+    assert whole.converged
+
+
 def test_fresh_json_resume_after_event_keeps_right_history_and_unfinished_cell():
     original = _StoredRamp()
     captured = []

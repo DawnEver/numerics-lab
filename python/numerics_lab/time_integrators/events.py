@@ -72,7 +72,12 @@ from motronics.gauss.time_integrators import (
     get_integrator,
 )
 from motronics.gauss.time_integrators._forms import IntegratorState, TransientSolution
-from motronics.gauss.time_integrators._landing import accepted_observation, accepted_projection, next_deadline
+from motronics.gauss.time_integrators._landing import (
+    accepted_landing,
+    accepted_observation,
+    accepted_projection,
+    next_deadline,
+)
 from motronics.gauss.time_integrators._step import HeldFactor
 from motronics.gauss.time_integrators.checkpoint import restore_history_checkpoint, validate_history_owner
 from motronics.gauss.time_integrators.event_checkpoint import EventCheckpointState
@@ -258,6 +263,7 @@ def integrate_transient_with_events(
     refine: float | None = None,
     refactor_every: int | None = None,
     on_accept: Callable[[float, NDArray[np.floating]], bool] | None = None,
+    on_landing: Callable[[float, NDArray[np.floating]], Sequence[int]] | None = None,
     next_breakpoint: Callable[[float], float | None] | None = None,
     project_accepted_state: Callable[[float, NDArray[np.floating]], NDArray[np.floating]] | None = None,
     restart=None,
@@ -333,7 +339,9 @@ def integrate_transient_with_events(
     if factor_cache is None and isinstance(problem, FactorReusableProblem):
         factor_cache = FactorCache()
     integrator = get_integrator(study.integrator)
-    if project_accepted_state is not None and (on_accept is None or integrator.name not in ('bdf1', 'bdf2')):
+    if project_accepted_state is not None and (
+        (on_accept is None and on_landing is None) or integrator.name not in ('bdf1', 'bdf2')
+    ):
         msg = 'accepted state projection requires an accepted observer and BDF1 or BDF2'
         raise ValueError(msg)
     u0 = np.asarray(u0, dtype=float)
@@ -469,7 +477,10 @@ def integrate_transient_with_events(
         nonlocal state, prev_dt, accepted_dt
         accepted_dt = t_new - solution.times[-1]
         if latest_failed.get(t_new, False) and (
-            isinstance(problem, HistoryProblem) or on_accept is not None or checkpoint_key is not None
+            isinstance(problem, HistoryProblem)
+            or on_accept is not None
+            or on_landing is not None
+            or checkpoint_key is not None
         ):
             msg = 'a nonconverged eventful step cannot advance physical history or accepted observations'
             raise ValueError(msg)
@@ -479,7 +490,10 @@ def integrate_transient_with_events(
         solution.states.append(u_new)
         assert solution.state_rates is not None
         solution.state_rates.append(rate)
-        if observe and on_accept is not None and accepted_observation(on_accept, t_new, u_new):
+        changed = bool(accepted_landing(on_landing, t_new, u_new)) if observe and on_landing is not None else False
+        if observe and on_accept is not None:
+            changed = accepted_observation(on_accept, t_new, u_new) or changed
+        if changed:
             solution.accepted_discontinuities.append(t_new)
             right_state = accepted_projection(project_accepted_state, t_new, u_new)
             if project_accepted_state is not None:
@@ -638,6 +652,7 @@ def integrate_transient_with_events(
                                     if float(np.max(np.abs(u_half - u_probe))) > refine * scale:
                                         if (
                                             on_accept is not None
+                                            or on_landing is not None
                                             or isinstance(problem, HistoryProblem)
                                             or checkpoint_key is not None
                                         ):
@@ -779,6 +794,10 @@ def integrate_transient_with_events(
                 if on_event is not None:
                     on_event(i, t_star, u_star)
                 last_fired[i] = t_star
+            # Located state events own the incoming state first. Exact scheduled
+            # clocks then consume that same canonical landing, never a probe.
+            if on_landing is not None and accepted_landing(on_landing, t_star, u_star):
+                solution.accepted_discontinuities.append(t_star)
             if residual_state is not None and not np.array_equal(residual_state, u_star, equal_nan=True):
                 assert solution.state_rates is not None
                 assert solution.rate_state_overrides is not None
