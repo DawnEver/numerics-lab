@@ -3,6 +3,7 @@
 import json
 
 import numpy as np
+import pytest
 
 from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
 from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint
@@ -68,3 +69,23 @@ def test_fresh_json_resume_after_event_keeps_right_history_and_unfinished_cell()
     np.testing.assert_array_equal(resumed.states, whole.states[start:])
     assert resumed.events == []
     assert resumed.checkpoint.to_mapping() == whole.checkpoint.to_mapping()
+
+
+def test_exhausted_step_cannot_be_persisted_as_accepted_locator_history():
+    class Unreachable:
+        def residual(self, state, rate, acceleration, time):
+            return np.ones(1)
+
+        def jacobian(self, state, rate, acceleration, time, weights):
+            return np.eye(1)
+
+    captured = []
+    with pytest.raises(ValueError, match='nonconverged eventful step'):
+        integrate_transient_with_events(
+            Unreachable(),
+            TransientStudy(0, 1, 0.1, IntegratorKind.BDF1),
+            np.array([0.0]),
+            checkpoint_key='unreachable',
+            on_checkpoint=captured.append,
+        )
+    assert captured == []

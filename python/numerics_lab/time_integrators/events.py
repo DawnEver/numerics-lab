@@ -462,7 +462,9 @@ def integrate_transient_with_events(
         """Append a point to the trajectory, promoting its exhaustion label from probe to landed."""
         nonlocal state, prev_dt, accepted_dt
         accepted_dt = t_new - solution.times[-1]
-        if latest_failed.get(t_new, False) and (isinstance(problem, HistoryProblem) or on_accept is not None):
+        if latest_failed.get(t_new, False) and (
+            isinstance(problem, HistoryProblem) or on_accept is not None or checkpoint_key is not None
+        ):
             msg = 'a nonconverged eventful step cannot advance physical history or accepted observations'
             raise ValueError(msg)
         if isinstance(problem, HistoryProblem):
