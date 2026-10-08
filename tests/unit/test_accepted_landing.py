@@ -5,6 +5,7 @@ import pytest
 
 from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
 from motronics.gauss.time_integrators import integrate_transient
+from motronics.gauss.time_integrators.events import integrate_transient_with_events
 
 pytestmark = pytest.mark.unit
 
@@ -53,3 +54,49 @@ def test_invalid_landing_identifiers_are_not_published(indices):
             np.zeros(1),
             on_landing=lambda _time, _state: indices,
         )
+
+
+@pytest.mark.parametrize('eventful', [False, True])
+def test_accepted_observer_gets_initial_and_canonical_states_not_event_probes(eventful):
+    problem = _Forced()
+    observed = []
+
+    def observe(time, state):
+        assert not state.flags.writeable
+        observed.append(time)
+        return False
+
+    study = TransientStudy(t0=0.0, t1=0.4, dt=0.1, integrator=IntegratorKind.BDF2)
+    if eventful:
+        solution = integrate_transient_with_events(
+            problem,
+            study,
+            np.zeros(1),
+            event_fns=(lambda _state, time: time - 0.15,),
+            on_event=lambda _index, _time, _state: setattr(problem, 'forcing', 3.0),
+            on_accept=observe,
+        )
+        assert solution.events[0][1] == pytest.approx(0.15, abs=1e-7)
+    else:
+        solution = integrate_transient(problem, study, np.zeros(1), on_accept=observe)
+    assert observed == solution.times
+
+
+@pytest.mark.parametrize('eventful', [False, True])
+def test_accepted_law_change_restarts_its_actual_history(eventful):
+    problem = _Forced()
+
+    def observe(time, _state):
+        if time == pytest.approx(0.2):
+            problem.forcing = 3.0
+            return True
+        return False
+
+    driver = integrate_transient_with_events if eventful else integrate_transient
+    solution = driver(
+        problem,
+        TransientStudy(t0=0.0, t1=0.4, dt=0.1, integrator=IntegratorKind.BDF2),
+        np.zeros(1),
+        on_accept=observe,
+    )
+    assert np.asarray(solution.states).ravel() == pytest.approx([0.0, 0.0, 0.0, 0.3, 0.6])

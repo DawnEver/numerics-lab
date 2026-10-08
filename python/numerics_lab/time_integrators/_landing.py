@@ -2,6 +2,19 @@
 
 from numbers import Integral
 
+import numpy as np
+
+
+def accepted_observation(callback, time, state):
+    """Observe canonical state, never a Newton/event probe; report a genuine law change."""
+    observation = state.copy()
+    observation.flags.writeable = False
+    changed = callback(time, observation)
+    if not isinstance(changed, (bool, np.bool_)):
+        msg = 'accepted observation must return a boolean discontinuity declaration'
+        raise TypeError(msg)
+    return bool(changed)
+
 
 def accepted_landing(callback, time, state):
     """Observe an immutable accepted state and return unique discontinuity identifiers."""

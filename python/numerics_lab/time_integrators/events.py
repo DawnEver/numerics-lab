@@ -71,6 +71,7 @@ from motronics.gauss.time_integrators import (
     get_integrator,
 )
 from motronics.gauss.time_integrators._forms import IntegratorState, TransientSolution
+from motronics.gauss.time_integrators._landing import accepted_observation
 from motronics.gauss.time_integrators._step import HeldFactor
 
 logger = logging.getLogger(__name__)
@@ -214,6 +215,7 @@ def integrate_transient_with_events(
     h_min: float | None = None,
     refine: float | None = None,
     refactor_every: int | None = None,
+    on_accept: Callable[[float, NDArray[np.floating]], bool] | None = None,
 ) -> EventfulTransientSolution:
     """March ``problem`` over ``study``, stopping the grid at every zero of ``event_fns``.
 
@@ -283,6 +285,9 @@ def integrate_transient_with_events(
     held = HeldFactor(refactor_every) if refactor_every is not None else None
     if factor_cache is None and isinstance(problem, FactorReusableProblem):
         factor_cache = FactorCache()
+    if on_accept is not None and refine is not None:
+        msg = 'accepted observation requires sequential acceptance, not precomputed refinement half-steps'
+        raise ValueError(msg)
     integrator = get_integrator(study.integrator)
     u0 = np.asarray(u0, dtype=float)
     state = integrator.start(u0, study.t0, v0, a0)
@@ -292,6 +297,8 @@ def integrate_transient_with_events(
         raise ValueError(msg)
     bracket_tol = dt * 1.0e-6 if time_tol is None else time_tol
     solution = EventfulTransientSolution(times=[study.t0], states=[u0], state_rates=[], rate_state_overrides={})
+    if on_accept is not None:
+        accepted_observation(on_accept, study.t0, u0)
     g_prev = [float(g(u0, study.t0)) for g in event_fns]
     prev_dt: float | None = None
     breakpoints = tuple(time_breakpoints)
@@ -369,12 +376,16 @@ def integrate_transient_with_events(
         latest_failed[t_new] = not converged
         return integrator.advance(from_state, u_new, dt_step, t_new), u_new, converged, form.u_dot(u_new)
 
-    def _commit(t_new: float, u_new: NDArray, rate: NDArray) -> None:
+    def _commit(t_new: float, u_new: NDArray, rate: NDArray, *, observe=True) -> None:
         """Append a point to the trajectory, promoting its exhaustion label from probe to landed."""
+        nonlocal state, prev_dt
         solution.times.append(t_new)
         solution.states.append(u_new)
         assert solution.state_rates is not None
         solution.state_rates.append(rate)
+        if observe and on_accept is not None and accepted_observation(on_accept, t_new, u_new):
+            state = integrator.start(u_new, t_new, state.v, state.a)
+            prev_dt = None
         # The step that produced this point recorded any failure against t_new; it landed, so it
         # is a real non-converged STEP. Only the most recent such record is promoted -- an earlier
         # discarded probe at the same instant stays a probe, and so does every record when the step
@@ -596,7 +607,7 @@ def integrate_transient_with_events(
                         'trigger a physical switch. Reduce the step or repair the nonlinear solve.'
                     )
                     raise RuntimeError(msg)
-                _commit(t_star, u_star, landed_rate)
+                _commit(t_star, u_star, landed_rate, observe=False)
             else:
                 u_star = np.array(state.last_u, dtype=float, copy=True)
             if on_event is not None and solution.nonconverged_times:
@@ -625,6 +636,8 @@ def integrate_transient_with_events(
             # integrators; for BDF they are None and the restart is a plain bootstrap.
             state = integrator.start(u_star, t_star, state.v, state.a)
             prev_dt = None
+            if on_accept is not None:
+                accepted_observation(on_accept, t_star, u_star)
             g_prev = [float(g(u_star, t_star)) for g in event_fns]
             pending_dt = t_target - t_star  # the genuine remainder of this cell
             events_this_cell += 1
