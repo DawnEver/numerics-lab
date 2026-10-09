@@ -91,10 +91,10 @@ def test_capabilities_record_structure_not_mutable_physical_flags():
 
     problem = OptionalProblem()
     capabilities = ProblemCapabilities.resolve(problem)
-    assert capabilities == ProblemCapabilities(True, True, True, True)
+    assert capabilities == ProblemCapabilities(True, True, True, True, False, False)
     problem.has_tangent_jacobian = True
     assert capabilities == ProblemCapabilities.resolve(problem)
-    assert ProblemCapabilities.resolve(LinearProblem()) == ProblemCapabilities(False, False, False, False)
+    assert ProblemCapabilities.resolve(LinearProblem()) == ProblemCapabilities(False, False, False, False, False, False)
 
 
 def test_trapezoid_step_prepares_one_form_and_keeps_left_limit_provenance(monkeypatch):
