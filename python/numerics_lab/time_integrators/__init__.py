@@ -36,6 +36,7 @@ from motronics.gauss.time_integrators._forms import (
     TransientSolution,
     residual_floor,
     residual_floor_of_magnitude,
+    same_instant,
 )
 from motronics.gauss.time_integrators._integrators import (
     INTEGRATOR_REGISTRY,
@@ -48,6 +49,7 @@ from motronics.gauss.time_integrators._integrators import (
     get_integrator,
 )
 from motronics.gauss.time_integrators._step import HELD_STALL_RATIO, HeldFactor, _solve_step, directional_line_search
+from motronics.gauss.time_integrators.explicit import integrate_explicit_sampled
 from motronics.gauss.time_integrators.factor_reuse import FactorCache
 from motronics.gauss.time_integrators.march import (
     BudgetExceeded,
@@ -65,6 +67,7 @@ from motronics.gauss.time_integrators.multirate import (
     base_sample_time,
     integrate_sampled,
     sample_hits,
+    schedule,
 )
 
 __all__ = [
@@ -95,9 +98,12 @@ __all__ = [
     'base_sample_time',
     'directional_line_search',
     'get_integrator',
+    'integrate_explicit_sampled',
     'integrate_sampled',
     'integrate_transient',
     'residual_floor',
     'residual_floor_of_magnitude',
+    'same_instant',
     'sample_hits',
+    'schedule',
 ]

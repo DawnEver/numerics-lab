@@ -42,6 +42,7 @@ __all__ = [
     'base_sample_time',
     'integrate_sampled',
     'sample_hits',
+    'schedule',
 ]
 
 #: Relative slack for "this instant is a clock hit": far below any physical period ratio, far above
@@ -182,6 +183,33 @@ def base_sample_time(periods: Sequence[float], *, max_denominator: int = 10**9) 
     return float(g)
 
 
+def schedule(
+    tasks: Sequence[SampledTask | ScheduledTask], t0: float, t1: float
+) -> tuple[list[SampledTask | ScheduledTask], list[float], list[set[int]]]:
+    """The ONE task schedule over ``[t0, t1]``: ``(ordered tasks, segment bounds, due set per segment)``.
+
+    Coincident tasks run by ascending priority, then fastest clock, then declaration order; segment
+    ``j`` spans ``bounds[j]..bounds[j + 1]`` and fires ``due[j]`` (indices into the ordered tasks) at
+    its start. ``bounds`` starts at ``t0`` and ends at ``t1``.
+    """
+    order = sorted(tasks, key=lambda task: task.order_key)
+    scheduled = sorted((float(h), index) for index, task in enumerate(order) for h in task.hits(t0, t1))
+    hits: list[float] = []
+    due: list[set[int]] = []
+    for hit, index in scheduled:
+        # Only arithmetic roundoff joins clock instants; the much wider hit-recognition
+        # tolerance must not merge physically distinct offsets or fire a task at another clock.
+        if hits and same_instant(hit, hits[-1]):
+            due[-1].add(index)
+        else:
+            hits.append(hit)
+            due.append({index})
+    if not hits or hits[0] > t0:
+        hits.insert(0, t0)
+        due.insert(0, set())
+    return order, [*hits, t1], due
+
+
 def integrate_sampled(
     problem,
     study: TransientStudy,
@@ -207,22 +235,7 @@ def integrate_sampled(
     if consistent_start and study.integrator in (IntegratorKind.NEWMARK, IntegratorKind.GENERALIZED_ALPHA):
         msg = 'consistent_start initializes first-order rates, not second-order acceleration'
         raise ValueError(msg)
-    order = sorted(tasks, key=lambda task: task.order_key)
-    scheduled = sorted((float(h), index) for index, task in enumerate(order) for h in task.hits(study.t0, study.t1))
-    hits: list[float] = []
-    due: list[set[int]] = []
-    for hit, index in scheduled:
-        # Only arithmetic roundoff joins clock instants; the much wider hit-recognition
-        # tolerance must not merge physically distinct offsets or fire a task at another clock.
-        if hits and same_instant(hit, hits[-1]):
-            due[-1].add(index)
-        else:
-            hits.append(hit)
-            due.append({index})
-    if not hits or hits[0] > study.t0:
-        hits.insert(0, study.t0)
-        due.insert(0, set())
-    bounds = [*hits, study.t1]
+    order, bounds, due = schedule(tasks, study.t0, study.t1)
     u = np.asarray(u0, dtype=float)
     out = TransientSolution(times=[study.t0], states=[u], state_rates=[], residual_times=[], rate_state_overrides={})
     v, a = march.pop('v0', None), march.pop('a0', None)
