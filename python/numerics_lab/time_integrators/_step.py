@@ -57,13 +57,17 @@ class ProblemCapabilities:
         )
 
 
-def _roundoff_floor(problem, tangent, u: NDArray[np.floating], form, capabilities) -> float | None:
-    """The residual scale below which a converged solve cannot go, or ``None`` if unknowable.
+def _at_roundoff_floor(problem, tangent, u: NDArray[np.floating], form, capabilities, r) -> bool:
+    """Whether the residual ``r`` is already at the arithmetic floor; ``False`` if unknowable.
 
     The problem's own `residual_roundoff_floor` is preferred: it is a statement about that
     system's cancellation, which no generic derivation can see. :func:`residual_floor` is the
     fallback and needs only the tangent. A non-finite reading from either is discarded rather
     than compared -- a floor that is not a number cannot bound anything.
+
+    A declared floor may be a scalar (compared with ``||r||_2``) or a PER-ROW vector, compared
+    row by row: rows of different units cannot share one bound, and pooling them let a volt-scale
+    branch row hide an ampere-scale KCL defect (`laplace.circuit.core.mna_solves.transient_residual_floor`).
     """
     if capabilities.residual_floor:
         # `None` IS AN ANSWER HERE -- "this problem cannot bound its own cancellation" -- and it
@@ -73,13 +77,15 @@ def _roundoff_floor(problem, tangent, u: NDArray[np.floating], form, capabilitie
         # fallback entirely while comparing every real residual against zero.
         declared = problem.residual_roundoff_floor(u, form)
         if declared is not None:
-            floor = float(declared)
-            if np.isfinite(floor):
-                return floor
+            floor = np.asarray(declared, dtype=float)
+            if np.isfinite(floor).all():
+                if floor.ndim == 0:
+                    return float(np.linalg.norm(r)) <= float(floor)
+                return bool(np.all(np.abs(np.asarray(r, dtype=float).reshape(floor.shape)) <= floor))
     if tangent is None:
-        return None
+        return False
     floor = float(residual_floor(tangent, u))
-    return floor if np.isfinite(floor) else None
+    return bool(np.isfinite(floor)) and float(np.linalg.norm(r)) <= floor
 
 
 #: The stall-polish's ratio threshold (MANUAL-627 (i)): a per-iteration residual ratio
@@ -349,8 +355,15 @@ def _solve_step(
             raise ValueError(msg)
         return value + (projected - argument) / alpha.real
 
-    u = project_trial(np.asarray(guess, dtype=float).copy())
     t = form.t_eval
+    # THE GUESS IS NOT PROJECTED. A full Newton step lands every affine row exactly, so projecting
+    # the caller's guess buys nothing there -- and it costs: it moves the constrained rows ALONE,
+    # so the first tangent is taken where every other unknown is stale. Behind a steep clamp that
+    # is a worse linearisation, the absolute ``tol`` then passed a nanosiemens node millivolts off,
+    # and `test_varistor`'s divider read 2.6e-5 off an identity exact to 2.4e-16 (MEASURED
+    # 2026-10-09; introduced by 2bbcffe10e). Only a DAMPED trial can leave the plane, so only the
+    # backtracking trials below are projected.
+    u = np.asarray(guess, dtype=float).copy()
     converged = False
     on_floor = False
     iterations = 0
@@ -405,11 +418,7 @@ def _solve_step(
             # monotonically, so no stall ratio can be relied on to see it). It is the same floor
             # verdict the exhaustion branch below gives, reached before the ceiling instead of at
             # it (measured on ipm_uv's chopper: 50 iterations, ~30 s a step, at |r| ~ 4e-9).
-            if (
-                local_ok
-                and (floor := _roundoff_floor(problem, tangent, u, form, capabilities)) is not None
-                and residual <= floor
-            ):
+            if local_ok and _at_roundoff_floor(problem, tangent, u, form, capabilities, r):
                 converged = True
                 on_floor = True
                 break
@@ -487,11 +496,7 @@ def _solve_step(
         local_ok = local.observe(u, t)
         if local_ok and (residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0)):
             converged = True
-        elif (
-            local_ok
-            and (floor := _roundoff_floor(problem, tangent, u, form, capabilities)) is not None
-            and residual <= floor
-        ):
+        elif local_ok and _at_roundoff_floor(problem, tangent, u, form, capabilities, r):
             on_floor = True
             # THE ARITHMETIC FLOOR, and the reason an exactly-solved LINEAR step no longer lies.
             # ``tol`` is ABSOLUTE on a residual whose scale is the supply, so the same one-Newton
