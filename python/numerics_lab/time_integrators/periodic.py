@@ -40,7 +40,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from motronics.contracts.spec.analysis_formulation import DerivativeWeights
-from motronics.gauss.time_integrators._forms import TransientSolution
+from motronics.gauss.time_integrators._forms import TransientSolution, same_instant
 
 __all__ = [
     'PeriodicFixedPoint',
@@ -59,8 +59,8 @@ __all__ = [
 def canonical_eec_study(study, restart):
     """Resolve a declared uniform tick to its one original-clock representation.
 
-    Identity validation remains exact: only the unique original integer tick may
-    replace the caller's algebraically equivalent rounded endpoint expression.
+    Identity validation joins roundoff only: the caller's start must name the unique original
+    integer tick, and the study resumes on the checkpoint's own time label for that tick.
     """
     if restart is None or restart.eec_state is None:
         return study
@@ -70,10 +70,12 @@ def canonical_eec_study(study, restart):
         msg = 'EEC restart time must align with the original uniform integration clock'
         raise ValueError(msg)
     time = origin + round(phase) * study.dt
-    if time != restart.time:
+    # The march labels a full final cell with its DECLARED endpoint (c378f57699), so the saved time
+    # may differ from the original-clock tick by roundoff only; that label is the one to resume on.
+    if not same_instant(time, restart.time):
         msg = 'EEC restart original-clock tick does not match the checkpoint time'
         raise ValueError(msg)
-    return replace(study, t0=time)
+    return replace(study, t0=restart.time)
 
 
 def validate_eec_restart(restart, period, sign, dt, nonlinear=False):

@@ -2,6 +2,8 @@
 
 import math
 
+from motronics.gauss.time_integrators._forms import same_instant
+
 
 def fixed_lattice_targets(origin, start, end, dt):
     """Evaluate every target as origin+k*dt, never resumed_start+k*dt.
@@ -32,6 +34,7 @@ def fixed_lattice_step_size(origin, start, target, dt):
     """
     tick = math.floor((target - origin) / dt)
     for candidate in (tick, tick + 1):
-        if origin + candidate * dt == target and origin + (candidate - 1) * dt == start:
+        # A start labelled with a declared endpoint (a resumed checkpoint) is the tick it rounds to.
+        if origin + candidate * dt == target and same_instant(origin + (candidate - 1) * dt, start):
             return dt
     return target - start

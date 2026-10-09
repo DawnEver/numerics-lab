@@ -889,10 +889,11 @@ def integrate_transient(
     if plan == 'nominal' and cursor is None and restart is not None:
         # A checkpoint without a locator cursor resumes on its absolute parent lattice.
         tick = math.floor((state.t - origin) / dt)
-        if origin + (tick + 1) * dt == state.t:
+        # `same_instant`: a full final cell is labelled with the declared endpoint, not the tick.
+        if same_instant(origin + (tick + 1) * dt, state.t):
             tick += 1
         k = tick
-        if origin + tick * dt != state.t:
+        if not same_instant(origin + tick * dt, state.t):
             # Mid-cell: the parent cell this state lies in is the one still being marched.
             resumed_target = origin + (tick + 1) * dt
             k = tick + 1
@@ -1165,7 +1166,9 @@ def integrate_transient(
                     raise ValueError(msg)
             pending_dt = t_target - state.t
         elif plan == 'lattice':
-            while lattice_index < len(lattice_targets) and lattice_targets[lattice_index] <= state.t:
+            while lattice_index < len(lattice_targets) and (
+                lattice_targets[lattice_index] <= state.t or same_instant(lattice_targets[lattice_index], state.t)
+            ):
                 lattice_index += 1
             if lattice_index >= len(lattice_targets):
                 break
