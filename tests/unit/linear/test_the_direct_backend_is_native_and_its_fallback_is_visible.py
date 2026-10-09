@@ -76,7 +76,8 @@ def test_an_equal_size_different_pattern_is_never_answered_from_the_cache(monkey
     held = native_direct.native_factor(a)
     first = next(iter(native_direct._cache.values()))
     answer = native_direct.native_solve(other, rhs)
-    assert next(iter(native_direct._cache.values())) is not first
+    # The full-pattern key gives the new pattern its own analysis; the newest entry is not the first.
+    assert next(reversed(native_direct._cache.values())) is not first
     assert np.linalg.norm(other @ answer - rhs) < 1e-12
     assert np.linalg.norm(a @ held.solve(rhs) - rhs) < 1e-12
 
@@ -95,7 +96,8 @@ def test_the_cached_pattern_is_owned_when_the_callers_pattern_buffer_changes(mon
     else:
         a.indices[1] = 2
     answer = native_direct.native_solve(a, rhs)
-    assert next(iter(native_direct._cache.values())) is not first
+    # The full-pattern key gives the new pattern its own analysis; the newest entry is not the first.
+    assert next(reversed(native_direct._cache.values())) is not first
     assert np.linalg.norm(a @ answer - rhs) < 1e-12
 
 
