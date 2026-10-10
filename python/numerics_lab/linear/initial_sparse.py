@@ -166,25 +166,21 @@ def sparse_initial_pair(
     # Remove only this exact sparse dependency; state columns are never
     # quotiented and no numerical rank cutoff invents physical uniqueness.
     selected, duplicate_rates = _independent_exact_columns(matrix, selected, dependent_start=n)
-    reduced = matrix[:, selected].tocsr()
     # Storage equations are mandatory, even when their increments are tiny
     # compared with the dynamic RHS. Match them first, then verify that none
     # was discarded by the structural reduction of free algebraic rates.
     mandatory = np.arange(n, n + len(stored_rows))
     row_order = np.concatenate((mandatory, np.arange(n + len(stored_rows), 2 * n), np.arange(n)))
-    matched = maximum_bipartite_matching(reduced[row_order], perm_type='row')
-    if np.any(matched < 0):
-        msg = 'initial state/rate equations require additional physical authority'
-        raise ValueError(msg)
-    matched_rows = row_order[matched]
-    if not np.isin(mandatory, matched_rows).all():
-        msg = 'initial state/rate subsystem cannot discard actual stored-coordinate constraints'
-        raise ValueError(msg)
     try:
-        factor = splu(reduced[matched_rows].tocsc())
+        reduced, matched_rows, factor = _matched_factor(matrix, selected, row_order, mandatory)
     except RuntimeError as error:
-        msg = 'initial state/rate equations lack a nonsingular sparse physical constraint subsystem'
-        raise ValueError(msg) from error
+        gauged = _gauge_free_algebraic_rates(matrix, selected, row_order, mandatory, mass, n)
+        if gauged is None:
+            msg = 'initial state/rate equations lack a nonsingular sparse physical constraint subsystem'
+            raise ValueError(msg) from error
+        selected, gauge_columns, row_order = gauged
+        nonzero[gauge_columns] = False  # marked free, exactly as a structurally free rate is
+        reduced, matched_rows, factor = _matched_factor(matrix, selected, row_order, mandatory)
     pair = np.zeros(2 * n)
     subsystem = reduced[matched_rows]
     answer = factor.solve(rhs[matched_rows])
@@ -216,6 +212,70 @@ def sparse_initial_pair(
     unique = nonzero[n:].copy()
     unique[[column - n for column in duplicate_rates]] = False
     return SparseInitialPair(initial + pair[:n], pair[n:], unique)
+
+
+def _matched_factor(matrix, selected, row_order, mandatory):
+    """The square subsystem a row matching picks for ``selected`` columns, and its LU factor."""
+    reduced = matrix[:, selected].tocsr()
+    matched = maximum_bipartite_matching(reduced[row_order], perm_type='row')
+    if np.any(matched < 0):
+        msg = 'initial state/rate equations require additional physical authority'
+        raise ValueError(msg)
+    matched_rows = row_order[matched]
+    if not np.isin(mandatory, matched_rows).all():
+        msg = 'initial state/rate subsystem cannot discard actual stored-coordinate constraints'
+        raise ValueError(msg)
+    return reduced, matched_rows, splu(reduced[matched_rows].tocsc())
+
+
+#: The largest matched subsystem the exact-nullspace check below will take a dense SVD of.
+_GAUGE_DENSE_LIMIT = 2000
+
+
+def _gauge_free_algebraic_rates(matrix, selected, row_order, mandatory, mass, n):
+    """Fix the gauge of a rate no stored state reads, or ``None`` when the singularity is anything else.
+
+    THE MEASURED CASE: inverter_3ph_grid_tied's grid star point ``n`` has no reference, so the whole
+    grid cluster {ma, ga, mb, gb, mc, gc, n} floats behind the three inductors. Its potential is
+    fixed only by the DIFFERENTIATED KCL (sum di/dt = 0), so its RATE is an index-two quantity the
+    first differentiation cannot fix: the matched subsystem has one exact null vector, uniform over
+    exactly those seven node-voltage rate columns (singular value 5.9e-15 against 1.7). No mass
+    column reads those rates, so no stored state and no march depends on them.
+
+    Only that shape is admitted: every exact null vector must live on rate columns whose mass column
+    is zero. One such column per null vector is dropped and every rate on the vector is marked free
+    (never asserted as a physical value), and the caller re-matches; the caller's full residual check still judges the
+    answer against every equation, the dropped one included.
+    """
+    reduced = matrix[:, selected].tocsr()
+    matched = maximum_bipartite_matching(reduced[row_order], perm_type='row')
+    if np.any(matched < 0) or len(selected) > _GAUGE_DENSE_LIMIT:
+        return None
+    rows = row_order[matched]
+    block = reduced[rows].toarray()
+    u, sigma, vt = np.linalg.svd(block)
+    exact = sigma <= 1e-12 * sigma[0]
+    null = vt[exact]
+    if not len(null):
+        return None
+    massless = {n + c for c in range(n) if not np.any(mass[:, [c]].toarray())}
+    drop, free = [], []
+    for vector in null:
+        support = np.flatnonzero(np.abs(vector) > 1e-9 * np.max(np.abs(vector)))
+        columns = [int(selected[i]) for i in support]
+        if not set(columns) <= massless:
+            return None
+        drop.append(columns[int(np.argmax(np.abs(vector[support])))])
+        # EVERY rate on the null vector is fixed only relative to the gauge, so all of them are
+        # free, not just the dropped one -- a later differentiation may move them together.
+        free.extend(columns)
+    # The matched rows are dependent along the LEFT null vectors: the equation each one makes
+    # redundant leaves the matching too (it is still judged by the caller's full residual check).
+    redundant = {int(rows[int(np.argmax(np.abs(left)))]) for left in u[:, exact].T}
+    if set(redundant) & set(mandatory.tolist()):
+        return None
+    kept_rows = np.asarray([r for r in row_order if int(r) not in redundant], dtype=int)
+    return np.asarray([c for c in selected if c not in drop], dtype=int), sorted(set(free)), kept_rows
 
 
 def sparse_complete_initial_rate(
