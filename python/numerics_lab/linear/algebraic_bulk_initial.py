@@ -78,26 +78,38 @@ def algebraic_bulk_initial_pair(
         np.zeros(m) if fixed_state else change,
         -algebraic @ reduced_partial,
     ))
-    evaluation_scale = np.zeros(len(rhs))
+    evaluation_roundoff = np.zeros(len(rhs))
     physical_evaluation = np.abs(jacobian) @ np.abs(initial) + np.abs(residual)
+    # A sparse row dot product followed by addition of its residual has this
+    # actual operation-count bound. Initial-state cancellation is arithmetic
+    # uncertainty, not permission to relax a finite storage increment.
+    eps = np.finfo(float).eps
+    physical_operations = np.diff(jacobian.indptr) + 1
+    physical_gamma = physical_operations * eps / (1 - physical_operations * eps)
+    physical_roundoff = physical_gamma * physical_evaluation
     if fixed_state:
         # The admitted state can retain one ULP of dynamic residual after
         # subtracting real physical terms. Its evaluation uncertainty is not
         # the magnitude of that cancellation residual itself. Derived rate
         # constraints and exact state/storage anchors receive NO such bound.
-        evaluation_scale[: len(selected)] = physical_evaluation[k:][selected]
+        evaluation_roundoff[: len(selected)] = physical_roundoff[k:][selected]
         order = np.concatenate((
             np.arange(len(selected), len(selected) + m),
             np.arange(len(selected) + m, len(rhs)),
             np.arange(len(selected)),
         ))
-        matrix, rhs, evaluation_scale = matrix[order], rhs[order], evaluation_scale[order]
+        matrix, rhs, evaluation_roundoff = matrix[order], rhs[order], evaluation_roundoff[order]
     else:
         # Propagate each original residual equation's evaluation bound through
         # its actual Schur row operator. This bound belongs neither to stored
         # increments nor to differentiated rate equations.
         row_projection = factor.solve(coupling.T.toarray(), trans='T').T
-        evaluation_scale[:m] = physical_evaluation[k:] + np.abs(row_projection) @ physical_evaluation[:k]
+        evaluation_scale = physical_evaluation[k:] + np.abs(row_projection) @ physical_evaluation[:k]
+        projection_operations = np.count_nonzero(row_projection, axis=1) + 1
+        projection_gamma = projection_operations * eps / (1 - projection_operations * eps)
+        evaluation_roundoff[:m] = (
+            physical_roundoff[k:] + np.abs(row_projection) @ physical_roundoff[:k] + projection_gamma * evaluation_scale
+        )
         # Preserve small algebraic state corrections (including actual linkage)
         # before eliminating dynamic rows with potentially enormous rates.
         # Otherwise a stiff derivative can lose a finite-Q correction in the
@@ -110,11 +122,11 @@ def algebraic_bulk_initial_pair(
             np.arange(m + len(selected), len(rhs)),
             dynamic_indices,
         ))
-        matrix, rhs, evaluation_scale = matrix[order], rhs[order], evaluation_scale[order]
+        matrix, rhs, evaluation_roundoff = matrix[order], rhs[order], evaluation_roundoff[order]
     norms = np.linalg.norm(matrix, axis=1)
     norms[norms == 0] = 1
     matrix, rhs = matrix / norms[:, None], rhs / norms
-    evaluation_scale /= norms
+    evaluation_roundoff /= norms
     # Rates and stored coordinates need not share units or magnitude. Rank
     # revelation uses dimensionless columns; otherwise a real small inductance
     # makes an algebraic rate column appear numerically absent.
@@ -133,8 +145,8 @@ def algebraic_bulk_initial_pair(
     answer = answer_scaled / column_norms
     free = free_scaled / column_norms[:, None]
     defect = matrix @ answer - rhs
-    scale = np.abs(matrix) @ np.abs(answer) + np.abs(rhs) + evaluation_scale
-    if np.any(np.abs(defect) > tolerance * scale):
+    scale = np.abs(matrix) @ np.abs(answer) + np.abs(rhs)
+    if np.any(np.abs(defect) > tolerance * scale + evaluation_roundoff):
         msg = 'actual border stored state contradicts its state/rate equations'
         raise ValueError(msg)
     state = (

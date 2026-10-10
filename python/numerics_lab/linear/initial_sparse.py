@@ -106,6 +106,46 @@ def projected_rate_consistent(jacobian, rate, partial_time, *, algebraic_rows, t
     return bool(np.all(np.abs(defect) <= tolerance * scale))
 
 
+def _independent_exact_rows(matrix, mandatory):
+    """Actual sparse row authority after LU failure, never a numerical rank cutoff.
+
+    Mandatory stored-coordinate equations are considered first. Exact binary-float
+    elimination may fill and grow rational integers; the ordinary sparse LU and
+    caller-declared storage-border paths do not pay that fallback cost.
+    """
+    matrix = matrix.tocsr(copy=True)
+    matrix.sum_duplicates()
+    basis, selected = {}, []
+    mandatory_set = set(mandatory.tolist())
+    order = np.concatenate((mandatory, np.setdiff1d(np.arange(matrix.shape[0]), mandatory)))
+    for row in order:
+        start, stop = matrix.indptr[row : row + 2]
+        vector = {
+            int(column): Fraction(float(value))
+            for column, value in zip(matrix.indices[start:stop], matrix.data[start:stop], strict=True)
+            if value
+        }
+        while vector:
+            pivot = min(vector)
+            if pivot not in basis:
+                divisor = vector[pivot]
+                basis[pivot] = {column: value / divisor for column, value in vector.items()}
+                selected.append(int(row))
+                break
+            multiplier = vector[pivot]
+            for column, value in basis[pivot].items():
+                vector[column] = vector.get(column, Fraction(0)) - multiplier * value
+                if vector[column] == 0:
+                    del vector[column]
+        if not vector and row in mandatory_set:
+            msg = 'mandatory stored-coordinate equations lack independent actual row authority'
+            raise ValueError(msg)
+        if len(selected) == matrix.shape[1]:
+            return np.asarray(selected, dtype=int)
+    msg = 'initial state/rate equations lack independent actual physical rows'
+    raise ValueError(msg)
+
+
 def sparse_initial_pair(
     jacobian,
     residual,
@@ -228,9 +268,16 @@ def sparse_initial_pair(
             raise ValueError(msg) from error
         try:
             factor = splu(reduced[matched_rows].tocsc())
-        except RuntimeError as retry_error:
-            msg = 'initial state/rate equations lack a nonsingular sparse physical constraint subsystem'
-            raise ValueError(msg) from retry_error
+        except RuntimeError:
+            # Structural matching proves only a nonzero pattern, not actual row
+            # independence. Keep every stored equation and choose an exact basis
+            # of the original unscaled rows; all omitted equations are checked below.
+            matched_rows = _independent_exact_rows(actual_matrix[:, selected], mandatory)
+            try:
+                factor = splu(reduced[matched_rows].tocsc())
+            except RuntimeError as basis_error:
+                msg = 'initial state/rate equations lack a nonsingular sparse physical constraint subsystem'
+                raise ValueError(msg) from basis_error
     pair = np.zeros(2 * n)
     subsystem = reduced[matched_rows]
     answer = factor.solve(rhs[matched_rows])
