@@ -48,6 +48,12 @@ def finite_storage_right_state(
             f'residual {residual:.3e} against {tolerance * reference:.3e})'
         )
         raise ValueError(msg)
+    # A SEED ALREADY AT THE ROOT RUNS NO SOLVE (the Newton owner returns it untouched), so the
+    # singular-subsystem refusal in `solve_system` never fired and an index-two state -- a voltage
+    # source clamping a capacitor, whose current only the source RATE fixes -- came back with its
+    # undetermined current left at the seed's 0.0. Determinacy is a property of the subsystem, not
+    # of how many iterations it took, so it is checked once on the final tangent.
+    system.solve_system(final.system_matrix, np.zeros(final.system_matrix.shape[0]))
     return result.x
 
 
