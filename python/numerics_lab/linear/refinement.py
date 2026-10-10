@@ -150,7 +150,7 @@ _DIRECT_REFINEMENT_MAX_STEPS = 4
 # Neither point carries n, and the first refinement move goes as cond*eps -- so a PHYSICALLY SOUND
 # solve crosses the ceiling simply by getting bigger, and the larger the problem the more certain
 # the false refusal. Measured 2026-09-17 on `spm_ferrari_luce_rear --scope full --set
-# solve.chart=cartesian_3d --select fea,tet --mesh-size "5 mm"`: n = 123,233, a move of 1.434e-03 that is
+# solve.chart=cartesian_3d --select fea,tet --set mesh.mesh_size="5 mm"`: n = 123,233, a move of 1.434e-03 that is
 # 1.43x past the old ceiling, and a trajectory [1.434e-03, 2.062e-06, 2.961e-09, 4.252e-12] that
 # collapses nine decades to three orders INSIDE `_DIRECT_REFINEMENT_RTOL`. The solve was always
 # solvable; the instrument said otherwise, and it said so more confidently the bigger n grew.
@@ -616,7 +616,7 @@ def reject_unsolved_direct_system(matrix, rhs, x, backend: str, *, refinement: f
     :class:`MatrixRankWarning` on a zero pivot and then returns either NaNs (the belt and
     :func:`~motronics.gauss.linear.reject_nonfinite_solution` catch those) or a finite vector that
     does not satisfy ``A x = b``.
-    Measured on the production CLI at ``lipo_inductor --mesh-size 6mm``: order 157, condition
+    Measured on the production CLI at ``lipo_inductor --set mesh.mesh_size="6mm"``: order 157, condition
     estimate 1.5e17, relative residual **1.6e+01**.
 
     TWO STAGES, because the residual alone cannot tell a failed solve from a merely ill-CONDITIONED

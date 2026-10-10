@@ -146,7 +146,7 @@ def resolve_constraint_chains(constraints):
 
     THE CLOSURE IS A SHALLOW FOREST OF TINY CYCLES, WHICH IS WHY THE INVERSE IS NOT DENSE. This
     function used to build ``np.eye(n)`` over the WHOLE closure and call ``numpy.linalg.solve``,
-    a decision priced on ipm_uv_cummins under ``--max-aspect 4`` -- "of 3892 hanging nodes, 4 are
+    a decision priced on ipm_uv_cummins under ``--set mesh.max_aspect=4`` -- "of 3892 hanging nodes, 4 are
     chained, forming two mutual pairs (2590 <-> 8105, 7744 <-> 7803)", a 4x4 solve at any price.
     That claim was about ONE MESH OF ONE CASE, and it did not even hold for the rest of its own
     case. Measured 2026-09-06 on the shipped legs:
@@ -155,7 +155,7 @@ def resolve_constraint_chains(constraints):
       ``I - W_cc`` carrying 25,496 nonzeros -- 1.878 per row, density 1.384e-4 -- condensing into
       13,526 strongly connected components of which 41 are non-trivial, the largest holding 4
       nodes. 90 of 13,575 nodes lie on a cycle: 0.66%.
-    * ``ipm_uv_cummins --select fea,quad`` (the DEFAULT mesh, not ``--max-aspect 4``): 5,238 of
+    * ``ipm_uv_cummins --select fea,quad`` (the DEFAULT mesh, not ``--set mesh.max_aspect=4``): 5,238 of
       13,711 entangled (38.2%), and **zero** non-trivial components -- a pure forest.
 
     So a large closure is the NORM and a cycle is the exception, which is the reverse of what the

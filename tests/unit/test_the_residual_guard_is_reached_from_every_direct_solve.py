@@ -12,7 +12,7 @@ fixed bar on the relative residual is a disguised CONDITION test -- see
 ``test_the_direct_guard_separates_ill_conditioning_from_failure.py``. Nothing in THIS file changes:
 every system it plants is refused or accepted for the same reason it always was.)
 
-    motronics case run cases/field/inductor/lipo_inductor --select fea,tri --mesh-size 6mm
+    motronics case run cases/field/inductor/lipo_inductor --select fea,tri --set mesh.mesh_size="6mm"
     -> failed: direct solve residual ||A x - b|| / ||b|| = 1.608e+01 exceeds 1e-06
 
 So "SuperLU ships finite garbage and the production Python path ships it" is WITHDRAWN as a claim
@@ -26,7 +26,7 @@ lies, but an enforcement nothing calls.
 # The fixture is the REAL system, and it refutes the belt
 
 ``goldens/lipo_inductor_m6_singular_157.npz`` is the order-157 system the production CLI assembles
-for ``lipo_inductor`` at ``--mesh-size 6mm``, captured through the seam itself. Measured on it:
+for ``lipo_inductor`` at ``--set mesh.mesh_size="6mm"``, captured through the seam itself. Measured on it:
 
     order 157, nnz 837, condition estimate 1.49e17
     spsolve returns a FINITE vector, relative residual 17.89, and emits NO WARNING AT ALL

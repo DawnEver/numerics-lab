@@ -28,7 +28,7 @@
 //! Refusing one was the Python's own earlier mistake. With `A_c = W_cc A_c + W_cf A_f` the
 //! resolved rows are `A_c = (I - W_cc)^-1 W_cf A_f`, unique whenever `I - W_cc` is invertible.
 //! Only a SINGULAR `I - W_cc` is genuinely unsolvable, and that alone is refused.
-//! ipm_uv_cummins under `--max-aspect 4` carries exactly this shape: of 3892 hanging nodes 4
+//! ipm_uv_cummins under `--set mesh.max_aspect=4` carries exactly this shape: of 3892 hanging nodes 4
 //! are chained, and those 4 form two mutual pairs.
 
 use std::collections::{BTreeMap, BTreeSet};
