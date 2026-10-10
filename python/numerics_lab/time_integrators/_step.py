@@ -46,6 +46,9 @@ class ProblemCapabilities:
     alternative_jacobian: bool
     residual_floor: bool
     history: bool
+    #: The two per-step protocols, resolved with the rest so a resolved run inspects nothing.
+    step_evaluation: bool = False
+    affine_projection: bool = False
 
     @classmethod
     def resolve(cls, problem: SemiDiscreteProblem) -> ProblemCapabilities:
@@ -54,6 +57,8 @@ class ProblemCapabilities:
             isinstance(problem, AlternativeJacobianProblem),
             isinstance(problem, ResidualFloorProblem),
             isinstance(problem, HistoryProblem),
+            isinstance(problem, StepEvaluationProblem),
+            isinstance(problem, AffineConstraintProjectionProblem),
         )
 
 
@@ -313,14 +318,14 @@ def _solve_step(
     arithmetic with nothing for a caller to read -- the shape ``taste.md`` forbids. The flag
     rides out to :attr:`TransientSolution.floor_converged_times`.
     """
-    if isinstance(problem, StepEvaluationProblem):
+    if capabilities is None:
+        capabilities = ProblemCapabilities.resolve(problem)
+    if capabilities.step_evaluation:
         # The endpoint owner's problem is a different object: its protocols are its own.
         problem = problem.step_problem(form.t_eval)
         if not isinstance(problem, SemiDiscreteProblem):
             msg = 'step endpoint owner must return a semi-discrete problem'
             raise TypeError(msg)
-        capabilities = None
-    if capabilities is None:
         capabilities = ProblemCapabilities.resolve(problem)
     reusable = factor_cache is not None and capabilities.factor_reusable
     # The stall-polish's phase-2 source (MANUAL-627 (i)): the problem's local-derivative
@@ -342,7 +347,7 @@ def _solve_step(
 
     def project_trial(value):
         value = np.asarray(value, dtype=float)
-        if not isinstance(problem, AffineConstraintProjectionProblem):
+        if not capabilities.affine_projection:
             return value
         alpha = form.weights.alpha0
         if alpha.imag != 0 or alpha.real == 0:
