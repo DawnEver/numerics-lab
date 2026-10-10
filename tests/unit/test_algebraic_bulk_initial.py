@@ -90,7 +90,10 @@ def test_shared_rank_one_storage_preserves_state_and_marks_only_free_branch_rate
             tolerance=1e-10,
             fixed_state=True,
         )
-    inconsistent = np.array([0.01, 0.0])
+    # The stored coordinate is a FLUX (~ inductance x current), so a contradiction is a flux increment
+    # that forces a CURRENT change: 0.01 x inductance moves the bulk current by 0.01 at every scale.
+    # A bare 0.01 moved it by 1e-11 at inductance 1e9 -- under the 1e-10 bar, so not a contradiction.
+    inconsistent = np.array([0.01 * inductance, 0.0])
     with pytest.raises(ValueError, match='contradicts'):
         algebraic_bulk_initial_pair(
             jacobian,

@@ -226,7 +226,7 @@ def _samples_from(out: str) -> int:
 def test_a_singular_mna_is_refused_naming_its_order_statistic_and_seam(planted, capsys) -> None:
     """The failing half. The refusal must be about SINGULARITY, at the seam that actually factored."""
     with pytest.raises(SystemExit) as excinfo:
-        cli.main(['run', str(planted['singular'])])
+        cli.main(['case', 'run', str(planted['singular'])])
     assert excinfo.value.code == 2, 'a node that cannot be marched must exit non-zero'
 
     # BOTH streams: the refusal goes to stderr and the success line to stdout, and a test that
@@ -257,7 +257,7 @@ def test_the_refusal_lands_on_the_first_solve_which_is_a_factorisation(planted, 
     very first solve, which is always a miss (the cache starts empty). This pins that.
     """
     with pytest.raises(SystemExit):
-        cli.main(['run', str(planted['singular'])])
+        cli.main(['case', 'run', str(planted['singular'])])
     assert solve_counts['factor_cache'] == 1, (
         f'the singular march took {solve_counts["factor_cache"]} FactorCache solves. It must be '
         'refused on the FIRST one -- a later refusal means a hit already back-substituted against '
@@ -276,7 +276,7 @@ def test_the_well_posed_sibling_still_marches_and_stays_on_the_unguarded_entry(p
       advance N steps with fewer than N linear solves, so a probe that silently patched nothing
       (count 0) is refused by arithmetic rather than by a threshold somebody chose.
     """
-    assert cli.main(['run', str(planted['well_posed'])]) == 0, 'the well-posed sibling must still solve'
+    assert cli.main(['case', 'run', str(planted['well_posed'])]) == 0, 'the well-posed sibling must still solve'
     captured = capsys.readouterr()
     out = captured.out + captured.err
     assert _REPORT_PREFIX in out, 'a successful run must announce a report the user can open'
