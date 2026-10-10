@@ -19,20 +19,15 @@ itself at a residual-based tolerance stated in `rust/crates/gauss/tests/golden_l
 - at least one fixture is REFUSED by the singular guard. A fixture set that only ever succeeds
   cannot test the guard that exists to fail, and that guard is the reason this seam exists.
 
-Regenerate deliberately::
-
-    MOTRONICS_REGEN_PORT_GOLDENS=1 .venv/Scripts/python.exe -m pytest \
-        tests/unit/gauss/test_linear_port_golden.py -q
+Regenerate deliberately with `.venv/Scripts/python.exe -m tests.port_goldens`.
 """
 
 from __future__ import annotations
 
-import os
-
 import numpy as np
 import pytest
 import scipy.sparse as sp
-from tests.port_goldens import dump_golden, load_golden
+from tests.port_goldens import load_golden, register
 
 from motronics.core.utils.config import repo_root
 from motronics.gauss.linear import (
@@ -163,15 +158,10 @@ def _build() -> dict:
 
 
 def _load() -> dict:
-    # Under regeneration the golden is being REWRITTEN by a sibling test, and xdist runs the two
-    # in different workers -- a reader that raced the writer read a truncated file. A regeneration
-    # run is not a verdict about anything, so every reader stands down for it.
-    if os.environ.get('MOTRONICS_REGEN_PORT_GOLDENS'):
-        pytest.skip('regenerating: the golden is being rewritten by a sibling test')
     if not _GOLDEN.is_file():
         pytest.fail(
             f'{_GOLDEN} is missing. It is a committed artifact, not a cache -- regenerate it '
-            f'deliberately with MOTRONICS_REGEN_PORT_GOLDENS=1 and commit the result.'
+            f'deliberately with `python -m tests.port_goldens` and commit the result.'
         )
     return load_golden(_GOLDEN)
 
@@ -179,10 +169,6 @@ def _load() -> dict:
 @pytest.mark.unit
 def test_the_live_python_still_produces_the_frozen_solutions() -> None:
     """The freeze, enforced: a behaviour change in `gauss/linear/` reds HERE, not in silence."""
-    if os.environ.get('MOTRONICS_REGEN_PORT_GOLDENS'):
-        dump_golden(_GOLDEN, _build())
-        pytest.skip(f'regenerated {_GOLDEN} -- commit it, then run again without the env var')
-
     golden = _load()
     live = _build()
     assert set(live['cases']) == set(golden['cases']), 'the fixture set moved'
@@ -249,3 +235,6 @@ def test_the_non_symmetric_fixture_is_actually_non_symmetric() -> None:
     assert not golden['cases']['nonsymmetric']['symmetric']
     assert golden['cases']['spd']['symmetric']
     assert 'cg' not in golden['cases']['nonsymmetric']['solutions']
+
+
+register(_GOLDEN, _build)

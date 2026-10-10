@@ -5,19 +5,14 @@ docstring for why the comparison goes through a committed data file rather than 
 FFI, and why the Python half of the pair IS the migration plan's freeze protocol made
 executable.
 
-Regenerate deliberately::
-
-    MOTRONICS_REGEN_PORT_GOLDENS=1 .venv/Scripts/python.exe -m pytest \
-        tests/unit/gauss/test_transforms_port_golden.py
+Regenerate deliberately with `.venv/Scripts/python.exe -m tests.port_goldens`.
 """
 
 from __future__ import annotations
 
-import os
-
 import numpy as np
 import pytest
-from tests.port_goldens import dump_golden, load_golden
+from tests.port_goldens import load_golden, register
 
 from motronics.core.utils.config import repo_root
 from motronics.gauss.transforms import (
@@ -96,16 +91,10 @@ def _build() -> dict:
 
 
 def _load() -> dict:
-    # Under regeneration the golden is being REWRITTEN by a sibling test, and xdist runs the two
-    # in different workers -- a reader that raced the writer read a truncated file and failed on
-    # a coverage assertion that had nothing wrong with it (measured 2026-09-04). A regeneration
-    # run is not a verdict about anything, so every reader stands down for it.
-    if os.environ.get('MOTRONICS_REGEN_PORT_GOLDENS'):
-        pytest.skip('regenerating: the golden is being rewritten by a sibling test')
     if not _GOLDEN.is_file():
         pytest.fail(
             f'{_GOLDEN} is missing. It is a committed artifact, not a cache -- regenerate it '
-            f'deliberately with MOTRONICS_REGEN_PORT_GOLDENS=1 and commit the result.'
+            f'deliberately with `python -m tests.port_goldens` and commit the result.'
         )
     return load_golden(_GOLDEN)
 
@@ -126,10 +115,6 @@ def _walk(got: object, want: object, path: str) -> None:
 @pytest.mark.unit
 def test_the_live_python_still_produces_the_frozen_vectors() -> None:
     """The freeze, enforced: a behaviour change in `transforms.py` reds HERE, not in silence."""
-    if os.environ.get('MOTRONICS_REGEN_PORT_GOLDENS'):
-        dump_golden(_GOLDEN, _build())
-        pytest.skip(f'regenerated {_GOLDEN} -- commit it, then run again without the env var')
-
     golden = _load()
     live = _build()
     for section in ('cases', 'phase_L_to_dq_L'):
@@ -164,3 +149,6 @@ def test_the_unbalanced_fixture_actually_exercises_q_and_zero() -> None:
         for component in ('q', 'zero'):
             values = np.abs(np.asarray(case['park_forward'][component], dtype=float))
             assert values.max() > 1e-6, f'{name}: {component} is identically zero, so it proves nothing'
+
+
+register(_GOLDEN, _build)
