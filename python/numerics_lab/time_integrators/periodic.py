@@ -197,8 +197,13 @@ def periodic_fixed_point(
     tol: float = 1e-9,
     rank: int = 6,
     max_cycles: int = 50,
+    atol: float = 0.0,
 ) -> PeriodicFixedPoint:
-    """Find ``x`` with ``|P(x) - x| <= tol * max(|x|, |P(x)|)`` by cycled RRE.
+    """Find ``x`` with ``|P(x) - x| <= tol * max(|x|, |P(x)|)`` (or ``<= atol``) by cycled RRE.
+
+    ``atol`` is in the STATE's units and exists for an orbit that starts where the state is near
+    zero (a sine-fed resistive circuit at its zero crossing), where the relative test compares
+    round-off with round-off.
 
     Each cycle marches ``rank + 1`` periods from the current estimate and extrapolates; the cycle
     stops as soon as one plain period already meets ``tol``. ``max_cycles`` exhausted RAISES with the
@@ -220,8 +225,9 @@ def periodic_fixed_point(
             xs.append(np.asarray(period_map(xs[-1].copy()), dtype=float).copy())
             calls += 1
             scale = max(float(np.max(np.abs(xs[-1]))), float(np.max(np.abs(xs[-2]))), np.finfo(float).tiny)
-            residual = float(np.max(np.abs(xs[-1] - xs[-2]))) / scale
-            if residual <= tol:
+            difference = float(np.max(np.abs(xs[-1] - xs[-2])))
+            residual = difference / scale
+            if residual <= tol or difference <= atol:
                 return PeriodicFixedPoint(state=xs[-2], residual=residual, map_calls=calls)
         x = _rre(xs)
     msg = (
@@ -257,11 +263,14 @@ def periodic_steady_state(
     tol: float = 1e-9,
     rank: int = 6,
     max_cycles: int = 50,
+    atol: float = 0.0,
 ) -> tuple[PeriodicFixedPoint, TransientSolution]:
     """THE forced periodic steady state: the period map's fixed point and one marched period of it.
 
     ``march(t0, t1, x, breakpoints, first)`` marches one window (``first`` is True only for the very
-    first map, so a caller may reset its own switch state once). The map starts at
+    first map, so a caller may reset its own switch state once). Successive maps march successive
+    periods ``[phase + kT, phase + (k+1)T]``, so the returned orbit lies in the period after the last
+    map, not in the first. The map starts at
     :func:`smooth_phase` -- never on a forcing edge -- and lands every edge of the period as a
     breakpoint. ``x0`` is the start state, or a callable returning it at the chosen phase. ``period``
     must be the forcing period of every source; a free-running orbit has no such clock.
@@ -269,13 +278,21 @@ def periodic_steady_state(
     phase = smooth_phase(period, edges)
     wrapped = sorted({e % period + (period if e % period <= phase else 0.0) for e in edges})
     bps = tuple(phase + period if abs(e - phase - period) < 1e-12 * period else e for e in wrapped)
-    first = [True]
+    window = [0]
+
+    def advance(x: NDArray[np.floating]) -> TransientSolution:
+        # EACH MAP MARCHES THE NEXT PERIOD IN ABSOLUTE TIME. The problem is T-periodic, so the map is
+        # the same one for every k -- and a device or controller that keeps an accepted-time history
+        # (a switch's last event, a sampled controller's clock) never sees time run backwards.
+        k = window[0]
+        shift = k * period
+        sol = march(phase + shift, phase + shift + period, x, tuple(b + shift for b in bps), k == 0)
+        window[0] += 1
+        return sol
 
     def period_map(x: NDArray[np.floating]) -> NDArray[np.floating]:
-        sol = march(phase, phase + period, x, bps, first[0])
-        first[0] = False
-        return np.asarray(sol.states[-1], dtype=float)
+        return np.asarray(advance(x).states[-1], dtype=float)
 
     start = x0(phase) if callable(x0) else np.asarray(x0, dtype=float)
-    fixed = periodic_fixed_point(period_map, start, tol=tol, rank=rank, max_cycles=max_cycles)
-    return fixed, march(phase, phase + period, fixed.state, bps, False)
+    fixed = periodic_fixed_point(period_map, start, tol=tol, rank=rank, max_cycles=max_cycles, atol=atol)
+    return fixed, advance(fixed.state)
