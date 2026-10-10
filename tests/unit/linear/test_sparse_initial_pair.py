@@ -4,8 +4,27 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear.initial_sparse import sparse_complete_initial_rate, sparse_initial_pair
+from motronics.gauss.linear import initial_sparse
+from motronics.gauss.linear.initial_sparse import (
+    _independent_exact_columns,
+    sparse_complete_initial_rate,
+    sparse_initial_pair,
+)
 from motronics.gauss.linear.storage_border import storage_border_rows
+
+
+@pytest.mark.parametrize('tiny_constraint', [0.0, 1e-30])
+def test_only_exact_disposable_rate_dependencies_are_quotiented(tiny_constraint):
+    matrix = sp.csr_matrix([[1, 1, 0, 1], [0, 0, 1, 1], [0, 0, 0, tiny_constraint]])
+    selected, affected = _independent_exact_columns(matrix, np.arange(4), dependent_start=1)
+    assert selected.tolist() == ([0, 1, 2] if tiny_constraint == 0 else [0, 1, 2, 3])
+    assert affected == ({1, 2, 3} if tiny_constraint == 0 else set())
+
+
+def test_a_rate_dependency_on_physical_state_is_not_disposable():
+    selected, affected = _independent_exact_columns(sp.csr_matrix([[1, 1]]), np.arange(2), dependent_start=1)
+    assert selected.tolist() == [0, 1]
+    assert not affected
 
 
 @pytest.mark.parametrize(('stored_value', 'linkage_residual'), [(0.0, 0.0), (1.0, 1e-23), (1.0, 1e-3)])
@@ -95,6 +114,7 @@ def test_sparse_initial_pair_never_densifies_a_large_differential_field(monkeypa
         pytest.fail('field-sized dense initial decomposition is forbidden')
 
     monkeypatch.setattr(sp.csr_matrix, 'toarray', refuse_dense)
+    monkeypatch.setattr(initial_sparse, 'Fraction', refuse_dense)
     n = 17000
     pair = sparse_initial_pair(
         2 * sp.eye(n, format='csr'),

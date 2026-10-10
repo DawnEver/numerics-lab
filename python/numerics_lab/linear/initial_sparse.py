@@ -1,6 +1,7 @@
 """Sparse initial pair over caller-proven independent storage/algebraic rows."""
 
 from dataclasses import dataclass
+from fractions import Fraction
 
 import numpy as np
 import scipy.sparse as sp
@@ -44,20 +45,51 @@ class SparseInitialPair:
         return value
 
 
-def _independent_exact_columns(matrix, selected, *, dependent_start):
+def _independent_exact_columns(matrix, selected, *, dependent_start, general=True):
     """Quotient only exact sparse dependencies in explicitly disposable coordinates."""
     columns = matrix.tocsc()
     columns.sort_indices()
-    representatives = {}
+    if not general:
+        representatives = {}
+        affected, omitted = set(), set()
+        for column in selected[selected >= dependent_start]:
+            start, stop = columns.indptr[column : column + 2]
+            key = (columns.indices[start:stop].tobytes(), columns.data[start:stop].tobytes())
+            if key in representatives:
+                affected.update((column, representatives[key]))
+                omitted.add(column)
+            else:
+                representatives[key] = column
+        return np.asarray([column for column in selected if column not in omitted], dtype=int), affected
+    basis = {}
     affected, omitted = set(), set()
     for column in selected[selected >= dependent_start]:
         start, stop = columns.indptr[column : column + 2]
-        key = (columns.indices[start:stop].tobytes(), columns.data[start:stop].tobytes())
-        if key in representatives:
-            affected.update((column, representatives[key]))
+        vector = {
+            int(row): Fraction(float(value))
+            for row, value in zip(columns.indices[start:stop], columns.data[start:stop], strict=True)
+            if value
+        }
+        support = {int(column): Fraction(1)}
+        while vector:
+            pivot = min(vector)
+            if pivot not in basis:
+                divisor = vector[pivot]
+                basis[pivot] = (
+                    {row: value / divisor for row, value in vector.items()},
+                    {index: value / divisor for index, value in support.items()},
+                )
+                break
+            previous, provenance = basis[pivot]
+            multiplier = vector[pivot]
+            for target, source in ((vector, previous), (support, provenance)):
+                for index, value in source.items():
+                    target[index] = target.get(index, Fraction(0)) - multiplier * value
+                    if target[index] == 0:
+                        del target[index]
+        if not vector:
+            affected.update(support)
             omitted.add(column)
-        else:
-            representatives[key] = column
     return np.asarray([column for column in selected if column not in omitted], dtype=int), affected
 
 
@@ -152,20 +184,19 @@ def sparse_initial_pair(
     )
     rhs = np.concatenate((-residual, stored_change, -algebraic @ partial_time))
     matrix.eliminate_zeros()
-    scale = np.sqrt(np.asarray(matrix.multiply(matrix).sum(axis=1)).ravel())
-    scale[scale == 0] = 1.0
-    matrix, rhs = sp.diags(1 / scale) @ matrix, rhs / scale
-    # Only structurally zero rate columns may be omitted. Their value never
-    # affects these equations; expose that fact to outgoing-mode consumers.
     nonzero = np.asarray(matrix.getnnz(axis=0)).ravel() != 0
     if not nonzero[:n].all():
         msg = 'initial state requires additional physical authority'
         raise ValueError(msg)
-    selected = np.flatnonzero(nonzero)
-    # Identical actual rate columns constrain their sum, not either rate.
-    # Remove only this exact sparse dependency; state columns are never
-    # quotiented and no numerical rank cutoff invents physical uniqueness.
-    selected, duplicate_rates = _independent_exact_columns(matrix, selected, dependent_start=n)
+    actual_matrix = matrix
+    selected, duplicate_rates = _independent_exact_columns(
+        actual_matrix, np.flatnonzero(nonzero), dependent_start=n, general=False
+    )
+    scale = np.sqrt(np.asarray(matrix.multiply(matrix).sum(axis=1)).ravel())
+    scale[scale == 0] = 1.0
+    matrix, rhs = sp.diags(1 / scale) @ matrix, rhs / scale
+    # Zero and identical rate columns need no rational elimination. A general
+    # exact quotient is attempted only if the sparse physical factor is singular.
     reduced = matrix[:, selected].tocsr()
     # Storage equations are mandatory, even when their increments are tiny
     # compared with the dynamic RHS. Match them first, then verify that none
@@ -183,8 +214,23 @@ def sparse_initial_pair(
     try:
         factor = splu(reduced[matched_rows].tocsc())
     except RuntimeError as error:
-        msg = 'initial state/rate equations lack a nonsingular sparse physical constraint subsystem'
-        raise ValueError(msg) from error
+        selected, duplicate_rates = _independent_exact_columns(
+            actual_matrix, np.flatnonzero(nonzero), dependent_start=n
+        )
+        reduced = matrix[:, selected].tocsr()
+        matched = maximum_bipartite_matching(reduced[row_order], perm_type='row')
+        if np.any(matched < 0):
+            msg = 'initial state/rate equations require additional physical authority'
+            raise ValueError(msg) from error
+        matched_rows = row_order[matched]
+        if not np.isin(mandatory, matched_rows).all():
+            msg = 'initial state/rate subsystem cannot discard actual stored-coordinate constraints'
+            raise ValueError(msg) from error
+        try:
+            factor = splu(reduced[matched_rows].tocsc())
+        except RuntimeError as retry_error:
+            msg = 'initial state/rate equations lack a nonsingular sparse physical constraint subsystem'
+            raise ValueError(msg) from retry_error
     pair = np.zeros(2 * n)
     subsystem = reduced[matched_rows]
     answer = factor.solve(rhs[matched_rows])
@@ -319,7 +365,7 @@ def sparse_complete_initial_rate(
     selected = np.flatnonzero(available)
     # Acceleration coordinates are not physical initial conditions. Exact
     # duplicate acceleration columns must not prevent proving a current rate.
-    selected, _ = _independent_exact_columns(matrix, selected, dependent_start=n)
+    selected, _ = _independent_exact_columns(matrix, selected, dependent_start=n, general=False)
     reduced = matrix[:, selected].tocsr()
     rows = maximum_bipartite_matching(reduced, perm_type='row')
     if np.any(rows < 0):
