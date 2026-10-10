@@ -1256,7 +1256,14 @@ def integrate_transient(
                     err = max(float(np.linalg.norm(u_probe - u_extrap)), 1e-300)
                 else:
                     err = 0.0  # the first step after a start: no history to extrapolate from
-                if not (step_dt <= h_lo or (step_ok and (err == 0.0 or err <= curvature_atol))):
+                # AT THE FLOOR BY TICKS on a quantum lattice: the float span of one tick between two
+                # lattice times (0.5700000000000001 - 0.47) exceeds the quantum by ULPs, so a float
+                # `step_dt <= h_lo` never saw the floor and the same one-tick step was retried forever.
+                at_floor = step_dt <= h_lo or (
+                    curve_lattice is not None
+                    and curve_lattice.tick(t_step) - curve_lattice.tick(t_from) <= curve_lattice.steps(h_lo)
+                )
+                if not (at_floor or (step_ok and (err == 0.0 or err <= curvature_atol))):
                     # Reject: halve and propose again, bounded by h_lo where the step is taken with its
                     # labels rather than spun forever.
                     h_curve = max(h_lo, step_dt / 2.0)
