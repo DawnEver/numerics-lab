@@ -157,6 +157,7 @@ def sparse_initial_pair(
     partial_time,
     stored_increment=None,
     stored_columns=None,
+    rate_jacobian=None,
     tolerance=1e-10,
 ):
     """Solve actual index-two equations without dense field-sized nullspaces.
@@ -169,6 +170,7 @@ def sparse_initial_pair(
     initial = np.asarray(initial, dtype=float)
     residual, partial_time = np.asarray(residual, dtype=float), np.asarray(partial_time, dtype=float)
     jacobian, mass, algebraic = map(sp.csr_matrix, (jacobian, mass, algebraic_rows))
+    rate_tangent = jacobian if rate_jacobian is None else sp.csr_matrix(rate_jacobian)
     n = initial.size
     stored_rows = np.asarray(stored_rows)
     stored_change = np.zeros(len(stored_rows)) if stored_increment is None else np.asarray(stored_increment)
@@ -178,6 +180,7 @@ def sparse_initial_pair(
         or partial_time.shape != (n,)
         or jacobian.shape != (n, n)
         or mass.shape != (n, n)
+        or rate_tangent.shape != (n, n)
         or algebraic.shape[1] != n
         or stored_rows.ndim != 1
         or stored_rows.dtype.kind not in 'iu'
@@ -188,7 +191,16 @@ def sparse_initial_pair(
         or stored_change.shape != stored_rows.shape
         or not all(
             np.isfinite(value).all()
-            for value in (initial, residual, partial_time, stored_change, jacobian.data, mass.data, algebraic.data)
+            for value in (
+                initial,
+                residual,
+                partial_time,
+                stored_change,
+                jacobian.data,
+                mass.data,
+                algebraic.data,
+                rate_tangent.data,
+            )
         )
         or not np.isfinite(tolerance)
         or tolerance <= 0
@@ -212,13 +224,14 @@ def sparse_initial_pair(
             partial_time,
             tolerance=tolerance,
             state=initial,
+            rate_tangent=rate_tangent,
         )
         return SparseInitialPair(initial + correction[:n], correction[n:], unique)
     matrix = sp.bmat(
         [
             [jacobian, mass],
             [stored, sp.csr_matrix(stored.shape)],
-            [sp.csr_matrix(algebraic.shape), algebraic @ jacobian],
+            [sp.csr_matrix(algebraic.shape), algebraic @ rate_tangent],
         ],
         format='csr',
     )
@@ -309,6 +322,75 @@ def sparse_initial_pair(
     unique = nonzero[n:].copy()
     unique[[column - n for column in duplicate_rates]] = False
     return SparseInitialPair(initial + pair[:n], pair[n:], unique)
+
+
+def sparse_initial_rate(matrix, rhs, *, tolerance=1e-10):
+    """Solve actual frozen-state rate equations; dependent rates stay unavailable.
+
+    All rows are retained as physical witnesses. Sparse matching/LU is the
+    ordinary path; exact disposable-column and row elimination is only a
+    singular-factor retry, never a floating numerical rank threshold.
+    """
+    matrix = sp.csr_matrix(matrix, dtype=float)
+    rhs = np.asarray(rhs, dtype=float)
+    if (
+        rhs.shape != (matrix.shape[0],)
+        or not np.isfinite(rhs).all()
+        or not np.isfinite(matrix.data).all()
+        or not np.isfinite(tolerance)
+        or tolerance <= 0
+    ):
+        msg = 'initial rate equations require finite actual matrix and aligned right-hand side'
+        raise ValueError(msg)
+    matrix.eliminate_zeros()
+    nonzero = np.asarray(matrix.getnnz(axis=0)).ravel() != 0
+    selected, affected = _independent_exact_columns(matrix, np.flatnonzero(nonzero), dependent_start=0, general=False)
+    scale = np.sqrt(np.asarray(matrix.multiply(matrix).sum(axis=1)).ravel())
+    scale[scale == 0] = 1
+    normalized, forcing = sp.diags(1 / scale) @ matrix, rhs / scale
+    if not np.isfinite(normalized.data).all() or not np.isfinite(forcing).all():
+        msg_0 = 'initial rate normalization requires finite operators and forcing'
+        raise ValueError(msg_0)
+    answer = np.zeros(matrix.shape[1])
+    if len(selected):
+        reduced = normalized[:, selected].tocsr()
+        rows = maximum_bipartite_matching(reduced, perm_type='row')
+        factor = None
+        if np.all(rows >= 0):
+            try:
+                factor = splu(reduced[rows].tocsc())
+            except RuntimeError:
+                factor = None
+        if factor is None:
+            selected, affected = _independent_exact_columns(matrix, np.flatnonzero(nonzero), dependent_start=0)
+            reduced = normalized[:, selected].tocsr()
+            rows = _independent_exact_rows(matrix[:, selected], np.array([], dtype=int))
+            try:
+                factor = splu(reduced[rows].tocsc())
+            except RuntimeError as error:
+                msg = 'actual rate equations lack a nonsingular sparse physical subsystem'
+                raise ValueError(msg) from error
+        values = factor.solve(forcing[rows])
+        for _ in range(3):
+            if not np.isfinite(values).all():
+                msg_0 = 'actual rate equations require a finite representable solution'
+                raise ValueError(msg_0)
+            values += factor.solve(forcing[rows] - reduced[rows] @ values)
+        if not np.isfinite(values).all():
+            msg_0 = 'actual rate refinement requires a finite representable solution'
+            raise ValueError(msg_0)
+        answer[selected] = values
+    defect = matrix @ answer - rhs
+    bar = tolerance * (abs(matrix) @ abs(answer) + abs(rhs))
+    if not np.isfinite(defect).all() or not np.isfinite(bar).all():
+        msg_0 = 'actual rate physical validation requires finite defects and bounds'
+        raise ValueError(msg_0)
+    if np.any(abs(defect) > bar):
+        msg = 'actual rate equations contradict original physical constraints'
+        raise ValueError(msg)
+    unique = nonzero.copy()
+    unique[list(affected)] = False
+    return answer, unique
 
 
 def sparse_complete_initial_rate(

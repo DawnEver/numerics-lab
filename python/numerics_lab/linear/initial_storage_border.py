@@ -9,7 +9,18 @@ from motronics.gauss.linear.storage_border import free_pinned_columns
 
 
 def stored_initial_correction(
-    jacobian, residual, mass, algebraic, stored_rows, stored_columns, stored_change, partial, *, tolerance, state
+    jacobian,
+    residual,
+    mass,
+    algebraic,
+    stored_rows,
+    stored_columns,
+    stored_change,
+    partial,
+    *,
+    tolerance,
+    state,
+    rate_tangent,
 ):
     """Eliminate stored state then stored rate; reveal only the actual free border."""
     n = mass.shape[0]
@@ -23,7 +34,7 @@ def stored_initial_correction(
     ):
         msg = 'joint storage elimination requires independently declared mass columns'
         raise ValueError(msg)
-    columns = free_pinned_columns(columns, mass[stored_rows], algebraic @ jacobian)
+    columns = free_pinned_columns(columns, mass[stored_rows], algebraic @ rate_tangent)
     free = np.setdiff1d(np.arange(n), columns)
     width = 2 * len(free)
     if not 0 < width <= 512:
@@ -62,7 +73,7 @@ def stored_initial_correction(
         [
             [jacobian, mass],
             [stored, sp.csr_matrix(stored.shape)],
-            [sp.csr_matrix(algebraic.shape), algebraic @ jacobian],
+            [sp.csr_matrix(algebraic.shape), algebraic @ rate_tangent],
         ],
         format='csr',
     )

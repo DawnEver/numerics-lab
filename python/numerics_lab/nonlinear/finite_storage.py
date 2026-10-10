@@ -10,7 +10,12 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import splu
 
 from motronics.gauss.linear.algebraic_bulk_initial import algebraic_bulk_initial_pair
-from motronics.gauss.linear.initial_sparse import projected_rate_consistent, sparse_initial_pair
+from motronics.gauss.linear.initial_sparse import (
+    SparseInitialPair,
+    projected_rate_consistent,
+    sparse_initial_pair,
+    sparse_initial_rate,
+)
 from motronics.gauss.nonlinear import AssembledState, NewtonStrategy
 
 
@@ -227,4 +232,295 @@ def finite_storage_initial_pair(
             ):
                 return pair
     msg = 'actual finite storage state/rate projection did not converge'
+    raise ValueError(msg)
+
+
+def finite_storage_actual_rate_initial_pair(
+    initial,
+    *,
+    residual_at,
+    jacobian_at,
+    mass_at,
+    storage_at,
+    partial_time_at,
+    storage_rows_at,
+    rate_constraint_jacobian_at,
+    stored_columns_at=None,
+    max_newton=30,
+    tolerance=1e-10,
+):
+    """Admit actual finite Q and full differentiated equations at the actual rate.
+
+    The owner supplies F_u(u,v), F_t(u,v), and the exact rate tangent of
+    F_u(u,v)v+F_t(u,v). A changing left nullspace is only an elimination
+    basis: differentiating F=0 first removes its acceleration without
+    manufacturing null-basis derivatives. Sparse bulk/small-border rank
+    construction remains the caller's actual storage owner.
+    """
+    state = np.asarray(initial, dtype=float).copy()
+    if (
+        state.ndim != 1
+        or not np.isfinite(state).all()
+        or not isinstance(max_newton, (int, np.integer))
+        or isinstance(max_newton, (bool, np.bool_))
+        or max_newton < 1
+        or not np.isfinite(tolerance)
+        or tolerance <= 0
+    ):
+        msg = 'actual-rate finite storage admission requires finite state and positive iteration controls'
+        raise ValueError(msg)
+    rate = np.zeros_like(state)  # Search seed, never returned as derivative authority without proof.
+
+    def checked_matrix(owner):
+        def evaluate(value, velocity):
+            matrix = sp.csr_matrix(owner(value, velocity), dtype=float)
+            if matrix.shape != (len(state), len(state)) or not np.isfinite(matrix.data).all():
+                msg = 'actual-rate admission requires finite actual matrices with the square state shape'
+                raise ValueError(msg)
+            return matrix
+
+        return evaluate
+
+    def checked_vector(owner):
+        def evaluate(value, velocity):
+            vector = np.asarray(owner(value, velocity), dtype=float)
+            if vector.shape != state.shape or not np.isfinite(vector).all():
+                msg = 'actual-rate admission requires finite actual vectors with the state shape'
+                raise ValueError(msg)
+            return vector
+
+        return evaluate
+
+    mass_at, jacobian_at, rate_constraint_jacobian_at = map(
+        checked_matrix, (mass_at, jacobian_at, rate_constraint_jacobian_at)
+    )
+    residual_at, partial_time_at = map(checked_vector, (residual_at, partial_time_at))
+
+    def charge_at(value):
+        charge = np.asarray(storage_at(value), dtype=float)
+        if charge.shape != state.shape or not np.isfinite(charge).all():
+            msg = 'actual-rate admission requires finite full charge witnesses with the state vector shape'
+            raise ValueError(msg)
+        return charge
+
+    target = charge_at(state).copy()
+
+    # First separate state authority wherever Q and the actual algebraic
+    # equations already determine it. A rate RHS must not introduce numerical
+    # corrections into an exactly admitted homogeneous storage/linkage state.
+    # An index-two state that needs source-rate authority takes the coupled
+    # physical equations below instead, not a guessed algebraic state.
+    try:
+        state = _actual_finite_storage_state(
+            state,
+            target,
+            residual_at,
+            jacobian_at,
+            mass_at,
+            charge_at,
+            storage_rows_at,
+            max_newton,
+            tolerance,
+            stored_columns_at,
+        )
+    except StorageRateAuthorityRequired:
+        pass
+    else:
+        state_mass = sp.csr_matrix(mass_at(state, rate))
+        actual_charge = charge_at(state)
+        charge_scale = abs(actual_charge) + abs(target) + np.asarray(abs(state_mass) @ abs(state)).ravel()
+        if np.any(abs(actual_charge - target) > tolerance * charge_scale):
+            msg = 'actual finite storage state candidate contradicts original full charge witnesses'
+            raise ValueError(msg)
+        for _iteration in range(max_newton):
+            mass = sp.csr_matrix(mass_at(state, rate))
+            jacobian = sp.csr_matrix(jacobian_at(state, rate))
+            partial = np.asarray(partial_time_at(state, rate))
+            tangent = sp.csr_matrix(rate_constraint_jacobian_at(state, rate))
+            storage = storage_rows_at(state, rate)
+            residual = np.asarray(residual_at(state, rate))
+            derivative = storage.algebraic_rows @ (jacobian @ rate + partial)
+            rate, _unique = sparse_initial_rate(
+                sp.vstack((mass, storage.algebraic_rows @ tangent), format='csr'),
+                np.concatenate((mass @ rate - residual, storage.algebraic_rows @ tangent @ rate - derivative)),
+                tolerance=tolerance,
+            )
+            final_mass = sp.csr_matrix(mass_at(state, rate))
+            final_jacobian = sp.csr_matrix(jacobian_at(state, rate))
+            final_partial = np.asarray(partial_time_at(state, rate))
+            final_tangent = sp.csr_matrix(rate_constraint_jacobian_at(state, rate))
+            final_storage = storage_rows_at(state, rate)
+            final_residual = np.asarray(residual_at(state, rate))
+            residual_scale = (
+                np.asarray(abs(final_jacobian) @ abs(state)).ravel()
+                + np.asarray(abs(final_mass) @ abs(rate)).ravel()
+                + abs(np.asarray(residual_at(state, np.zeros_like(rate))))
+            )
+            if np.all(abs(final_residual) <= tolerance * residual_scale) and projected_rate_consistent(
+                final_jacobian,
+                rate,
+                final_partial,
+                algebraic_rows=final_storage.algebraic_rows,
+                tolerance=tolerance,
+            ):
+                # State search used a frozen-nullspace quasi-Newton tangent.
+                # Its nonsingularity is not the final physical state proof:
+                # re-factor the actual-rate state/storage equations as well.
+                sparse_initial_pair(
+                    final_jacobian,
+                    final_residual - final_mass @ rate,
+                    final_mass,
+                    state,
+                    algebraic_rows=final_storage.algebraic_rows,
+                    stored_rows=final_storage.stored_rows,
+                    partial_time=final_jacobian @ rate + final_partial - final_tangent @ rate,
+                    stored_increment=np.zeros(len(final_storage.stored_rows)),
+                    rate_jacobian=final_tangent,
+                    tolerance=tolerance,
+                )
+                _, unique = sparse_initial_rate(
+                    sp.vstack((final_mass, final_storage.algebraic_rows @ final_tangent), format='csr'),
+                    np.zeros(len(state) + final_storage.algebraic_rows.shape[0]),
+                    tolerance=tolerance,
+                )
+                return SparseInitialPair(state, rate, unique)
+        msg = 'actual-rate finite storage frozen-state rate projection did not converge'
+        raise ValueError(msg)
+
+    for _iteration in range(max_newton):
+        mass = sp.csr_matrix(mass_at(state, rate))
+        jacobian = sp.csr_matrix(jacobian_at(state, rate))
+        partial = np.asarray(partial_time_at(state, rate))
+        rate_tangent = sp.csr_matrix(rate_constraint_jacobian_at(state, rate))
+        storage = storage_rows_at(state, rate)
+        # Quasi-Newton search: freeze the state dependence of the projected
+        # derivative equation, but use its EXACT rate tangent. Acceptance
+        # below never substitutes this search linearization for physics.
+        try:
+            pair = sparse_initial_pair(
+                jacobian,
+                np.asarray(residual_at(state, rate)) - mass @ rate,
+                mass,
+                state,
+                algebraic_rows=storage.algebraic_rows,
+                stored_rows=storage.stored_rows,
+                partial_time=jacobian @ rate + partial - rate_tangent @ rate,
+                stored_increment=(target - charge_at(state))[storage.stored_rows],
+                stored_columns=None if stored_columns_at is None else stored_columns_at(state, rate, storage),
+                rate_jacobian=rate_tangent,
+                tolerance=tolerance,
+            )
+        except ValueError as error:
+            msg = 'actual-rate finite storage equations lack a compatible physical initial pair'
+            raise ValueError(msg) from error
+        state, rate = pair.state, pair.rate
+        mass = sp.csr_matrix(mass_at(state, rate))
+        jacobian = sp.csr_matrix(jacobian_at(state, rate))
+        partial = np.asarray(partial_time_at(state, rate))
+        storage = storage_rows_at(state, rate)
+        actual_q = charge_at(state)
+        residual = np.asarray(residual_at(state, rate))
+        # ALL original charge witnesses, not merely a locally independent
+        # subset: e.g. Q=(x,x²) cannot exchange the incoming sign branch.
+        charge_scale = abs(actual_q) + abs(target) + np.asarray(abs(mass) @ abs(state)).ravel()
+        residual_scale = (
+            np.asarray(abs(jacobian) @ abs(state)).ravel()
+            + np.asarray(abs(mass) @ abs(rate)).ravel()
+            + abs(np.asarray(residual_at(state, np.zeros_like(rate))))
+        )
+        annihilation = storage.algebraic_rows @ mass
+        if (
+            np.all(abs(actual_q - target) <= tolerance * charge_scale)
+            and np.all(abs(residual) <= tolerance * residual_scale)
+            and np.linalg.norm(annihilation.data)
+            <= tolerance * np.linalg.norm(storage.algebraic_rows.data) * np.linalg.norm(mass.data)
+            and projected_rate_consistent(
+                jacobian,
+                rate,
+                partial,
+                algebraic_rows=storage.algebraic_rows,
+                tolerance=tolerance,
+            )
+        ):
+            final_tangent = sp.csr_matrix(rate_constraint_jacobian_at(state, rate))
+            final_pair = sparse_initial_pair(
+                jacobian,
+                residual - mass @ rate,
+                mass,
+                state,
+                algebraic_rows=storage.algebraic_rows,
+                stored_rows=storage.stored_rows,
+                partial_time=jacobian @ rate + partial - final_tangent @ rate,
+                stored_increment=np.zeros(len(storage.stored_rows)),
+                stored_columns=None if stored_columns_at is None else stored_columns_at(state, rate, storage),
+                rate_jacobian=final_tangent,
+                tolerance=tolerance,
+            )
+            return type(pair)(state, rate, final_pair.rate_is_unique)
+    msg = 'actual-rate finite storage state/rate projection did not converge'
+    raise ValueError(msg)
+
+
+def _actual_finite_storage_state(
+    initial,
+    target,
+    residual_at,
+    jacobian_at,
+    mass_at,
+    charge_at,
+    storage_rows_at,
+    max_newton,
+    tolerance,
+    stored_columns_at,
+):
+    """Quasi-Newton state search; full Q and actual algebraic rows decide admission."""
+    state = initial.copy()
+    zero = np.zeros_like(state)
+    for _iteration in range(max_newton):
+        mass = sp.csr_matrix(mass_at(state, zero))
+        jacobian = sp.csr_matrix(jacobian_at(state, zero))
+        storage = storage_rows_at(state, zero)
+        charge = charge_at(state)
+        residual = np.asarray(residual_at(state, zero))
+        projected = storage.algebraic_rows @ residual
+        columns = None if stored_columns_at is None else stored_columns_at(state, zero, storage)
+        base = np.zeros_like(state)
+        mapping = sp.eye(len(state), format='csr')
+        if columns is not None and len(columns):
+            columns = np.asarray(columns)
+            free = np.setdiff1d(np.arange(len(state)), columns)
+            stored = mass[storage.stored_rows]
+            block = stored[:, columns].tocsc()
+            storage_factor = splu(block)
+            base[columns] = storage_factor.solve((target - charge)[storage.stored_rows])
+            coupling = stored[:, free].tocsc()
+            active = np.flatnonzero(np.asarray(coupling.getnnz(axis=0)).ravel())
+            # Do not build a field-by-field response to structurally zero
+            # stored/free coupling. Only actual nonzero boundary columns
+            # require a sparse stored solve.
+            response = sp.csr_matrix((len(columns), len(free)))
+            if len(active):
+                solved = storage_factor.solve(-coupling[:, active].toarray())
+                response = sp.csr_matrix(solved) @ sp.eye(len(free), format='csr')[active]
+            selectors = sp.eye(len(state), format='csr')
+            mapping = selectors[:, free] + selectors[:, columns] @ response
+            matrix = (storage.algebraic_rows @ jacobian @ mapping).tocsc()
+            rhs = -projected - storage.algebraic_rows @ jacobian @ base
+        else:
+            matrix = sp.vstack((storage.algebraic_rows @ jacobian, mass[storage.stored_rows]), format='csc')
+            rhs = -np.concatenate((projected, (charge - target)[storage.stored_rows]))
+        try:
+            factor = splu(matrix)
+        except RuntimeError as error:
+            msg = 'finite stored coordinates require actual differentiated rate authority to determine state'
+            raise StorageRateAuthorityRequired(msg) from error
+        charge_scale = abs(charge) + abs(target) + np.asarray(abs(mass) @ abs(state)).ravel()
+        projected_scale = abs(storage.algebraic_rows) @ (np.asarray(abs(jacobian) @ abs(state)).ravel() + abs(residual))
+        if np.all(abs(charge - target) <= tolerance * charge_scale) and np.all(
+            abs(projected) <= tolerance * projected_scale
+        ):
+            return state
+        correction = factor.solve(rhs)
+        state += base + mapping @ correction
+    msg = 'actual finite storage state equations did not converge with all original charge witnesses'
     raise ValueError(msg)
