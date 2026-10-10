@@ -650,7 +650,7 @@ def integrate_transient(
     held = HeldFactor(refactor_every) if refactor_every is not None else None
     emit = _StepLog(step_log)
     started = time.perf_counter()
-    study = canonical_eec_study(study, restart)
+    study, restart = canonical_eec_study(study, restart)
     capabilities = ProblemCapabilities.resolve(problem)
     if factor_cache is None and capabilities.factor_reusable:
         factor_cache = FactorCache()

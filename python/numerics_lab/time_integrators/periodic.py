@@ -57,23 +57,27 @@ __all__ = [
 
 
 def canonical_eec_study(study, restart):
-    """Resolve a declared uniform tick to its one original-clock representation.
+    """Resolve a declared uniform tick to its one original-clock representation: ``(study, restart)``.
 
-    Identity validation remains exact: only the unique original integer tick may
-    replace the caller's algebraically equivalent rounded endpoint expression.
+    THE IDENTITY IS THE INTEGER TICK, not a float time. The checkpoint's own ``time`` (a first run
+    stopped at its ``t1``) and the producing lattice's ``origin + k dt`` can differ in the last ULP
+    for the SAME tick ``k``; an exact float comparison refused every mid-cycle JSON restart on that
+    representation alone. Both are therefore returned on the lattice representation, so the resumed
+    grid is the uninterrupted run's grid and the checkpoint identity check compares like with like.
     """
     if restart is None or restart.eec_state is None:
-        return study
+        return study, restart
     origin = restart.eec_state.origin_time
     phase = (study.t0 - origin) / study.dt
     if not np.isfinite(phase) or not np.isclose(phase, round(phase), rtol=0.0, atol=1e-9):
         msg = 'EEC restart time must align with the original uniform integration clock'
         raise ValueError(msg)
-    time = origin + round(phase) * study.dt
-    if time != restart.time:
+    checkpoint_phase = (restart.time - origin) / study.dt
+    if not np.isfinite(checkpoint_phase) or round(checkpoint_phase) != round(phase):
         msg = 'EEC restart original-clock tick does not match the checkpoint time'
         raise ValueError(msg)
-    return replace(study, t0=time)
+    time = origin + round(phase) * study.dt
+    return replace(study, t0=time), replace(restart, time=time)
 
 
 def validate_eec_restart(restart, period, sign, dt, nonlinear=False):
