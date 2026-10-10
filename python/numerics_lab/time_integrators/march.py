@@ -605,7 +605,9 @@ def integrate_transient(
 
     ``step_times`` replaces the nominal grid with an explicit table from ``t0`` to ``t1``;
     ``step_origin`` with the absolute parent lattice ``step_origin + k dt`` (a fresh restart window
-    keeps the producing run's products exactly).
+    keeps the producing run's products exactly). BESIDE a table, ``step_origin`` has ONE meaning: it
+    is the table's PROVENANCE -- the parent lattice the table was cut from -- recorded on every
+    checkpoint so a restart re-derives the same table, and it moves no step.
 
     ACCEPTED OBSERVERS see canonical states only, never a Newton or event probe: ``on_landing(t, u)``
     returns the integer identifiers of discontinuities dispatched at that accepted state,
@@ -728,9 +730,6 @@ def integrate_transient(
             or grid[-1] != study.t1
         ):
             msg = 'step_times must increase from t0 to t1 and cannot combine with adaptive'
-            raise ValueError(msg)
-        if step_origin is not None:
-            msg = 'step_times and step_origin are two step plans; declare one'
             raise ValueError(msg)
     if step_origin is not None and (
         curvature
@@ -1021,7 +1020,7 @@ def integrate_transient(
                 pending_events=event_count if pending is not None else 0,
                 last_fired=tuple(sorted(last_fired.items())),
             )
-        elif plan == 'lattice' and step_times is None:
+        elif plan == 'lattice' and (step_times is None or step_origin is not None):
             lattice_origin = origin
         return _checkpoint_of(
             problem,
