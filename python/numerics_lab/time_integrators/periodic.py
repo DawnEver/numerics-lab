@@ -196,12 +196,17 @@ def periodic_fixed_point(
     rank: int = 6,
     max_cycles: int = 50,
     atol: float = 0.0,
+    admissible: Callable[[NDArray[np.floating]], bool] | None = None,
 ) -> PeriodicFixedPoint:
     """Find ``x`` with ``|P(x) - x| <= tol * max(|x|, |P(x)|)`` (or ``<= atol``) by cycled RRE.
 
     ``atol`` is in the STATE's units and exists for an orbit that starts where the state is near
     zero (a sine-fed resistive circuit at its zero crossing), where the relative test compares
     round-off with round-off.
+
+    ``admissible(x)`` lets the caller refuse an extrapolated start the map is not near-affine at
+    (a controller output past its saturation): the cycle then continues from its last plain period
+    instead. RRE assumes an affine map; a clipped actuator is the measured case where it is not.
 
     Each cycle marches ``rank + 1`` periods from the current estimate and extrapolates; the cycle
     stops as soon as one plain period already meets ``tol``. ``max_cycles`` exhausted RAISES with the
@@ -227,7 +232,8 @@ def periodic_fixed_point(
             residual = difference / scale
             if residual <= tol or difference <= atol:
                 return PeriodicFixedPoint(state=xs[-2], residual=residual, map_calls=calls)
-        x = _rre(xs)
+        candidate = _rre(xs)
+        x = candidate if admissible is None or admissible(candidate) else xs[-1]
     msg = (
         f'no periodic steady state within {max_cycles} RRE cycles ({calls} periods): relative '
         f'residual {residual:.3e} > {tol:g}. The map may not be contractive (an unstable or '
