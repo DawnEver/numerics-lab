@@ -40,7 +40,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from motronics.contracts.spec.analysis_formulation import DerivativeWeights
-from motronics.gauss.time_integrators._forms import TransientSolution
+from motronics.gauss.time_integrators._forms import TransientSolution, same_instant
 
 __all__ = [
     'PeriodicFixedPoint',
@@ -56,24 +56,41 @@ __all__ = [
 ]
 
 
-def canonical_eec_study(study, restart):
+def canonical_eec_study(study, restart, *, uniform_clock=False):
     """Resolve a declared uniform tick to its one original-clock representation.
 
     Identity validation remains exact: only the unique original integer tick may
     replace the caller's algebraically equivalent rounded endpoint expression.
     """
-    if restart is None or restart.eec_state is None:
-        return study
-    origin = restart.eec_state.origin_time
-    phase = (study.t0 - origin) / study.dt
-    if not np.isfinite(phase) or not np.isclose(phase, round(phase), rtol=0.0, atol=1e-9):
-        msg = 'EEC restart time must align with the original uniform integration clock'
-        raise ValueError(msg)
-    time = origin + round(phase) * study.dt
-    if time != restart.time:
-        msg = 'EEC restart original-clock tick does not match the checkpoint time'
-        raise ValueError(msg)
-    return replace(study, t0=time)
+    origin = study.t0
+    if restart is not None and restart.eec_state is not None:
+        origin = restart.eec_state.origin_time
+        phase = (study.t0 - origin) / study.dt
+        if not np.isfinite(phase):
+            msg = 'EEC restart time must align with the original uniform integration clock'
+            raise ValueError(msg)
+        time = origin + round(phase) * study.dt
+        if not same_instant(study.t0, time):
+            msg = 'EEC restart time must align with the original uniform integration clock'
+            raise ValueError(msg)
+        if time != restart.time:
+            msg = 'EEC restart original-clock tick does not match the checkpoint time'
+            raise ValueError(msg)
+        study = replace(study, t0=time)
+    if uniform_clock and np.isfinite(study.dt) and study.dt > 0:
+        phase = (study.t1 - origin) / study.dt
+        if not np.isfinite(phase):
+            msg = 'EEC endpoint must align with its declared uniform integration clock'
+            raise ValueError(msg)
+        endpoint = origin + round(phase) * study.dt
+        if not same_instant(study.t1, endpoint):
+            msg = (
+                f'EEC endpoint must align with its declared uniform {study.integrator.value.upper()} integration clock'
+            )
+            raise ValueError(msg)
+        if endpoint != study.t1:
+            study = replace(study, t1=endpoint)
+    return study
 
 
 def validate_eec_restart(restart, period, sign, dt, nonlinear=False):

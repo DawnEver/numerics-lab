@@ -23,6 +23,15 @@ from motronics.gauss.linear import reject_nonfinite_solution
 from motronics.gauss.time_integrators._forms import IntegratorState, StepForm, residual_floor
 from motronics.gauss.time_integrators.factor_reuse import FactorCache, apply_factor, factor_matrix
 from motronics.gauss.time_integrators.local_convergence import LocalIterationCheck
+from motronics.gauss.time_integrators.prepared import (
+    PreparedCandidates,
+    PreparedStageContext,
+    PreparedStepAttempt,
+    PreparedStepContext,
+    PreparedStepProblem,
+    finished_candidate,
+    prepared_stage,
+)
 
 __all__ = [
     'HELD_STALL_RATIO',
@@ -46,6 +55,9 @@ class ProblemCapabilities:
     alternative_jacobian: bool
     residual_floor: bool
     history: bool
+    prepared: bool = False
+    step_evaluation: bool = False
+    affine_projection: bool = False
 
     @classmethod
     def resolve(cls, problem: SemiDiscreteProblem) -> ProblemCapabilities:
@@ -54,6 +66,9 @@ class ProblemCapabilities:
             isinstance(problem, AlternativeJacobianProblem),
             isinstance(problem, ResidualFloorProblem),
             isinstance(problem, HistoryProblem),
+            isinstance(problem, PreparedStepProblem),
+            isinstance(problem, StepEvaluationProblem),
+            isinstance(problem, AffineConstraintProjectionProblem),
         )
 
 
@@ -313,14 +328,14 @@ def _solve_step(
     arithmetic with nothing for a caller to read -- the shape ``taste.md`` forbids. The flag
     rides out to :attr:`TransientSolution.floor_converged_times`.
     """
-    if isinstance(problem, StepEvaluationProblem):
+    if capabilities is None:
+        capabilities = ProblemCapabilities.resolve(problem)
+    if capabilities.step_evaluation:
         # The endpoint owner's problem is a different object: its protocols are its own.
         problem = problem.step_problem(form.t_eval)
         if not isinstance(problem, SemiDiscreteProblem):
             msg = 'step endpoint owner must return a semi-discrete problem'
             raise TypeError(msg)
-        capabilities = None
-    if capabilities is None:
         capabilities = ProblemCapabilities.resolve(problem)
     reusable = factor_cache is not None and capabilities.factor_reusable
     # The stall-polish's phase-2 source (MANUAL-627 (i)): the problem's local-derivative
@@ -342,7 +357,7 @@ def _solve_step(
 
     def project_trial(value):
         value = np.asarray(value, dtype=float)
-        if not isinstance(problem, AffineConstraintProjectionProblem):
+        if not capabilities.affine_projection:
             return value
         alpha = form.weights.alpha0
         if alpha.imag != 0 or alpha.real == 0:
@@ -559,6 +574,7 @@ class StepOutcome:
     on_floor: bool
     rate: NDArray[np.floating]
     residual_time: float
+    candidate: object | None = None
 
 
 def take_step(
@@ -570,6 +586,7 @@ def take_step(
     *,
     endpoint_left: bool = False,
     capabilities: ProblemCapabilities | None = None,
+    candidate_registry: PreparedCandidates | None = None,
     **solve_kw,
 ) -> StepOutcome:
     """Advance ``state`` by ``dt`` to ``t_new`` through every stage of ``integrator``.
@@ -585,13 +602,38 @@ def take_step(
     converged, on_floor, iterations, worst = True, False, 0, 0.0
     u = state.last_u
     form = None
-    for _ in range(integrator.stages):
-        form = integrator.prepare(state, dt, t_new)
-        if endpoint_left and form.t_eval == t_new:
-            form = replace(form, t_eval=float(np.nextafter(t_new, -np.inf)))
-        u, ok, its, residual, floor = _solve_step(problem, form, state.last_u, capabilities=capabilities, **solve_kw)
-        converged, on_floor = converged and ok, on_floor or floor
-        iterations, worst = iterations + its, max(worst, residual)
-        state = integrator.advance(state, u, dt, t_new, form)
+    attempt = None
+    parent_candidate = state.prepared_candidate
+    if capabilities.prepared:
+        attempt = problem.begin_step(PreparedStepContext(integrator, state.copy(), dt, t_new, parent_candidate))
+        if not isinstance(attempt, PreparedStepAttempt):
+            msg = 'prepared step owner must return a prepared step attempt'
+            raise TypeError(msg)
+    candidate = None
+    try:
+        for index in range(integrator.stages):
+            form = integrator.prepare(state, dt, t_new)
+            if endpoint_left and form.t_eval == t_new:
+                form = replace(form, t_eval=float(np.nextafter(t_new, -np.inf)))
+            stage_problem = problem
+            stage_capabilities = capabilities
+            if attempt is not None:
+                stage_problem = prepared_stage(attempt, PreparedStageContext(form, state.copy(), index))
+                stage_capabilities = None
+            u, ok, its, residual, floor = _solve_step(
+                stage_problem, form, state.last_u, capabilities=stage_capabilities, **solve_kw
+            )
+            converged, on_floor = converged and ok, on_floor or floor
+            iterations, worst = iterations + its, max(worst, residual)
+            if attempt is not None:
+                attempt.stage_solved(u.copy())
+            state = integrator.advance(state, u, dt, t_new, form)
+        if attempt is not None:
+            candidate = finished_candidate(attempt, parent_candidate, candidate_registry)
+    except BaseException:
+        if attempt is not None:
+            attempt.abort()
+        raise
+    state.prepared_candidate = candidate
     assert form is not None
-    return StepOutcome(state, u, converged, iterations, worst, on_floor, form.u_dot(u), form.t_eval)
+    return StepOutcome(state, u, converged, iterations, worst, on_floor, form.u_dot(u), form.t_eval, candidate)

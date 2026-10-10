@@ -130,6 +130,7 @@ class TransientCheckpoint:
             not in (
                 'bdf1',
                 'bdf2',
+                'tr_bdf2',
                 'newmark',
                 'generalized_alpha',
             )
@@ -149,8 +150,11 @@ class TransientCheckpoint:
             for value in state:
                 _number(value)
         second_order = self.integrator in ('newmark', 'generalized_alpha')
-        if (second_order and (self.velocity is None or self.acceleration is None)) or (
-            not second_order and (self.velocity is not None or self.acceleration is not None)
+        carried_rate = self.integrator == 'tr_bdf2'
+        if (
+            (second_order and (self.velocity is None or self.acceleration is None))
+            or (carried_rate and (self.velocity is None or self.acceleration is not None))
+            or (not second_order and not carried_rate and (self.velocity is not None or self.acceleration is not None))
         ):
             msg = 'checkpoint derivative history must match the integrator order'
             raise ValueError(msg)
@@ -342,6 +346,9 @@ def owns_history(problem) -> bool:
 
 
 def _checkpoint_of(problem, state, dt, key, name, *, eec_state=None, step_origin=None, event_state=None):
+    if state.stage != 0:
+        msg = 'portable checkpoint requires an accepted macrostep, not an intermediate stage'
+        raise ValueError(msg)
     return TransientCheckpoint(
         key,
         name,
