@@ -12,6 +12,63 @@ from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize('integrator', [IntegratorKind.BDF1, IntegratorKind.BDF2])
+def test_event_only_owner_projects_actual_right_state_preserving_storage_and_incoming_rate(integrator):
+    class Algebraic:
+        forcing = 0.0
+
+        def residual(self, u, u_dot, u_ddot, t):
+            return np.array([u_dot[0], u[1] - self.forcing])
+
+        def jacobian(self, u, u_dot, u_ddot, t, weights):
+            return np.diag([weights.alpha1.real, weights.alpha0.real])
+
+    problem = Algebraic()
+    projected = []
+
+    def event(_index, time, _state):
+        assert time == pytest.approx(0.15, abs=1e-7)
+        problem.forcing = 3.0
+
+    def project(time, state):
+        assert not state.flags.writeable
+        projected.append(time)
+        return np.array([state[0], problem.forcing])
+
+    solution = integrate_transient(
+        problem,
+        TransientStudy(0.0, 0.3, 0.1, integrator),
+        np.array([0.4, 0.0]),
+        event_fns=(lambda _state, time: time - 0.15,),
+        on_event=event,
+        project_accepted_state=project,
+    )
+    assert len(projected) == 1
+    row = int(np.argmin(np.abs(np.asarray(solution.times) - projected[0])))
+    np.testing.assert_allclose(solution.states[row], [0.4, 3.0], atol=1e-12)
+    np.testing.assert_allclose(solution.rate_state_overrides[row - 1], [0.4, 0.0], atol=1e-12)
+    np.testing.assert_allclose(np.asarray(solution.states)[:, 0], 0.4, atol=1e-12)
+    np.testing.assert_allclose(solution.state_rates, 0.0, atol=1e-12)
+
+
+@pytest.mark.parametrize('owner', ['none', 'surface_only', 'callback_only', 'unsupported_scheme'])
+def test_projection_still_requires_actual_mutation_owner_and_supported_scheme(owner):
+    options = {}
+    if owner in ('surface_only', 'unsupported_scheme'):
+        options['event_fns'] = (lambda _state, time: time - 0.15,)
+    if owner in ('callback_only', 'unsupported_scheme'):
+        options['on_event'] = lambda *_args: None
+    scheme = IntegratorKind.TR_BDF2 if owner == 'unsupported_scheme' else IntegratorKind.BDF1
+    with pytest.raises(ValueError, match='accepted state projection requires'):
+        integrate_transient(
+            _Forced(),
+            TransientStudy(0.0, 0.3, 0.1, scheme),
+            np.zeros(1),
+            project_accepted_state=lambda _time, state: state.copy(),
+            **options,
+        )
+
+
 def _march(eventful, adaptive=False):
     """The ONE march; ``eventful`` routes it through a never-crossing surface, ``adaptive`` picks the
     controller each former entry point meant by the word (curvature on the plain grid, Newton-failure

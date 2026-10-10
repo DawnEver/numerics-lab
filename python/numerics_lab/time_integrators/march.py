@@ -704,9 +704,10 @@ def integrate_transient(
         msg = 'live breakpoints cannot combine with EEC schedule corrections'
         raise ValueError(msg)
     if project_accepted_state is not None and (
-        (on_accept is None and on_landing is None) or integrator.name not in ('bdf1', 'bdf2')
+        (on_accept is None and on_landing is None and not (event_fns and on_event is not None))
+        or integrator.name not in ('bdf1', 'bdf2')
     ):
-        msg = 'accepted state projection requires an accepted observer and BDF1 or BDF2'
+        msg = 'accepted state projection requires an accepted observer, landing or event owner and BDF1 or BDF2'
         raise ValueError(msg)
     if on_checkpoint is not None and checkpoint_key is None:
         msg = 'on_checkpoint requires checkpoint_key'
