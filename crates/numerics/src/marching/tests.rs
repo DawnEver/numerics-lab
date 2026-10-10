@@ -3,12 +3,13 @@ use crate::integrators::{Bdf1, Bdf2, Newmark, TimeIntegrator};
 
 const TOL: f64 = 1e-12;
 
-fn state_with(us: Vec<Vec<f64>>, t: f64) -> IntegratorState {
+fn state_with(us: Vec<Vec<f64>>, t: f64, h: Option<f64>) -> IntegratorState {
     IntegratorState {
         us,
         t,
         v: None,
         a: None,
+        h,
     }
 }
 
@@ -16,10 +17,11 @@ fn state_with(us: Vec<Vec<f64>>, t: f64) -> IntegratorState {
 /// BDF2, or an event-free march is no longer bit-identical to a plain one.
 #[test]
 fn the_variable_form_reduces_to_uniform_bdf2_at_equal_spacing() {
-    let state = state_with(vec![vec![3.0, -1.0], vec![5.0, 2.0]], 0.2);
     let dt = 0.1;
-    let variable = bdf2_variable_form(&state, dt, dt, 0.3).unwrap();
-    let uniform = Bdf2.prepare(&state, dt, 0.3).unwrap();
+    let spaced = state_with(vec![vec![3.0, -1.0], vec![5.0, 2.0]], 0.2, Some(dt));
+    let unspaced = state_with(vec![vec![3.0, -1.0], vec![5.0, 2.0]], 0.2, None);
+    let variable = Bdf2.prepare(&spaced, dt, 0.3).unwrap();
+    let uniform = Bdf2.prepare(&unspaced, dt, 0.3).unwrap();
     assert!((variable.weights.alpha1.re - uniform.weights.alpha1.re).abs() < TOL);
     for (a, b) in variable.h_dot.iter().zip(&uniform.h_dot) {
         assert!((a - b).abs() < TOL, "h_dot {a} vs {b}");
@@ -27,18 +29,18 @@ fn the_variable_form_reduces_to_uniform_bdf2_at_equal_spacing() {
     assert_eq!(variable.t_eval, uniform.t_eval);
 }
 
-/// The trap itself, made numerical. Against a QUADRATIC in t the variable form must recover the
-/// exact derivative at unequal spacing; the uniform weights cannot, and the gap is O(1) rather
-/// than a small order loss.
+/// The trap itself, made numerical. Against a QUADRATIC in t, BDF2 reading the spacing off the
+/// state must recover the exact derivative at unequal spacing; the uniform weights (no spacing
+/// on the state) cannot, and the gap is O(1) rather than a small order loss.
 #[test]
 fn the_variable_form_differentiates_a_quadratic_exactly_at_unequal_spacing() {
     // u(t) = 1 + 2t + 3t^2, sampled at t = 0, h, h + dt with h != dt.
     let (h, dt) = (0.4_f64, 0.1_f64);
     let u = |t: f64| 1.0 + 2.0 * t + 3.0 * t * t;
     let (t_nm1, t_n, t_new) = (0.0, h, h + dt);
-    let state = state_with(vec![vec![u(t_nm1)], vec![u(t_n)]], t_n);
+    let state = state_with(vec![vec![u(t_nm1)], vec![u(t_n)]], t_n, Some(h));
 
-    let form = bdf2_variable_form(&state, dt, h, t_new).unwrap();
+    let form = Bdf2.prepare(&state, dt, t_new).unwrap();
     // u_dot = alpha1 * u_new + h_dot, evaluated at the true u(t_new)
     let got = form.weights.alpha1.re * u(t_new) + form.h_dot[0];
     let exact = 2.0 + 6.0 * t_new;
@@ -48,7 +50,8 @@ fn the_variable_form_differentiates_a_quadratic_exactly_at_unequal_spacing() {
     );
 
     // ...and the uniform weights, at the SAME unequal spacing, are wrong by an O(1) factor.
-    let wrong = Bdf2.prepare(&state, dt, t_new).unwrap();
+    let blind = state_with(state.us.clone(), t_n, None);
+    let wrong = Bdf2.prepare(&blind, dt, t_new).unwrap();
     let got_wrong = wrong.weights.alpha1.re * u(t_new) + wrong.h_dot[0];
     let relative = (got_wrong - exact).abs() / exact.abs();
     assert!(
@@ -57,22 +60,24 @@ fn the_variable_form_differentiates_a_quadratic_exactly_at_unequal_spacing() {
     );
 }
 
+/// A spacing on a one-state history is the bootstrap, not a variable step: there is no
+/// quadratic through two points, so BDF2 takes its single BDF1 step.
 #[test]
-fn the_variable_form_refuses_a_history_of_fewer_than_three_points() {
-    let state = state_with(vec![vec![1.0]], 0.0);
-    assert!(matches!(
-        bdf2_variable_form(&state, 0.1, 0.1, 0.1).unwrap_err(),
-        IntegratorError::MissingSecondOrderHistory { .. }
-    ));
+fn a_spacing_on_a_one_state_history_still_bootstraps_bdf1() {
+    let state = state_with(vec![vec![1.0]], 0.0, Some(0.3));
+    assert_eq!(
+        Bdf2.prepare(&state, 0.1, 0.1).unwrap(),
+        Bdf1.prepare(&state, 0.1, 0.1).unwrap()
+    );
 }
 
 #[test]
 fn the_variable_form_refuses_a_non_positive_spacing() {
-    let state = state_with(vec![vec![1.0], vec![2.0]], 0.0);
     for (dt, h) in [(0.0, 0.1), (0.1, 0.0), (-0.1, 0.1), (0.1, f64::NAN)] {
+        let state = state_with(vec![vec![1.0], vec![2.0]], 0.0, Some(h));
         assert!(
             matches!(
-                bdf2_variable_form(&state, dt, h, 0.1),
+                Bdf2.prepare(&state, dt, 0.1),
                 Err(IntegratorError::NonPositiveStep { .. })
             ),
             "dt={dt} h={h} was accepted"
@@ -80,32 +85,42 @@ fn the_variable_form_refuses_a_non_positive_spacing() {
     }
 }
 
+/// Every step records its own spacing, so the NEXT step can read it; a start records none.
+#[test]
+fn an_advance_records_the_spacing_it_took() {
+    let start = Bdf2.start(vec![1.0], 0.0, None, None).unwrap();
+    assert_eq!(start.h, None);
+    let one = Bdf2.advance(&start, vec![2.0], 0.1, 0.1).unwrap();
+    assert_eq!(one.h, Some(0.1));
+    let two = Bdf1.advance(&one, vec![3.0], 0.25, 0.35).unwrap();
+    assert_eq!(two.h, Some(0.25));
+}
+
 // --- checkpoint / rollback -----------------------------------------------------------------
 
 #[test]
 fn a_checkpoint_survives_the_history_moving_underneath_it() {
-    let mut state = state_with(vec![vec![1.0, 2.0]], 0.0);
-    let cp = Checkpoint::take(&state, Some(0.1), 7);
+    let mut state = state_with(vec![vec![1.0, 2.0]], 0.0, Some(0.1));
+    let cp = Checkpoint::take(&state, 7);
     // The march moves on...
     state.us.push(vec![9.0, 9.0]);
     state.t = 0.1;
-    let (restored, prev_dt) = cp.restore();
+    state.h = Some(0.2);
+    let restored = cp.restore();
     assert_eq!(restored.us, vec![vec![1.0, 2.0]]);
     assert_eq!(restored.t, 0.0);
-    assert_eq!(prev_dt, Some(0.1));
+    assert_eq!(restored.h, Some(0.1));
     assert_eq!(cp.n_points(), 7);
 }
 
 #[test]
 fn a_checkpoint_carries_the_previous_spacing_because_bdf2_reads_it() {
-    // Forgetting prev_dt is how a rollback restores the right numbers against the wrong
-    // spacing, which the variable form above would then silently apply.
-    let state = state_with(vec![vec![1.0], vec![2.0]], 0.3);
-    assert_eq!(Checkpoint::take(&state, None, 0).restore().1, None);
-    assert_eq!(
-        Checkpoint::take(&state, Some(0.25), 0).restore().1,
-        Some(0.25)
-    );
+    // A rollback that lost the spacing would restore the right numbers against the wrong
+    // spacing, which the variable form would then silently apply. The spacing is IN the state.
+    let none = state_with(vec![vec![1.0], vec![2.0]], 0.3, None);
+    assert_eq!(Checkpoint::take(&none, 0).restore().h, None);
+    let spaced = state_with(vec![vec![1.0], vec![2.0]], 0.3, Some(0.25));
+    assert_eq!(Checkpoint::take(&spaced, 0).restore().h, Some(0.25));
 }
 
 #[test]
@@ -115,8 +130,9 @@ fn a_second_order_checkpoint_round_trips_v_and_a() {
         t: 0.0,
         v: Some(vec![0.5]),
         a: Some(vec![-0.25]),
+        h: None,
     };
-    let (restored, _) = Checkpoint::take(&state, None, 0).restore();
+    let restored = Checkpoint::take(&state, 0).restore();
     assert_eq!(restored.v, Some(vec![0.5]));
     assert_eq!(restored.a, Some(vec![-0.25]));
 }
@@ -306,10 +322,12 @@ fn the_restart_drops_the_derivative_history_and_keeps_the_state() {
         t: 0.7,
         v: None,
         a: None,
+        h: Some(0.05),
     };
     let after = restart_at_event(&Bdf2, &before, 0.75).unwrap();
     assert_eq!(after.us, vec![vec![2.0]], "the older state must be dropped");
     assert_eq!(after.t, 0.75);
+    assert_eq!(after.h, None, "a restart carries no spacing: the history it describes is gone");
     // ...and the proof that it is BDF1: Bdf2's own prepare bootstraps on a one-state history.
     let restarted = Bdf2.prepare(&after, 0.05, 0.8).unwrap();
     let bdf1 = Bdf1.prepare(&after, 0.05, 0.8).unwrap();
@@ -325,6 +343,7 @@ fn a_second_order_restart_preserves_continuous_state() {
         t: 0.2,
         v: Some(vec![0.5, 0.25]),
         a: Some(vec![-0.1, 0.0]),
+        h: Some(0.05),
     };
     let after = restart_at_event(&integ, &before, 0.25).unwrap();
     assert_eq!(after.v, before.v);

@@ -70,12 +70,17 @@ impl std::error::Error for IntegratorError {}
 /// `us` holds past state vectors most-recent-LAST (BDF2 reads the last two); `v`/`a` are the
 /// velocity and acceleration at the last step — the second-order schemes propagate them, the
 /// first-order schemes leave them `None`.
+///
+/// `h` is the spacing of the last step (`None` right after a start/restart): it IS history,
+/// because a multistep form differentiates against it, so it lives here and is checkpointed and
+/// rolled back with the vectors rather than tracked by each marcher.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IntegratorState {
     pub us: Vec<Vec<f64>>,
     pub t: f64,
     pub v: Option<Vec<f64>>,
     pub a: Option<Vec<f64>>,
+    pub h: Option<f64>,
 }
 
 impl IntegratorState {
@@ -183,6 +188,7 @@ fn start_first_order(u0: Vec<f64>, t0: f64) -> IntegratorState {
         t: t0,
         v: None,
         a: None,
+        h: None,
     }
 }
 
@@ -203,6 +209,7 @@ fn start_second_order(
         t: t0,
         v: Some(v),
         a: Some(a),
+        h: None,
     })
 }
 
@@ -262,8 +269,51 @@ impl TimeIntegrator for Bdf1 {
         t_new: f64,
     ) -> Result<IntegratorState, IntegratorError> {
         check_dt(dt)?;
-        Ok(start_first_order(u_new, t_new))
+        Ok(IntegratorState {
+            h: Some(dt),
+            ..start_first_order(u_new, t_new)
+        })
     }
+}
+
+/// The variable-spacing BDF2 step form; `h` is the PREVIOUS step's size.
+///
+/// ```text
+/// u_dot = u * (2dt + h)/(dt(dt + h))  -  u_n * (dt + h)/(dt h)  +  u_{n-1} * dt/(h(dt + h))
+/// ```
+///
+/// The derivative at `t_new` of the quadratic through three unevenly spaced points. At
+/// `h == dt` it is exactly the uniform-weight BDF2, which is why [`Bdf2`] takes it only when the
+/// spacings differ and an event-free march stays bit-identical. Fixed weights against an uneven
+/// history are an O(1) WRONG EQUATION, not an order loss (`marching` records the measurement).
+/// Reached only through `Bdf2::prepare`, so a marcher cannot choose a form: the state carries
+/// the spacing and the integrator decides.
+fn variable_spacing_bdf2(
+    state: &IntegratorState,
+    dt: f64,
+    h: f64,
+    t_new: f64,
+) -> Result<StepForm, IntegratorError> {
+    for step in [dt, h] {
+        if step.is_nan() || step <= 0.0 {
+            return Err(IntegratorError::NonPositiveStep { dt: step });
+        }
+    }
+    let u_n = &state.us[state.us.len() - 1];
+    let u_nm1 = &state.us[state.us.len() - 2];
+    let c_n = -(dt + h) / (dt * h);
+    let c_nm1 = dt / (h * (dt + h));
+    Ok(StepForm {
+        weights: DerivativeWeights::real(1.0, (2.0 * dt + h) / (dt * (dt + h)), 0.0),
+        h_u: vec![0.0; u_n.len()],
+        h_dot: u_n
+            .iter()
+            .zip(u_nm1)
+            .map(|(&a, &b)| c_n * a + c_nm1 * b)
+            .collect(),
+        h_ddot: vec![0.0; u_n.len()],
+        t_eval: t_new,
+    })
 }
 
 /// Second-order backward difference (BDF2) — `u_dot = (3u_{n+1} - 4u_n + u_{n-1})/(2 dt)`.
@@ -307,6 +357,11 @@ impl TimeIntegrator for Bdf2 {
             // Bootstrap: not enough history yet -> one BDF1 step.
             return Bdf1.prepare(state, dt, t_new);
         }
+        if let Some(h) = state.h {
+            if h != dt {
+                return variable_spacing_bdf2(state, dt, h, t_new);
+            }
+        }
         let w = self.weights(dt)?;
         let u_n = &state.us[state.us.len() - 1];
         let u_nm1 = &state.us[state.us.len() - 2];
@@ -341,6 +396,7 @@ impl TimeIntegrator for Bdf2 {
             t: t_new,
             v: None,
             a: None,
+            h: Some(dt),
         })
     }
 }
@@ -469,6 +525,7 @@ impl TimeIntegrator for Newmark {
             t: t_new,
             v: Some(v_new),
             a: Some(a_new),
+            h: Some(dt),
         })
     }
 }
@@ -608,6 +665,7 @@ impl TimeIntegrator for GeneralizedAlpha {
             t: t_new,
             v: Some(v_new),
             a: Some(a_new),
+            h: Some(dt),
         })
     }
 }
