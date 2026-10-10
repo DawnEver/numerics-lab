@@ -37,8 +37,16 @@ def finite_storage_right_state(
     result = NewtonStrategy().solve(system, max_iter=max_newton, rtol_energy_pct=tolerance * 100)
     final = system.assemble(result.x)
     reference = np.linalg.norm(final.system_matrix.data) * np.linalg.norm(result.x) + system.rhs_norm(final)
-    if not result.converged or system.residual_norm(result.x, final) > tolerance * reference:
-        msg = 'actual finite stored-coordinate projection did not converge'
+    residual = system.residual_norm(result.x, final)
+    # JUDGED ON THE EQUATION, not on the Newton's stop flag: its increment test can stay unmet at the
+    # roundoff floor while the constraints already hold -- measured on push_pull@ccm, whose every
+    # march (the case's own included) died here with converged=False at residual 1.9e-15 against a
+    # 7.5e-8 bar, inside its first period.
+    if residual > tolerance * reference:
+        msg = (
+            f'actual finite stored-coordinate projection did not converge (newton converged={result.converged}, '
+            f'residual {residual:.3e} against {tolerance * reference:.3e})'
+        )
         raise ValueError(msg)
     return result.x
 
