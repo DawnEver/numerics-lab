@@ -1050,7 +1050,10 @@ def integrate_transient(
             emit('nonconverged', t=t_new, residual=failed_residual[t_new])
             raise StepNotConverged(t_new, failed_residual[t_new], u_new, solution.times[-1], solution.states[-1])
         if failed and (on_accept is not None or on_landing is not None):
-            msg = 'a nonconverged step cannot advance accepted observations'
+            msg = (
+                f'a nonconverged step cannot advance accepted observations (t={t_new:.9g}, '
+                f'dt={t_new - solution.times[-1]:.3g}, residual {failed_residual.get(t_new, float("nan")):.3e})'
+            )
             raise ValueError(msg)
         accepted_dt = t_new - solution.times[-1]
         # THE STEP JOINED THE TRAJECTORY, so its material history is the one the next step starts
