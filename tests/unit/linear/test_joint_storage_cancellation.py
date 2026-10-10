@@ -15,8 +15,9 @@ def test_an_algebraically_pinned_stored_rate_survives_cancellation_against_a_lar
     # Measured on the six-flag production kernel (row 203: r96 = 0 against r98 = -5e7).
     mass = 1e-9
     stored_residual = -0.07499159179807384
+    jacobian = sp.csr_matrix([[2.5e-10, 0, 1], [0, 0, 1], [-1, 0, 0]])
     correction, unique = stored_initial_correction(
-        sp.csr_matrix([[2.5e-10, 0, 1], [0, 0, 1], [-1, 0, 0]]),
+        jacobian,
         np.array([stored_residual, -0.05, 0.0]),
         sp.csr_matrix([[mass, -mass, 0], [0, 0, 0], [0, 0, 0]]),
         sp.csr_matrix([[0, 1.0, 0], [0, 0, 1.0]]),
@@ -26,6 +27,7 @@ def test_an_algebraically_pinned_stored_rate_survives_cancellation_against_a_lar
         np.zeros(3),
         tolerance=1e-10,
         state=np.zeros(3),
+        rate_tangent=jacobian,  # Constant mass: the differentiated residual has this exact tangent.
     )
     state, rate = correction[:3], correction[3:]
     assert unique.all()
@@ -56,6 +58,7 @@ def test_an_algebraic_row_on_fixed_stored_states_is_judged_at_the_state_it_was_e
         np.zeros(3),
         tolerance=1e-10,
         state=state,
+        rate_tangent=jacobian,
     )
     assert np.array_equal(correction[:2], [0, 0])
     # A residual of physical size on the same row is still a contradiction.
@@ -71,6 +74,7 @@ def test_an_algebraic_row_on_fixed_stored_states_is_judged_at_the_state_it_was_e
             np.zeros(3),
             tolerance=1e-10,
             state=state,
+            rate_tangent=jacobian,
         )
 
 
