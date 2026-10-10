@@ -1,15 +1,41 @@
 """Accepted lattice commands restart BDF history without off-grid observations."""
 
 import json
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
-from motronics.gauss.time_integrators import integrate_transient
+from motronics.gauss.time_integrators import get_integrator, integrate_transient
+from motronics.gauss.time_integrators import march as march_runtime
+from motronics.gauss.time_integrators._landing import AcceptedProjectionResult
 from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize('kind', [IntegratorKind.TRAPEZOID, IntegratorKind.TR_BDF2])
+def test_read_only_landing_observer_preserves_actual_rate_scheme_without_restart(kind):
+    problem = _Forced()
+    problem.forcing = 1.0
+    observed = []
+
+    def observe(time, state):
+        assert not state.flags.writeable
+        observed.append(time)
+        return ()
+
+    solution = integrate_transient(
+        problem,
+        TransientStudy(0.0, 0.2, 0.1, kind),
+        np.zeros(1),
+        v0=np.ones(1),
+        on_landing=observe,
+    )
+    assert observed == solution.times[1:]
+    assert not solution.history_restarts
+    np.testing.assert_allclose(solution.states[-1], [0.2], atol=1e-14)
 
 
 @pytest.mark.parametrize('integrator', [IntegratorKind.BDF1, IntegratorKind.BDF2])
@@ -51,22 +77,119 @@ def test_event_only_owner_projects_actual_right_state_preserving_storage_and_inc
     np.testing.assert_allclose(solution.state_rates, 0.0, atol=1e-12)
 
 
-@pytest.mark.parametrize('owner', ['none', 'surface_only', 'callback_only', 'unsupported_scheme'])
-def test_projection_still_requires_actual_mutation_owner_and_supported_scheme(owner):
+@pytest.mark.parametrize('owner', ['none', 'surface_only', 'callback_only'])
+def test_projection_still_requires_actual_mutation_owner(owner):
     options = {}
-    if owner in ('surface_only', 'unsupported_scheme'):
+    if owner == 'surface_only':
         options['event_fns'] = (lambda _state, time: time - 0.15,)
-    if owner in ('callback_only', 'unsupported_scheme'):
+    if owner == 'callback_only':
         options['on_event'] = lambda *_args: None
-    scheme = IntegratorKind.TR_BDF2 if owner == 'unsupported_scheme' else IntegratorKind.BDF1
     with pytest.raises(ValueError, match='accepted state projection requires'):
         integrate_transient(
             _Forced(),
-            TransientStudy(0.0, 0.3, 0.1, scheme),
+            TransientStudy(0.0, 0.3, 0.1, IntegratorKind.BDF1),
             np.zeros(1),
             project_accepted_state=lambda _time, state: state.copy(),
             **options,
         )
+
+
+def test_unknown_integrator_without_projected_pair_authority_refuses_actual_outgoing_rate(monkeypatch):
+    base = get_integrator(IntegratorKind.BDF1)
+    scheme = SimpleNamespace(
+        name='unknown',
+        order=base.order,
+        stages=base.stages,
+        error_constant=base.error_constant,
+        weights=base.weights,
+        start=base.start,
+        prepare=base.prepare,
+        advance=base.advance,
+        restart=base.restart,
+    )
+    monkeypatch.setattr(march_runtime, 'get_integrator', lambda _kind: scheme)
+    with pytest.raises(TypeError, match='actual integrator must own explicit projected derivative restart'):
+        integrate_transient(
+            _Forced(),
+            TransientStudy(0.0, 0.3, 0.1),
+            np.zeros(1),
+            on_accept=lambda time, _state: time == 0.2,
+            project_accepted_state=lambda _time, state: AcceptedProjectionResult(state, np.array([3.0])),
+        )
+
+
+def test_trbdf2_actual_outgoing_rate_survives_macro_boundary_checkpoint():
+    problem = _Forced()
+
+    def observe(time, _state):
+        if time == 0.2:
+            problem.forcing = 3.0
+            return True
+        return False
+
+    options = {
+        'on_accept': observe,
+        'project_accepted_state': lambda _time, state: AcceptedProjectionResult(state, np.array([problem.forcing])),
+        'checkpoint_key': 'actual-trbdf2-pair',
+    }
+    first = integrate_transient(
+        problem,
+        TransientStudy(0.0, 0.2, 0.1, IntegratorKind.TR_BDF2),
+        np.zeros(1),
+        **options,
+    )
+    saved = TransientCheckpoint.from_mapping(json.loads(json.dumps(first.checkpoint.to_mapping())))
+    np.testing.assert_array_equal(first.final_integrator_state.v, [3.0])
+    resumed = integrate_transient(
+        problem,
+        TransientStudy(0.2, 0.4, 0.1, IntegratorKind.TR_BDF2),
+        np.zeros(1),
+        restart=saved,
+        checkpoint_key='actual-trbdf2-pair',
+    )
+    np.testing.assert_allclose(np.asarray(resumed.states).ravel(), [0.0, 0.3, 0.6], atol=1e-14)
+
+
+@pytest.mark.parametrize('kind', [IntegratorKind.NEWMARK, IntegratorKind.GENERALIZED_ALPHA])
+def test_second_order_checkpoint_retains_actual_projected_derivative_history(kind):
+    class AccelerationLaw:
+        acceleration = -3.0
+
+        def residual(self, u, u_dot, u_ddot, t):
+            return u_ddot - self.acceleration
+
+        def jacobian(self, u, u_dot, u_ddot, t, weights):
+            return np.array([[weights.alpha2.real]])
+
+    problem = AccelerationLaw()
+
+    def changed(_time, _state):
+        if _time == 0.1:
+            problem.acceleration = 4.0
+            return True
+        return False
+
+    first = integrate_transient(
+        problem,
+        TransientStudy(0.0, 0.1, 0.1, kind),
+        np.array([0.4]),
+        v0=np.array([-2.0]),
+        a0=np.array([-3.0]),
+        on_accept=changed,
+        project_accepted_state=lambda _time, state: AcceptedProjectionResult(state, np.array([2.0]), np.array([4.0])),
+        checkpoint_key='actual-second-order-pair',
+    )
+    saved = TransientCheckpoint.from_mapping(json.loads(json.dumps(first.checkpoint.to_mapping())))
+    assert saved.velocity == (2.0,) and saved.acceleration == (4.0,)
+    resumed = integrate_transient(
+        problem,
+        TransientStudy(0.1, 0.2, 0.1, kind),
+        np.zeros(1),
+        restart=saved,
+        checkpoint_key='actual-second-order-pair',
+        max_newton=3,
+    )
+    np.testing.assert_allclose(resumed.states[-1], [0.405], atol=1e-14)
 
 
 def _march(eventful, adaptive=False):

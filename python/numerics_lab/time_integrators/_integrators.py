@@ -108,6 +108,9 @@ class BDF1Integrator:
     def restart(self, state: IntegratorState, u, t: float) -> IntegratorState:
         return self.start(u, t)
 
+    def restart_at_pair(self, state, u, t, _rate, _acceleration) -> IntegratorState:
+        return self.restart(state, u, t)
+
 
 class BDF2Integrator:
     """Second-order backward difference (BDF2) -- ``u_dot = (3u_{n+1} - 4u_n + u_{n-1})/(2 dt)``.
@@ -149,6 +152,9 @@ class BDF2Integrator:
 
     def restart(self, state: IntegratorState, u, t: float) -> IntegratorState:
         return self.start(u, t)
+
+    def restart_at_pair(self, state, u, t, _rate, _acceleration) -> IntegratorState:
+        return self.restart(state, u, t)
 
 
 class TrapezoidIntegrator:
@@ -193,6 +199,9 @@ class TrapezoidIntegrator:
 
     def restart(self, state: IntegratorState, u, t: float) -> IntegratorState:
         return self.start(u, t)
+
+    def restart_at_pair(self, _state, u, t, rate, _acceleration) -> IntegratorState:
+        return self.start(u, t, rate)
 
 
 class TRBDF2Integrator:
@@ -244,6 +253,9 @@ class TRBDF2Integrator:
 
     def restart(self, state: IntegratorState, u, t: float) -> IntegratorState:
         return self.start(u, t)
+
+    def restart_at_pair(self, _state, u, t, rate, _acceleration) -> IntegratorState:
+        return self.start(u, t, rate)
 
 
 # Newmark defaults: average-acceleration (unconditionally stable, second order). IMPORTED, not
@@ -306,6 +318,12 @@ class NewmarkIntegrator:
 
     def restart(self, state: IntegratorState, u, t: float) -> IntegratorState:
         return self.start(u, t, state.v, state.a)  # u, v, a are continuous; only spacing is dropped
+
+    def restart_at_pair(self, _state, u, t, rate, acceleration) -> IntegratorState:
+        if rate is None or acceleration is None:
+            msg = 'second-order projected restart requires actual outgoing rate and acceleration'
+            raise ValueError(msg)
+        return self.start(u, t, rate, acceleration)
 
 
 class GeneralizedAlphaIntegrator:
@@ -386,6 +404,12 @@ class GeneralizedAlphaIntegrator:
 
     def restart(self, state: IntegratorState, u, t: float) -> IntegratorState:
         return self.start(u, t, state.v, state.a)
+
+    def restart_at_pair(self, _state, u, t, rate, acceleration) -> IntegratorState:
+        if rate is None or acceleration is None:
+            msg = 'second-order projected restart requires actual outgoing rate and acceleration'
+            raise ValueError(msg)
+        return self.start(u, t, rate, acceleration)
 
 
 INTEGRATOR_REGISTRY: dict[IntegratorKind, ITimeIntegrator] = {

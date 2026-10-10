@@ -98,6 +98,7 @@ from motronics.gauss.time_integrators._forms import (
 )
 from motronics.gauss.time_integrators._integrators import get_integrator
 from motronics.gauss.time_integrators._landing import (
+    AcceptedProjectionResult,
     accepted_landing,
     accepted_observation,
     accepted_projection,
@@ -498,7 +499,7 @@ def integrate_transient(
     *,
     event_fns: Sequence[Callable[[NDArray[np.floating], float], float]] = (),
     on_event: Callable[[int, float, NDArray[np.floating]], None] | None = None,
-    on_breakpoint: Callable[[float, NDArray[np.floating]], None] | None = None,
+    on_breakpoint: Callable[[float, NDArray[np.floating]], AcceptedProjectionResult | NDArray | None] | None = None,
     time_breakpoints: Sequence[float] = (),
     observation_times: Sequence[float] = (),
     v0: NDArray[np.floating] | None = None,
@@ -691,13 +692,9 @@ def integrate_transient(
     if eec and (event_fns or time_breakpoints or observation_times):
         msg = 'EEC corrects a uniform physical cycle: it cannot combine with events, breakpoints or observations'
         raise ValueError(msg)
-    if on_landing is not None:
-        if curvature or eec:
-            msg = 'accepted landing currently requires fixed stepping without EEC'
-            raise ValueError(msg)
-        if integrator.name not in ('bdf1', 'bdf2'):
-            msg = 'accepted landing history restart requires BDF1 or BDF2'
-            raise ValueError(msg)
+    if on_landing is not None and (curvature or eec):
+        msg = 'accepted landing currently requires fixed stepping without EEC'
+        raise ValueError(msg)
     if on_accept is not None and eec:
         msg = 'accepted observation requires a physical trajectory without EEC state corrections'
         raise ValueError(msg)
@@ -705,10 +702,9 @@ def integrate_transient(
         msg = 'live breakpoints cannot combine with EEC schedule corrections'
         raise ValueError(msg)
     if project_accepted_state is not None and (
-        (on_accept is None and on_landing is None and not (event_fns and on_event is not None))
-        or integrator.name not in ('bdf1', 'bdf2')
+        on_accept is None and on_landing is None and not (event_fns and on_event is not None)
     ):
-        msg = 'accepted state projection requires an accepted observer, landing or event owner and BDF1 or BDF2'
+        msg = 'accepted state projection requires an accepted observer, landing or event owner'
         raise ValueError(msg)
     if on_checkpoint is not None and checkpoint_key is None:
         msg = 'on_checkpoint requires checkpoint_key'
@@ -822,8 +818,9 @@ def integrate_transient(
     )
     # A fresh march's initial state is canonical too: the owner may declare its law there.
     if restart is None and on_accept is not None and accepted_observation(on_accept, state.t, state.last_u):
-        u0 = accepted_projection(project_accepted_state, state.t, state.last_u)
-        state = restart_prepared(problem, integrator, state, u0, state.t)
+        projection = accepted_projection(project_accepted_state, state.t, state.last_u)
+        u0 = projection.state.copy()
+        state = restart_prepared(problem, integrator, state, projection, state.t)
         solution.states[0] = u0
     if eec:
         solution.correction_model = (
@@ -1092,12 +1089,13 @@ def integrate_transient(
             changed = True
         if changed:
             solution.accepted_discontinuities.append(t_new)
-            right_state = accepted_projection(project_accepted_state, t_new, u_new)
+            projection = accepted_projection(project_accepted_state, t_new, u_new)
+            right_state = projection.state.copy()
             if project_accepted_state is not None:
                 assert solution.rate_state_overrides is not None
                 solution.rate_state_overrides[len(solution.state_rates) - 1] = u_new.copy()
                 solution.states[-1] = right_state
-            state = restart_prepared(problem, integrator, state, right_state, t_new)
+            state = restart_prepared(problem, integrator, state, projection, t_new)
             lte_history[:] = [(t_new, right_state)]
         return changed
 
@@ -1407,20 +1405,34 @@ def integrate_transient(
                         before = checkpoint.state
                         _commit(t_step, probe)
                     if bp_index < len(breakpoints) and t_step == breakpoints[bp_index]:
+                        projection = AcceptedProjectionResult(state.last_u)
                         if on_breakpoint is not None:
                             if solution.nonconverged_times:
                                 msg = 'a physical breakpoint cannot consume a non-converged history'
                                 raise RuntimeError(msg)
                             edge_state = state.last_u.copy()
-                            on_breakpoint(t_step, state.last_u)
-                            if not np.isfinite(state.last_u).all():
+                            right_state = edge_state.copy()
+                            selected = on_breakpoint(t_step, right_state)
+                            if (
+                                not isinstance(selected, AcceptedProjectionResult)
+                                and not np.isfinite(right_state if selected is None else np.asarray(selected)).all()
+                            ):
                                 msg = 'a breakpoint handler produced a non-finite state'
                                 raise ValueError(msg)
-                            if not np.array_equal(edge_state, state.last_u):
+                            projection = (
+                                selected
+                                if isinstance(selected, AcceptedProjectionResult)
+                                else AcceptedProjectionResult(right_state if selected is None else selected)
+                            )
+                            if projection.state.shape != edge_state.shape:
+                                msg = 'a breakpoint handler must preserve state shape'
+                                raise ValueError(msg)
+                            if not np.array_equal(edge_state, projection.state):
                                 solution.rate_state_overrides[len(solution.times) - 2] = edge_state
+                            solution.states[-1] = projection.state.copy()
                         # A declared source edge is as nonsmooth as a located state event; no
                         # integrator or error predictor may extrapolate its pre-edge history.
-                        state = restart_prepared(problem, integrator, state, state.last_u, t_step)
+                        state = restart_prepared(problem, integrator, state, projection, t_step)
                         lte_history[:] = [(t_step, state.last_u)]
                     g_prev = [float(g(state.last_u, t_step)) for g in event_fns]
                     if t_step < t_target - bracket_tol:
@@ -1547,20 +1559,19 @@ def integrate_transient(
                     if rate_index >= 0 and rate_index not in solution.rate_state_overrides:
                         residual_state.flags.writeable = False
                         solution.rate_state_overrides[rate_index] = residual_state
-                # RESTART the history at the event: the toggle invalidates the pre-event derivative
-                # history (see the module docstring for the kink-rounding measurement). The landing
-                # step's v/a carry over for second-order integrators.
-                state = restart_prepared(problem, integrator, state, u_star, t_star)
+                # Select the actual outgoing pair before restarting either numerical owner.
+                projection = AcceptedProjectionResult(u_star)
                 if on_accept is not None and accepted_observation(on_accept, t_star, u_star):
                     solution.accepted_discontinuities.append(t_star)
                 if project_accepted_state is not None:
-                    right_state = accepted_projection(project_accepted_state, t_star, u_star)
+                    projection = accepted_projection(project_accepted_state, t_star, u_star)
+                    right_state = projection.state.copy()
                     rate_index = len(solution.state_rates) - 1
                     if t_star > t_from and rate_index not in solution.rate_state_overrides:
                         solution.rate_state_overrides[rate_index] = u_star.copy()
                     solution.states[-1] = right_state
                     u_star = right_state
-                    state = restart_prepared(problem, integrator, state, right_state, t_star)
+                state = restart_prepared(problem, integrator, state, projection, t_star)
                 lte_history[:] = [(t_star, u_star)]
                 g_prev = [float(g(u_star, t_star)) for g in event_fns]
                 pending_dt = t_target - t_star  # the genuine remainder of this cell

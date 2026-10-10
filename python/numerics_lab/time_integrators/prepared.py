@@ -13,7 +13,13 @@ from typing import Protocol, runtime_checkable
 from numpy.typing import NDArray
 
 from motronics.contracts.spec.analysis_formulation import SemiDiscreteProblem
-from motronics.gauss.time_integrators._forms import IntegratorState, ITimeIntegrator, StepForm
+from motronics.gauss.time_integrators._forms import (
+    IntegratorState,
+    ITimeIntegrator,
+    ProjectedRestartIntegrator,
+    StepForm,
+)
+from motronics.gauss.time_integrators._landing import AcceptedProjectionResult
 
 
 @dataclass(frozen=True)
@@ -36,6 +42,7 @@ class PreparedStageContext:
 class PreparedRestartContext:
     integrator: ITimeIntegrator
     state: IntegratorState
+    prepared_restart: object | None = None
 
 
 @runtime_checkable
@@ -60,10 +67,36 @@ class PreparedStepProblem(Protocol):
     def restart_step(self, context: PreparedRestartContext) -> None: ...
 
 
-def restart_prepared(problem, integrator: ITimeIntegrator, state: IntegratorState, u: NDArray, t: float):
-    restarted = integrator.restart(state, u, t)
+def restart_prepared(
+    problem, integrator: ITimeIntegrator, state: IntegratorState, u: NDArray | AcceptedProjectionResult, t: float
+):
+    projection = u if isinstance(u, AcceptedProjectionResult) else None
+    if (
+        projection is not None
+        and projection.prepared_restart is not None
+        and not isinstance(problem, PreparedStepProblem)
+    ):
+        msg = 'prepared restart handle requires its actual prepared owner'
+        raise TypeError(msg)
+    if projection is not None and isinstance(integrator, ProjectedRestartIntegrator):
+        restarted = integrator.restart_at_pair(
+            state,
+            projection.state.copy(),
+            t,
+            None if projection.rate is None else projection.rate.copy(),
+            None if projection.acceleration is None else projection.acceleration.copy(),
+        )
+    elif projection is not None and (projection.rate is not None or projection.acceleration is not None):
+        msg = 'actual integrator must own explicit projected derivative restart'
+        raise TypeError(msg)
+    else:
+        restarted = integrator.restart(state, projection.state.copy() if projection is not None else u, t)
     if isinstance(problem, PreparedStepProblem):
-        problem.restart_step(PreparedRestartContext(integrator, restarted.copy()))
+        problem.restart_step(
+            PreparedRestartContext(
+                integrator, restarted.copy(), None if projection is None else projection.prepared_restart
+            )
+        )
     return restarted
 
 
@@ -96,6 +129,8 @@ class PreparedCandidates:
     def __init__(self, owner: PreparedStepProblem) -> None:
         self.owner = owner
         self.pending: list[tuple[object, object | None]] = []
+        # O(total attempts) handle retention prevents identity reuse; lookup is O(1).
+        # Owners release rejected snapshot payloads in reject_step, not through handles.
         self.issued: dict[int, object] = {}
 
     def add(self, candidate: object, parent: object | None) -> None:

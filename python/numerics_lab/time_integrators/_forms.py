@@ -7,7 +7,7 @@ consume this leaf, so importing a concrete scheme never creates a cycle.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 import numpy as np
 import scipy.sparse as sp
@@ -20,6 +20,7 @@ from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint
 __all__ = [
     'ITimeIntegrator',
     'IntegratorState',
+    'ProjectedRestartIntegrator',
     'StepForm',
     'TransientSolution',
     'residual_floor',
@@ -210,6 +211,13 @@ class ITimeIntegrator(Protocol):
     def restart(self, state: IntegratorState, u: NDArray[np.floating], t: float) -> IntegratorState:
         """Drop the derivative history at a discontinuity (an event), keeping what stays continuous."""
         ...
+
+
+@runtime_checkable
+class ProjectedRestartIntegrator(Protocol):
+    """Optional actual scheme-owned seed of an explicit outgoing derivative pair."""
+
+    def restart_at_pair(self, state, u, t, rate, acceleration) -> IntegratorState: ...
 
 
 #: THE CONCRETE INTEGRATORS AND THEIR REGISTRY live in `_integrators.py`, split 2026-08-22

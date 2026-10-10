@@ -16,13 +16,42 @@ from motronics.gauss.time_integrators import (
     integrate_transient,
 )
 from motronics.gauss.time_integrators._forms import IntegratorState
+from motronics.gauss.time_integrators._landing import AcceptedProjectionResult, accepted_projection
 from motronics.gauss.time_integrators._step import take_step
 from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint, _checkpoint_of
+from motronics.gauss.time_integrators.prepared import restart_prepared
 
 
 @dataclass(frozen=True)
 class Token:
     number: int
+
+
+def test_accepted_projection_result_owns_explicit_state_and_rate():
+    state, rate = np.array([0.2]), np.array([3.0])
+    token = Token(4)
+    result = AcceptedProjectionResult(state, rate, prepared_restart=token)
+    state[:] = 9.0
+    rate[:] = 8.0
+    selected = accepted_projection(lambda _time, _state: result, 0.3, np.array([0.1]))
+    np.testing.assert_array_equal(selected.state, [0.2])
+    np.testing.assert_array_equal(selected.rate, [3.0])
+    assert selected.prepared_restart is token
+    assert not selected.state.flags.writeable and not selected.rate.flags.writeable
+
+
+@pytest.mark.parametrize('kind', [IntegratorKind.BDF1, IntegratorKind.TRAPEZOID, IntegratorKind.TR_BDF2])
+def test_projected_pair_restart_uses_actual_scheme_derivative_history(kind):
+    integrator = get_integrator(kind)
+    before = integrator.start(np.array([0.2]), 0.0, np.array([-1.0]))
+    result = AcceptedProjectionResult(np.array([0.3]), np.array([4.0]))
+    restarted = restart_prepared(object(), integrator, before, result, 0.1)
+    np.testing.assert_array_equal(restarted.last_u, [0.3])
+    if kind == IntegratorKind.BDF1:
+        assert restarted.v is None
+    else:
+        np.testing.assert_array_equal(restarted.v, [4.0])
+    assert restarted.h is None and restarted.stage == 0
 
 
 class PreparedOwner:
@@ -527,3 +556,99 @@ def test_uniform_eec_owns_actual_canonical_endpoint_and_full_step_spacing(kind):
             eec_period=1.0,
             eec_affine_first_order=True,
         )
+
+
+def test_source_breakpoint_retains_explicit_outgoing_rate():
+    class Ramp:
+        def residual(self, u, u_dot, u_ddot, t):
+            return u_dot - (1.0 if t < 0.1 else 4.0 + t - 0.1)
+
+        def jacobian(self, u, u_dot, u_ddot, t, weights):
+            return np.array([[weights.alpha1.real]])
+
+    result = integrate_transient(
+        Ramp(),
+        TransientStudy(0.0, 0.2, 0.1, IntegratorKind.TRAPEZOID),
+        np.zeros(1),
+        v0=np.ones(1),
+        time_breakpoints=(0.1,),
+        on_breakpoint=lambda _t, u: AcceptedProjectionResult(u, np.array([4.0])),
+        max_newton=3,
+    )
+    np.testing.assert_allclose(result.states[-1], [0.505], atol=1e-14, rtol=0)
+
+
+def test_prepared_restart_handle_requires_actual_prepared_owner():
+    integrator = get_integrator(IntegratorKind.BDF1)
+    state = integrator.start(np.zeros(1), 0.0)
+    with pytest.raises(TypeError, match='prepared restart handle.*owner'):
+        restart_prepared(
+            object(), integrator, state, AcceptedProjectionResult(np.zeros(1), prepared_restart=object()), 0.0
+        )
+
+
+@pytest.mark.parametrize('outgoing', [False, True])
+def test_event_without_outgoing_rate_uses_actual_tr_startup_not_incoming_slope(outgoing):
+    class SwitchedRamp:
+        switched = False
+
+        def residual(self, u, u_dot, u_ddot, t):
+            return u_dot - (4.0 + t - 0.1 if self.switched else 1.0)
+
+        def jacobian(self, u, u_dot, u_ddot, t, weights):
+            return np.array([[weights.alpha1.real]])
+
+    problem = SwitchedRamp()
+
+    def switch(_index, _time, _state):
+        problem.switched = True
+
+    result = integrate_transient(
+        problem,
+        TransientStudy(0.0, 0.2, 0.1, IntegratorKind.TRAPEZOID),
+        np.zeros(1),
+        v0=np.ones(1),
+        event_fns=(lambda _u, t: t - 0.1,),
+        on_event=switch,
+        max_newton=3,
+        project_accepted_state=(lambda t, u: AcceptedProjectionResult(u, np.array([4.0 + t - 0.1])))
+        if outgoing
+        else None,
+    )
+    np.testing.assert_allclose(result.states[-1], [0.505 if outgoing else 0.51], atol=1e-8, rtol=0)
+
+
+def test_event_projection_restarts_actual_hidden_owner_once():
+    owner = PreparedOwner()
+    integrate_transient(
+        owner,
+        TransientStudy(0.0, 0.5, 0.2),
+        np.zeros(1),
+        max_newton=3,
+        event_fns=(lambda _u, t: t - 0.31,),
+        on_event=lambda _index, _time, _state: None,
+        project_accepted_state=lambda _t, u: AcceptedProjectionResult(u),
+    )
+    assert len(owner.restarts) == 1
+
+
+@pytest.mark.parametrize('kind', [IntegratorKind.NEWMARK, IntegratorKind.GENERALIZED_ALPHA])
+@pytest.mark.parametrize('missing', ['rate', 'acceleration', 'neither'])
+def test_second_order_restart_requires_and_owns_actual_outgoing_pair(kind, missing):
+    integrator = get_integrator(kind)
+    before = integrator.start(np.array([0.2]), 0.0, np.array([-2.0]), np.array([-3.0]))
+    rate = None if missing == 'rate' else np.array([2.0])
+    acceleration = None if missing == 'acceleration' else np.array([4.0])
+    projection = AcceptedProjectionResult(np.array([0.4]), rate, acceleration)
+    if missing != 'neither':
+        with pytest.raises(ValueError, match='actual outgoing rate and acceleration'):
+            restart_prepared(object(), integrator, before, projection, 0.1)
+        np.testing.assert_array_equal(before.v, [-2.0])
+        np.testing.assert_array_equal(before.a, [-3.0])
+    else:
+        restarted = restart_prepared(object(), integrator, before, projection, 0.1)
+        np.testing.assert_array_equal(restarted.v, [2.0])
+        np.testing.assert_array_equal(restarted.a, [4.0])
+        assert restarted.v.flags.writeable and restarted.a.flags.writeable
+        assert not np.shares_memory(restarted.v, projection.rate)
+        assert not np.shares_memory(restarted.a, projection.acceleration)
