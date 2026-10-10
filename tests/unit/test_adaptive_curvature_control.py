@@ -76,6 +76,34 @@ def test_quantized_adaptive_retries_keep_absolute_ticks_and_label_unmet_floor(mo
         assert state[0] == pytest.approx(time**2, abs=1e-12)
 
 
+def test_quantized_floor_uses_ticks_not_subtraction_roundoff(monkeypatch):
+    original = _step._solve_step
+    trials = []
+
+    def record(problem, form, *args, **kwargs):
+        trials.append(form.t_eval)
+        assert len(trials) <= 4, 'a floor tick was rejected and retried without clock progress'
+        return original(problem, form, *args, **kwargs)
+
+    monkeypatch.setattr(_step, '_solve_step', record)
+    origin, quantum = 0.37, 0.001
+    assert (origin + quantum) - origin > quantum
+    solution = runtime.integrate_transient(
+        QuadraticTrajectory(),
+        TransientStudy(origin, origin + 4 * quantum, quantum),
+        np.array([origin**2]),
+        initial_history=(np.array([(origin - quantum) ** 2]), np.array([origin**2])),
+        curvature_atol=1e-30,
+        timestep_quantum=quantum,
+        timestep_origin=origin,
+    )
+    np.testing.assert_allclose(solution.times, origin + np.arange(5) * quantum, rtol=0, atol=0)
+    assert len(trials) == 4
+    assert solution.indicator_unmet_times == solution.times[1:]
+    assert not solution.indicator_satisfied
+    assert solution.converged
+
+
 def test_quantized_adaptive_rejects_a_fractional_final_tick():
     with pytest.raises(ValueError, match='lattice'):
         runtime.integrate_transient(

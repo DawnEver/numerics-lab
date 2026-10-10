@@ -935,7 +935,8 @@ def integrate_transient(
             if h_hi < curve_lattice.quantum:
                 msg = 'curvature h_max must permit at least one time lattice tick'
                 raise ValueError(msg)
-            h_lo = max(curve_lattice.quantum, np.ceil(h_lo / curve_lattice.quantum) * curve_lattice.quantum)
+            floor_ticks = max(1, int(np.ceil(h_lo / curve_lattice.quantum)))
+            h_lo = floor_ticks * curve_lattice.quantum
             if h_lo > h_hi:
                 msg = 'curvature bounds must contain at least one time lattice step'
                 raise ValueError(msg)
@@ -1256,7 +1257,14 @@ def integrate_transient(
                     err = max(float(np.linalg.norm(u_probe - u_extrap)), 1e-300)
                 else:
                     err = 0.0  # the first step after a start: no history to extrapolate from
-                if not (step_dt <= h_lo or (step_ok and (err == 0.0 or err <= curvature_atol))):
+                # An absolute lattice owns integer intervals. Subtracting its float time labels
+                # can put a floor tick just above h_lo and retry the identical tick forever.
+                at_floor = (
+                    curve_lattice.tick(t_step) - curve_lattice.tick(t_from) <= floor_ticks
+                    if curve_lattice is not None
+                    else step_dt <= h_lo
+                )
+                if not (at_floor or (step_ok and (err == 0.0 or err <= curvature_atol))):
                     # Reject: halve and propose again, bounded by h_lo where the step is taken with its
                     # labels rather than spun forever.
                     h_curve = max(h_lo, step_dt / 2.0)
