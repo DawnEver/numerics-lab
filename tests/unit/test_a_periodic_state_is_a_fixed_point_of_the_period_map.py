@@ -77,6 +77,6 @@ def test_the_steady_state_driver_restarts_off_every_edge_and_lands_the_closed_fo
     a = np.exp(-0.5)
     u_on_start = (1.0 - a) * a / (1.0 - a * a)
     t = np.asarray(orbit.times)
-    k = int(np.argmin(np.abs(t - 1.0)))
+    k = int(np.argmin(np.abs((t + 0.5) % 1.0 - 0.5)))  # an ON edge of whichever period the orbit is
     assert float(orbit.states[k][0]) == pytest.approx(u_on_start, abs=1e-5)
     assert fixed.map_calls <= 16
