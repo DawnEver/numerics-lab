@@ -4,10 +4,12 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear import initial_sparse
-from motronics.gauss.linear.initial_sparse import (
+from motronics.gauss.linear import initial_rate
+from motronics.gauss.linear.initial_rate import (
     _independent_exact_columns,
     _independent_exact_rows,
+)
+from motronics.gauss.linear.initial_sparse import (
     sparse_complete_initial_rate,
     sparse_initial_pair,
 )
@@ -26,6 +28,23 @@ def test_a_rate_dependency_on_physical_state_is_not_disposable():
     selected, affected = _independent_exact_columns(sp.csr_matrix([[1, 1]]), np.arange(2), dependent_start=1)
     assert selected.tolist() == [0, 1]
     assert not affected
+
+
+def test_structurally_deficient_disposable_rates_use_the_exact_dependency_retry():
+    mass = sp.csr_matrix([[1.0, 2.0, 3.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
+    pair = sparse_initial_pair(
+        sp.eye(3, format='csr'),
+        [-6.0, 0.0, 0.0],
+        mass,
+        np.zeros(3),
+        algebraic_rows=sp.eye(3, format='csr')[1:],
+        stored_rows=[0],
+        partial_time=np.zeros(3),
+        rate_jacobian=sp.csr_matrix((3, 3)),
+    )
+    np.testing.assert_array_equal(pair.state, np.zeros(3))
+    np.testing.assert_allclose(mass @ pair.rate, [6.0, 0.0, 0.0], rtol=1e-14)
+    assert not pair.rate_is_unique.any()
 
 
 def test_exact_row_basis_preserves_mandatory_tiny_independent_equations():
@@ -162,7 +181,7 @@ def test_sparse_initial_pair_never_densifies_a_large_differential_field(monkeypa
         pytest.fail('field-sized dense initial decomposition is forbidden')
 
     monkeypatch.setattr(sp.csr_matrix, 'toarray', refuse_dense)
-    monkeypatch.setattr(initial_sparse, 'Fraction', refuse_dense)
+    monkeypatch.setattr(initial_rate, 'Fraction', refuse_dense)
     n = 17000
     pair = sparse_initial_pair(
         2 * sp.eye(n, format='csr'),

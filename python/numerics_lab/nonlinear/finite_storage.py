@@ -10,11 +10,11 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import splu
 
 from motronics.gauss.linear.algebraic_bulk_initial import algebraic_bulk_initial_pair
+from motronics.gauss.linear.initial_rate import sparse_initial_rate
 from motronics.gauss.linear.initial_sparse import (
     SparseInitialPair,
     projected_rate_consistent,
     sparse_initial_pair,
-    sparse_initial_rate,
 )
 from motronics.gauss.nonlinear import AssembledState, NewtonStrategy
 
@@ -340,10 +340,21 @@ def finite_storage_actual_rate_initial_pair(
             storage = storage_rows_at(state, rate)
             residual = np.asarray(residual_at(state, rate))
             derivative = storage.algebraic_rows @ (jacobian @ rate + partial)
+            # Exact zero-mass rows are already admitted STATE equations, not
+            # dynamic rate forcing. Preserve their same physical state bar;
+            # differentiating rows receives no allowance whatsoever.
+            mass.eliminate_zeros()
+            algebraic_state = np.asarray(mass.getnnz(axis=1)).ravel() == 0
+            state_allowance = tolerance * (
+                np.asarray(abs(jacobian) @ abs(state)).ravel()
+                + abs(np.asarray(residual_at(state, np.zeros_like(rate))))
+            )
+            state_allowance[~algebraic_state] = 0.0
             rate, _unique = sparse_initial_rate(
                 sp.vstack((mass, storage.algebraic_rows @ tangent), format='csr'),
                 np.concatenate((mass @ rate - residual, storage.algebraic_rows @ tangent @ rate - derivative)),
                 tolerance=tolerance,
+                residual_allowance=np.concatenate((state_allowance, np.zeros(storage.algebraic_rows.shape[0]))),
             )
             final_mass = sp.csr_matrix(mass_at(state, rate))
             final_jacobian = sp.csr_matrix(jacobian_at(state, rate))
@@ -376,6 +387,7 @@ def finite_storage_actual_rate_initial_pair(
                     partial_time=final_jacobian @ rate + final_partial - final_tangent @ rate,
                     stored_increment=np.zeros(len(final_storage.stored_rows)),
                     rate_jacobian=final_tangent,
+                    stored_columns=None if stored_columns_at is None else stored_columns_at(state, rate, final_storage),
                     tolerance=tolerance,
                 )
                 _, unique = sparse_initial_rate(

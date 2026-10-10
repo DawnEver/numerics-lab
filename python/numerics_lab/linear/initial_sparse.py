@@ -1,13 +1,17 @@
 """Sparse initial pair over caller-proven independent storage/algebraic rows."""
 
 from dataclasses import dataclass
-from fractions import Fraction
 
 import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.csgraph import maximum_bipartite_matching
 from scipy.sparse.linalg import splu
 
+from motronics.gauss.linear.initial_rate import (
+    _independent_exact_columns,
+    _independent_exact_rows,
+    normalize_sparse_rows,
+)
 from motronics.gauss.linear.initial_rate_border import complete_rate_border
 from motronics.gauss.linear.initial_storage_border import stored_initial_correction
 from motronics.gauss.linear.storage_border import free_pinned_columns
@@ -45,54 +49,6 @@ class SparseInitialPair:
         return value
 
 
-def _independent_exact_columns(matrix, selected, *, dependent_start, general=True):
-    """Quotient only exact sparse dependencies in explicitly disposable coordinates."""
-    columns = matrix.tocsc()
-    columns.sort_indices()
-    if not general:
-        representatives = {}
-        affected, omitted = set(), set()
-        for column in selected[selected >= dependent_start]:
-            start, stop = columns.indptr[column : column + 2]
-            key = (columns.indices[start:stop].tobytes(), columns.data[start:stop].tobytes())
-            if key in representatives:
-                affected.update((column, representatives[key]))
-                omitted.add(column)
-            else:
-                representatives[key] = column
-        return np.asarray([column for column in selected if column not in omitted], dtype=int), affected
-    basis = {}
-    affected, omitted = set(), set()
-    for column in selected[selected >= dependent_start]:
-        start, stop = columns.indptr[column : column + 2]
-        vector = {
-            int(row): Fraction(float(value))
-            for row, value in zip(columns.indices[start:stop], columns.data[start:stop], strict=True)
-            if value
-        }
-        support = {int(column): Fraction(1)}
-        while vector:
-            pivot = min(vector)
-            if pivot not in basis:
-                divisor = vector[pivot]
-                basis[pivot] = (
-                    {row: value / divisor for row, value in vector.items()},
-                    {index: value / divisor for index, value in support.items()},
-                )
-                break
-            previous, provenance = basis[pivot]
-            multiplier = vector[pivot]
-            for target, source in ((vector, previous), (support, provenance)):
-                for index, value in source.items():
-                    target[index] = target.get(index, Fraction(0)) - multiplier * value
-                    if target[index] == 0:
-                        del target[index]
-        if not vector:
-            affected.update(support)
-            omitted.add(column)
-    return np.asarray([column for column in selected if column not in omitted], dtype=int), affected
-
-
 def projected_rate_consistent(jacobian, rate, partial_time, *, algebraic_rows, tolerance):
     """Check each actual differentiated equation in its own projected units.
 
@@ -104,46 +60,6 @@ def projected_rate_consistent(jacobian, rate, partial_time, *, algebraic_rows, t
     defect = operator @ rate + forcing
     scale = np.abs(operator) @ np.abs(rate) + np.abs(forcing)
     return bool(np.all(np.abs(defect) <= tolerance * scale))
-
-
-def _independent_exact_rows(matrix, mandatory):
-    """Actual sparse row authority after LU failure, never a numerical rank cutoff.
-
-    Mandatory stored-coordinate equations are considered first. Exact binary-float
-    elimination may fill and grow rational integers; the ordinary sparse LU and
-    caller-declared storage-border paths do not pay that fallback cost.
-    """
-    matrix = matrix.tocsr(copy=True)
-    matrix.sum_duplicates()
-    basis, selected = {}, []
-    mandatory_set = set(mandatory.tolist())
-    order = np.concatenate((mandatory, np.setdiff1d(np.arange(matrix.shape[0]), mandatory)))
-    for row in order:
-        start, stop = matrix.indptr[row : row + 2]
-        vector = {
-            int(column): Fraction(float(value))
-            for column, value in zip(matrix.indices[start:stop], matrix.data[start:stop], strict=True)
-            if value
-        }
-        while vector:
-            pivot = min(vector)
-            if pivot not in basis:
-                divisor = vector[pivot]
-                basis[pivot] = {column: value / divisor for column, value in vector.items()}
-                selected.append(int(row))
-                break
-            multiplier = vector[pivot]
-            for column, value in basis[pivot].items():
-                vector[column] = vector.get(column, Fraction(0)) - multiplier * value
-                if vector[column] == 0:
-                    del vector[column]
-        if not vector and row in mandatory_set:
-            msg = 'mandatory stored-coordinate equations lack independent actual row authority'
-            raise ValueError(msg)
-        if len(selected) == matrix.shape[1]:
-            return np.asarray(selected, dtype=int)
-    msg = 'initial state/rate equations lack independent actual physical rows'
-    raise ValueError(msg)
 
 
 def sparse_initial_pair(
@@ -245,9 +161,7 @@ def sparse_initial_pair(
     selected, duplicate_rates = _independent_exact_columns(
         actual_matrix, np.flatnonzero(nonzero), dependent_start=n, general=False
     )
-    scale = np.sqrt(np.asarray(matrix.multiply(matrix).sum(axis=1)).ravel())
-    scale[scale == 0] = 1.0
-    matrix, rhs = sp.diags(1 / scale) @ matrix, rhs / scale
+    matrix, rhs = normalize_sparse_rows(matrix, rhs)
     # Zero and identical rate columns need no rational elimination. A general
     # exact quotient is attempted only if the sparse physical factor is singular.
     reduced = matrix[:, selected].tocsr()
@@ -257,16 +171,18 @@ def sparse_initial_pair(
     mandatory = np.arange(n, n + len(stored_rows))
     row_order = np.concatenate((mandatory, np.arange(n + len(stored_rows), 2 * n), np.arange(n)))
     matched = maximum_bipartite_matching(reduced[row_order], perm_type='row')
-    if np.any(matched < 0):
-        msg = 'initial state/rate equations require additional physical authority'
-        raise ValueError(msg)
     matched_rows = row_order[matched]
-    if not np.isin(mandatory, matched_rows).all():
+    if not np.any(matched < 0) and not np.isin(mandatory, matched_rows).all():
         msg = 'initial state/rate subsystem cannot discard actual stored-coordinate constraints'
         raise ValueError(msg)
-    try:
-        factor = splu(reduced[matched_rows].tocsc())
-    except RuntimeError as error:
+    factor = None
+    factor_error = None
+    if not np.any(matched < 0):
+        try:
+            factor = splu(reduced[matched_rows].tocsc())
+        except RuntimeError as error:
+            factor_error = error
+    if factor is None:
         selected, duplicate_rates = _independent_exact_columns(
             actual_matrix, np.flatnonzero(nonzero), dependent_start=n
         )
@@ -274,11 +190,11 @@ def sparse_initial_pair(
         matched = maximum_bipartite_matching(reduced[row_order], perm_type='row')
         if np.any(matched < 0):
             msg = 'initial state/rate equations require additional physical authority'
-            raise ValueError(msg) from error
+            raise ValueError(msg) from factor_error
         matched_rows = row_order[matched]
         if not np.isin(mandatory, matched_rows).all():
             msg = 'initial state/rate subsystem cannot discard actual stored-coordinate constraints'
-            raise ValueError(msg) from error
+            raise ValueError(msg) from factor_error
         try:
             factor = splu(reduced[matched_rows].tocsc())
         except RuntimeError:
@@ -322,75 +238,6 @@ def sparse_initial_pair(
     unique = nonzero[n:].copy()
     unique[[column - n for column in duplicate_rates]] = False
     return SparseInitialPair(initial + pair[:n], pair[n:], unique)
-
-
-def sparse_initial_rate(matrix, rhs, *, tolerance=1e-10):
-    """Solve actual frozen-state rate equations; dependent rates stay unavailable.
-
-    All rows are retained as physical witnesses. Sparse matching/LU is the
-    ordinary path; exact disposable-column and row elimination is only a
-    singular-factor retry, never a floating numerical rank threshold.
-    """
-    matrix = sp.csr_matrix(matrix, dtype=float)
-    rhs = np.asarray(rhs, dtype=float)
-    if (
-        rhs.shape != (matrix.shape[0],)
-        or not np.isfinite(rhs).all()
-        or not np.isfinite(matrix.data).all()
-        or not np.isfinite(tolerance)
-        or tolerance <= 0
-    ):
-        msg = 'initial rate equations require finite actual matrix and aligned right-hand side'
-        raise ValueError(msg)
-    matrix.eliminate_zeros()
-    nonzero = np.asarray(matrix.getnnz(axis=0)).ravel() != 0
-    selected, affected = _independent_exact_columns(matrix, np.flatnonzero(nonzero), dependent_start=0, general=False)
-    scale = np.sqrt(np.asarray(matrix.multiply(matrix).sum(axis=1)).ravel())
-    scale[scale == 0] = 1
-    normalized, forcing = sp.diags(1 / scale) @ matrix, rhs / scale
-    if not np.isfinite(normalized.data).all() or not np.isfinite(forcing).all():
-        msg_0 = 'initial rate normalization requires finite operators and forcing'
-        raise ValueError(msg_0)
-    answer = np.zeros(matrix.shape[1])
-    if len(selected):
-        reduced = normalized[:, selected].tocsr()
-        rows = maximum_bipartite_matching(reduced, perm_type='row')
-        factor = None
-        if np.all(rows >= 0):
-            try:
-                factor = splu(reduced[rows].tocsc())
-            except RuntimeError:
-                factor = None
-        if factor is None:
-            selected, affected = _independent_exact_columns(matrix, np.flatnonzero(nonzero), dependent_start=0)
-            reduced = normalized[:, selected].tocsr()
-            rows = _independent_exact_rows(matrix[:, selected], np.array([], dtype=int))
-            try:
-                factor = splu(reduced[rows].tocsc())
-            except RuntimeError as error:
-                msg = 'actual rate equations lack a nonsingular sparse physical subsystem'
-                raise ValueError(msg) from error
-        values = factor.solve(forcing[rows])
-        for _ in range(3):
-            if not np.isfinite(values).all():
-                msg_0 = 'actual rate equations require a finite representable solution'
-                raise ValueError(msg_0)
-            values += factor.solve(forcing[rows] - reduced[rows] @ values)
-        if not np.isfinite(values).all():
-            msg_0 = 'actual rate refinement requires a finite representable solution'
-            raise ValueError(msg_0)
-        answer[selected] = values
-    defect = matrix @ answer - rhs
-    bar = tolerance * (abs(matrix) @ abs(answer) + abs(rhs))
-    if not np.isfinite(defect).all() or not np.isfinite(bar).all():
-        msg_0 = 'actual rate physical validation requires finite defects and bounds'
-        raise ValueError(msg_0)
-    if np.any(abs(defect) > bar):
-        msg = 'actual rate equations contradict original physical constraints'
-        raise ValueError(msg)
-    unique = nonzero.copy()
-    unique[list(affected)] = False
-    return answer, unique
 
 
 def sparse_complete_initial_rate(

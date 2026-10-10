@@ -4,8 +4,9 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear import initial_sparse as sparse_module
-from motronics.gauss.linear.initial_sparse import SparseInitialPair, sparse_initial_rate
+from motronics.gauss.linear import initial_rate as sparse_module
+from motronics.gauss.linear.initial_rate import sparse_initial_rate
+from motronics.gauss.linear.initial_sparse import SparseInitialPair
 from motronics.gauss.linear.storage_border import StorageRows, storage_border_columns, storage_border_rows
 from motronics.gauss.nonlinear import finite_storage as finite_module
 from motronics.gauss.nonlinear.finite_storage import finite_storage_actual_rate_initial_pair
@@ -189,6 +190,17 @@ def test_rate_uniqueness_is_proved_at_the_admitted_state_not_the_search_seed():
     np.testing.assert_array_equal(pair.state, [1.0])
     np.testing.assert_array_equal(pair.rate, [0.0])
     assert pair.rate_is_unique.all()
+
+
+def test_rate_equations_keep_explicit_admitted_state_allowance_row_local():
+    matrix = sp.csr_matrix([[1.0], [0.0], [1.0]])
+    rate, unique = sparse_initial_rate(
+        matrix, np.array([2.0, 5e-17, 2.0]), residual_allowance=np.array([0.0, 1e-16, 0.0])
+    )
+    np.testing.assert_array_equal(rate, [2.0])
+    assert unique.all()
+    with pytest.raises(ValueError, match='contradict'):
+        sparse_initial_rate(matrix, np.array([2.0, 1e-12, 2.0]), residual_allowance=np.array([0.0, 1e-16, 0.0]))
 
 
 def test_finite_rate_equations_refuse_an_unrepresentable_solution():

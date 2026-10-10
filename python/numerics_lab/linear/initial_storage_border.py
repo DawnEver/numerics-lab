@@ -5,7 +5,50 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import splu
 
 from motronics.gauss.linear.border_rank import border_affine_space
+from motronics.gauss.linear.initial_rate import sparse_initial_rate
 from motronics.gauss.linear.storage_border import free_pinned_columns
+
+
+def _frozen_rate_forcing(jacobian, residual, correction, mass, state, tolerance):
+    # Bound only the rounding of this actual top-row RHS construction. A
+    # differentiated constraint gets no inherited large dynamic-row allowance.
+    entries = jacobian.tocoo()
+    multipliers = correction[entries.col]
+    products = entries.data * multipliers
+    if (
+        not np.isfinite(products).all()
+        or np.any((entries.data != 0) & (multipliers != 0) & (products == 0))
+        or np.any((products != 0) & (abs(products) < np.finfo(float).tiny))
+    ):
+        msg = 'joint rate forcing requires representable normal finite products'
+        raise ValueError(msg)
+    terms = np.asarray(jacobian.getnnz(axis=1)).ravel()
+    operations = np.where(terms != 0, 2.0 * terms + 1, 0.0)
+    unit = np.finfo(float).eps / 2
+    if not np.isfinite(operations).all() or np.any(operations * unit >= 1):
+        msg = 'joint rate forcing operation count exceeds its finite arithmetic bound'
+        raise ValueError(msg)
+    gamma = operations * unit / (1 - operations * unit)
+    if not np.isfinite(gamma).all() or np.any(gamma >= 1):
+        msg = 'joint rate forcing operation count exceeds its finite arithmetic bound'
+        raise ValueError(msg)
+    unsigned = abs(residual) + np.asarray(abs(jacobian) @ abs(correction)).ravel()
+    roundoff = gamma * unsigned / (1 - gamma)
+    if np.any((gamma != 0) & (unsigned != 0) & (roundoff < np.finfo(float).tiny)):
+        msg = 'joint rate forcing cannot certify an underflowed arithmetic bound'
+        raise ValueError(msg)
+    nonzero_mass = mass.copy()
+    nonzero_mass.eliminate_zeros()
+    zero_mass = np.asarray(nonzero_mass.getnnz(axis=1)).ravel() == 0
+    roundoff[zero_mass] += tolerance * np.asarray(abs(jacobian[zero_mass]) @ abs(state)).ravel()
+    if not np.isfinite(roundoff).all():
+        msg = 'joint rate forcing requires finite row-local arithmetic bounds'
+        raise ValueError(msg)
+    forcing = -residual - jacobian @ correction
+    if not np.isfinite(forcing).all():
+        msg = 'joint rate forcing requires a finite actual right-hand side'
+        raise ValueError(msg)
+    return forcing, roundoff
 
 
 def stored_initial_correction(
@@ -100,6 +143,22 @@ def stored_initial_correction(
         - jacobian[stored_rows] @ correction[:n]
         - mass[stored_rows][:, free] @ correction[n + free]
     )
+    # Stored state is exact authority; stored rate is not reconstructed by a
+    # subtraction of large dynamic operands. Solve every original frozen-state
+    # rate equation, retaining the independently differentiated weak constraints.
+    forcing, roundoff = _frozen_rate_forcing(jacobian, residual, correction[:n], mass, state, tolerance)
+    # Give the independent differentiated equations first choice of numerical
+    # pivots. All dynamic rows still remain original physical witnesses.
+    try:
+        correction[n:], rate_unique = sparse_initial_rate(
+            sp.vstack((algebraic @ rate_tangent, mass), format='csr'),
+            np.concatenate((-algebraic @ partial, forcing)),
+            tolerance=tolerance,
+            residual_allowance=np.concatenate((np.zeros(algebraic.shape[0]), roundoff)),
+        )
+    except ValueError as error:
+        msg = f'joint stored state contradicts actual state/rate equations: {error}'
+        raise ValueError(msg) from error
     defect = matrix @ correction - rhs
     equation_scale = np.asarray(abs(matrix) @ abs(correction)).ravel() + abs(rhs)
     # The residual was evaluated at the actual state: a row whose coordinates
@@ -112,4 +171,4 @@ def stored_initial_correction(
     unique = np.ones(n, dtype=bool)
     rate_directions = rate_map @ (directions / column_norm[:, None])
     unique[np.any(rate_directions != 0, axis=1)] = False
-    return correction, unique
+    return correction, unique & rate_unique
