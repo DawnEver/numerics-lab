@@ -118,12 +118,25 @@ def normalize_sparse_rows(matrix, rhs):
     return normalized, forcing
 
 
+def _refined_rate_values(factor, reduced, rows, forcing):
+    values = factor.solve(forcing[rows])
+    for _ in range(3):
+        if not np.isfinite(values).all():
+            msg = 'actual rate equations require a finite representable solution'
+            raise ValueError(msg)
+        values += factor.solve(forcing[rows] - reduced[rows] @ values)
+    if not np.isfinite(values).all():
+        msg = 'actual rate refinement requires a finite representable solution'
+        raise ValueError(msg)
+    return values
+
+
 def sparse_initial_rate(matrix, rhs, *, tolerance=1e-10, residual_allowance=None):
     """Solve actual frozen-state rate equations; dependent rates stay unavailable.
 
     All rows are retained as physical witnesses. Sparse matching/LU is the
     ordinary path; exact disposable-column and row elimination is only a
-    singular-factor retry, never a floating numerical rank threshold.
+    singular-factor or bounded original-validation retry, never a floating numerical rank threshold.
     """
     matrix = sp.csr_matrix(matrix, dtype=float, copy=True)
     rhs = np.asarray(rhs, dtype=float)
@@ -173,21 +186,31 @@ def sparse_initial_rate(matrix, rhs, *, tolerance=1e-10, residual_allowance=None
             except RuntimeError as error:
                 msg = 'actual rate equations lack a nonsingular sparse physical subsystem'
                 raise ValueError(msg) from error
-        values = factor.solve(forcing[rows])
-        for _ in range(3):
-            if not np.isfinite(values).all():
-                msg_0 = 'actual rate equations require a finite representable solution'
-                raise ValueError(msg_0)
-            values += factor.solve(forcing[rows] - reduced[rows] @ values)
-        if not np.isfinite(values).all():
-            msg_0 = 'actual rate refinement requires a finite representable solution'
-            raise ValueError(msg_0)
-        answer[selected] = values
+        answer[selected] = _refined_rate_values(factor, reduced, rows, forcing)
     defect = matrix @ answer - rhs
     bar = tolerance * (abs(matrix) @ abs(answer) + abs(rhs)) + allowance
     if not np.isfinite(defect).all() or not np.isfinite(bar).all():
         msg_0 = 'actual rate physical validation requires finite defects and bounds'
         raise ValueError(msg_0)
+    # Row scaling can make an exactly singular subsystem appear to factor.
+    # Retry its original dependency witnesses, never a numerical rank cutoff.
+    if np.any(abs(defect) > bar) and len(selected) and matrix.shape[1] <= 512:
+        selected, affected = _independent_exact_columns(matrix, np.flatnonzero(nonzero), dependent_start=0)
+        order = np.concatenate((np.flatnonzero(rhs == 0), np.flatnonzero(rhs != 0)))
+        rows = order[_independent_exact_rows(matrix[order][:, selected], np.array([], dtype=int))]
+        reduced = normalized[:, selected].tocsr()
+        try:
+            factor = splu(reduced[rows].tocsc())
+        except RuntimeError as error:
+            msg = 'actual rate equations lack a nonsingular sparse physical subsystem'
+            raise ValueError(msg) from error
+        answer[:] = 0.0
+        answer[selected] = _refined_rate_values(factor, reduced, rows, forcing)
+        defect = matrix @ answer - rhs
+        bar = tolerance * (abs(matrix) @ abs(answer) + abs(rhs)) + allowance
+        if not np.isfinite(defect).all() or not np.isfinite(bar).all():
+            msg = 'actual rate physical validation requires finite defects and bounds'
+            raise ValueError(msg)
     if np.any(abs(defect) > bar):
         msg = 'actual rate equations contradict original physical constraints'
         raise ValueError(msg)

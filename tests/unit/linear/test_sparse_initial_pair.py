@@ -270,3 +270,55 @@ def test_a_large_storage_bulk_only_densifies_the_explicit_small_border(monkeypat
 def test_storage_border_never_silently_discards_an_undeclared_storage_row():
     with pytest.raises(ValueError, match='omits actual mass'):
         storage_border_rows(sp.eye(3, format='csr'), bulk_indices=[0], border_rows=[1])
+
+
+@pytest.mark.parametrize('drive', [100.0, -100.0, 0.123, 1e-12])
+def test_original_rate_validation_retries_exact_dependencies_lost_by_row_scaling(drive):
+    # The last three columns have an exact disposable dependency. Scaling
+    # rows by 3, 5, 7 and 12 can make the matched singular subsystem factor.
+    matrix = sp.csr_matrix([[0, 1, 2, 3], [0, 2, 3, 5], [1, 3, 4, 7], [1, 5, 7, 12], [1, 0, 0, 0]], dtype=float)
+    rhs = np.array([0, drive, 2 * drive, 3 * drive, 0])
+    rate, unique = initial_rate.sparse_initial_rate(matrix, rhs)
+    assert rate[0] == 0.0
+    assert unique.tolist() == [True, False, False, False]
+    np.testing.assert_allclose(matrix @ rate, rhs, rtol=1e-10, atol=0.0)
+
+
+def test_exact_rate_retry_retains_tiny_original_constraint_contradictions():
+    matrix = sp.csr_matrix(
+        [[0, 1, 2, 3], [0, 2, 3, 5], [1, 3, 4, 7], [1, 5, 7, 12], [1, 0, 0, 0], [1, 0, 0, 0]], dtype=float
+    )
+    with pytest.raises(ValueError, match='original physical constraints'):
+        initial_rate.sparse_initial_rate(matrix, np.array([0, 100, 200, 300, 0, 1e-30]))
+
+
+def test_rate_retry_keeps_a_genuinely_tiny_independent_original_constraint():
+    matrix = sp.csr_matrix(
+        [
+            [0, 1, 2, 3],
+            [0, 2, 3, 5],
+            [1, 3, 4, 7],
+            [1, 5, 7, 12],
+            [1, 0, 0, 0],
+            [0, 0, 0, 1e-30],
+        ],
+        dtype=float,
+    )
+    rate, unique = initial_rate.sparse_initial_rate(matrix, np.array([0, 100, 200, 300, 0, 0]))
+    assert unique.all()
+    assert rate[0] == rate[3] == 0.0
+
+
+def test_rate_validation_retry_never_runs_general_exact_elimination_on_a_large_field(monkeypatch):
+    original = initial_rate._independent_exact_columns
+
+    def bounded(matrix, selected, *, dependent_start, general=True):
+        assert not general or matrix.shape[1] <= 512
+        return original(matrix, selected, dependent_start=dependent_start, general=general)
+
+    monkeypatch.setattr(initial_rate, '_independent_exact_columns', bounded)
+    matrix = sp.vstack((sp.eye(600, format='csr'), sp.eye(600, format='csr')[[0]]), format='csr')
+    rhs = np.zeros(601)
+    rhs[-1] = 1e-30
+    with pytest.raises(ValueError, match='original physical constraints'):
+        initial_rate.sparse_initial_rate(matrix, rhs)
