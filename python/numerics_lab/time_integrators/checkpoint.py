@@ -271,7 +271,7 @@ class TransientCheckpoint:
 
 
 def validate_history_json(value):
-    """No class tags, pickle, arbitrary keys/coercion, NaN or opaque object payloads."""
+    """Validate plain JSON; physics owners validate their metadata and numeric schemas."""
     if isinstance(value, dict):
         if any(not isinstance(key, str) for key in value):
             msg = 'checkpoint history object keys must be strings'
@@ -281,7 +281,7 @@ def validate_history_json(value):
     elif isinstance(value, list):
         for item in value:
             validate_history_json(item)
-    elif value is not None and not isinstance(value, str):
+    elif value is not None and not isinstance(value, (str, bool)):
         _number(value)
 
 
@@ -304,6 +304,8 @@ def validate_context_json(value):
         elif isinstance(item, list):
             for child in item:
                 visit(child, depth + 1)
+        elif isinstance(item, bool):
+            _number(item)
         else:
             validate_history_json(item)
 

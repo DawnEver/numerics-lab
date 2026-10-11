@@ -46,10 +46,25 @@ def test_committed_material_and_bdf_history_restart_together():
     np.testing.assert_allclose(resumed.states, whole.states[5:], rtol=1e-13, atol=1e-14)
 
 
-@pytest.mark.parametrize('payload', [{'state': float('nan')}, {'state': object()}, {'state': True}, {1: 2.0}])
+@pytest.mark.parametrize('payload', [{'state': float('nan')}, {'state': object()}, {1: 2.0}])
 def test_material_history_rejects_non_json_or_nonfinite_payloads(payload):
     with pytest.raises(ValueError, match='checkpoint'):
         TransientCheckpoint('memory', 'bdf2', 0.5, 0.1, ((0.0,), (1.0,)), material_history=payload)
+
+
+def test_history_preserves_json_boolean_metadata_without_numeric_coercion():
+    payload = {'rate_is_unique': [True, False], 'model': {'conducting': True}}
+    checkpoint = TransientCheckpoint('memory', 'bdf2', 0.5, 0.1, ((0.0,), (1.0,)), material_history=payload)
+    restored = TransientCheckpoint.from_mapping(json.loads(json.dumps(checkpoint.to_mapping())))
+    assert restored.material_history == payload
+    assert restored.material_history['rate_is_unique'][0] is True
+    assert restored.material_history['rate_is_unique'][1] is False
+
+
+@pytest.mark.parametrize('states', [((True,), (1.0,)), ((0.0,), (False,))])
+def test_boolean_metadata_permission_does_not_admit_boolean_numeric_states(states):
+    with pytest.raises(ValueError, match='not booleans'):
+        TransientCheckpoint('memory', 'bdf2', 0.5, 0.1, states)
 
 
 class Oscillator:
