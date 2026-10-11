@@ -7,7 +7,7 @@ import pytest
 
 from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
 from motronics.gauss.time_integrators import integrate_transient
-from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint
+from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint, restore_history_checkpoint
 
 
 class RememberingProblem:
@@ -89,3 +89,33 @@ def test_newmark_restart_keeps_velocity_and_acceleration():
 def test_second_order_checkpoint_cannot_omit_derivative_history():
     with pytest.raises(ValueError, match='integrator order'):
         TransientCheckpoint('oscillator', 'newmark', 0.5, 0.01, ((1.0,),))
+
+
+@pytest.mark.parametrize('stateful', [False, True])
+def test_history_presence_refusal_does_not_mutate_actual_physical_context(stateful):
+    class ContextualProblem(RememberingProblem):
+        def __init__(self) -> None:
+            super().__init__()
+            self.has_history = stateful
+            self.context = {'origin': 0.0}
+
+        def checkpoint_context(self, time):
+            return self.context.copy()
+
+        def restore_checkpoint_context(self, data):
+            self.context = data.copy()
+
+    problem = ContextualProblem()
+    checkpoint = TransientCheckpoint(
+        'memory',
+        'bdf2',
+        0.5,
+        0.1,
+        ((0.0,), (1.0,)),
+        material_history=None if stateful else {'memory': 1.0, 'last_time': 0.5},
+        problem_context={'origin': 0.5},
+    )
+    with pytest.raises(ValueError, match='material history'):
+        restore_history_checkpoint(problem, checkpoint)
+    assert problem.context == {'origin': 0.0}
+    assert problem.memory == 0.0 and problem.last_time == 0.0

@@ -321,13 +321,13 @@ def restore_history_checkpoint(problem, checkpoint):
     if contextual != (checkpoint.problem_context is not None):
         msg = 'checkpoint physical context does not match the problem context requirement'
         raise ValueError(msg)
-    if contextual:
-        problem.restore_checkpoint_context(checkpoint.problem_context)
     validate_history_owner(problem)
     stateful = owns_history(problem)
     if stateful != (checkpoint.material_history is not None):
         msg = 'checkpoint material history does not match the problem history requirement'
         raise ValueError(msg)
+    if contextual:
+        problem.restore_checkpoint_context(checkpoint.problem_context)
     if stateful:
         problem.restore_checkpoint_history(checkpoint.material_history)
 
