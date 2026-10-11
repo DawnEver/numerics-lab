@@ -1,8 +1,48 @@
 """Numerical accepted-lattice callback; no event location or physical owner knowledge."""
 
+from dataclasses import dataclass
 from numbers import Integral, Real
 
 import numpy as np
+
+__all__ = [
+    'AcceptedProjectionResult',
+    'accepted_landing',
+    'accepted_observation',
+    'accepted_projection',
+    'live_targets',
+    'next_deadline',
+]
+
+
+@dataclass(frozen=True)
+class AcceptedProjectionResult:
+    """An owner's actual outgoing state and explicitly available derivative pair."""
+
+    state: np.ndarray
+    rate: np.ndarray | None = None
+    acceleration: np.ndarray | None = None
+    prepared_restart: object | None = None
+
+    def __post_init__(self) -> None:
+        state = np.asarray(self.state)
+        for name in ('state', 'rate', 'acceleration'):
+            value = getattr(self, name)
+            if value is None:
+                continue
+            primitives = value if isinstance(value, np.ndarray) else np.asarray(value, dtype=object)
+            if primitives.dtype.kind == 'b' or (
+                primitives.dtype.kind == 'O' and any(isinstance(item, (bool, np.bool_)) for item in primitives.flat)
+            ):
+                msg = 'accepted projection requires aligned finite real state and declared derivatives'
+                raise ValueError(msg)
+            array = np.asarray(value)
+            if state.ndim != 1 or array.shape != state.shape or not np.isrealobj(array) or not np.isfinite(array).all():
+                msg = 'accepted projection requires aligned finite real state and declared derivatives'
+                raise ValueError(msg)
+            owned = np.array(array, dtype=float, copy=True)
+            owned.flags.writeable = False
+            object.__setattr__(self, name, owned)
 
 
 def next_deadline(callback, time, target):
@@ -33,14 +73,15 @@ def live_targets(targets, current_time, callback):
 def accepted_projection(callback, time, state):
     """Validate the owner's right-side state without assigning any physical rate."""
     if callback is None:
-        return state
+        return AcceptedProjectionResult(state)
     observation = state.copy()
     observation.flags.writeable = False
-    projected = np.asarray(callback(time, observation))
-    if projected.shape != state.shape or not np.isrealobj(projected) or not np.all(np.isfinite(projected)):
+    selected = callback(time, observation)
+    projected = selected if isinstance(selected, AcceptedProjectionResult) else AcceptedProjectionResult(selected)
+    if projected.state.shape != state.shape:
         msg = 'accepted projection must return a finite real state with unchanged shape'
         raise ValueError(msg)
-    return np.array(projected, dtype=float, copy=True)
+    return projected
 
 
 def accepted_observation(callback, time, state):

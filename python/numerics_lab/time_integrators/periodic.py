@@ -56,26 +56,45 @@ __all__ = [
 ]
 
 
-def canonical_eec_study(study, restart):
-    """Resolve a declared uniform tick to its one original-clock representation.
+def canonical_eec_study(study, restart, *, uniform_clock=False):
+    """Resolve a declared uniform tick to its one original-clock representation: ``(study, restart)``.
 
-    Identity validation joins roundoff only: the caller's start must name the unique original
-    integer tick, and the study resumes on the checkpoint's own time label for that tick.
+    THE IDENTITY IS THE INTEGER TICK, not a float time. The checkpoint's own ``time`` (a first run
+    stopped at its ``t1``) and the producing lattice's ``origin + k dt`` can differ in the last ULP
+    for the SAME tick ``k``; an exact float comparison refused every mid-cycle JSON restart on that
+    representation alone. Both are therefore returned on the lattice representation, so the resumed
+    grid is the uninterrupted run's grid and the checkpoint identity check compares like with like.
     """
-    if restart is None or restart.eec_state is None:
-        return study
-    origin = restart.eec_state.origin_time
-    phase = (study.t0 - origin) / study.dt
-    if not np.isfinite(phase) or not np.isclose(phase, round(phase), rtol=0.0, atol=1e-9):
-        msg = 'EEC restart time must align with the original uniform integration clock'
-        raise ValueError(msg)
-    time = origin + round(phase) * study.dt
-    # The march labels a full final cell with its DECLARED endpoint (c378f57699), so the saved time
-    # may differ from the original-clock tick by roundoff only; that label is the one to resume on.
-    if not same_instant(time, restart.time):
-        msg = 'EEC restart original-clock tick does not match the checkpoint time'
-        raise ValueError(msg)
-    return replace(study, t0=restart.time)
+    origin = study.t0
+    if restart is not None and restart.eec_state is not None:
+        origin = restart.eec_state.origin_time
+        phase = (study.t0 - origin) / study.dt
+        if not np.isfinite(phase):
+            msg = 'EEC restart time must align with the original uniform integration clock'
+            raise ValueError(msg)
+        time = origin + round(phase) * study.dt
+        if not same_instant(study.t0, time):
+            msg = 'EEC restart time must align with the original uniform integration clock'
+            raise ValueError(msg)
+        checkpoint_phase = (restart.time - origin) / study.dt
+        if not np.isfinite(checkpoint_phase) or round(checkpoint_phase) != round(phase):
+            msg = 'EEC restart original-clock tick does not match the checkpoint time'
+            raise ValueError(msg)
+        study, restart = replace(study, t0=time), replace(restart, time=time)
+    if uniform_clock and np.isfinite(study.dt) and study.dt > 0:
+        phase = (study.t1 - origin) / study.dt
+        if not np.isfinite(phase):
+            msg = 'EEC endpoint must align with its declared uniform integration clock'
+            raise ValueError(msg)
+        endpoint = origin + round(phase) * study.dt
+        if not same_instant(study.t1, endpoint):
+            msg = (
+                f'EEC endpoint must align with its declared uniform {study.integrator.value.upper()} integration clock'
+            )
+            raise ValueError(msg)
+        if endpoint != study.t1:
+            study = replace(study, t1=endpoint)
+    return study, restart
 
 
 def validate_eec_restart(restart, period, sign, dt, nonlinear=False):
@@ -198,12 +217,17 @@ def periodic_fixed_point(
     rank: int = 6,
     max_cycles: int = 50,
     atol: float = 0.0,
+    admissible: Callable[[NDArray[np.floating]], bool] | None = None,
 ) -> PeriodicFixedPoint:
     """Find ``x`` with ``|P(x) - x| <= tol * max(|x|, |P(x)|)`` (or ``<= atol``) by cycled RRE.
 
     ``atol`` is in the STATE's units and exists for an orbit that starts where the state is near
     zero (a sine-fed resistive circuit at its zero crossing), where the relative test compares
     round-off with round-off.
+
+    ``admissible(x)`` lets the caller refuse an extrapolated start the map is not near-affine at
+    (a controller output past its saturation): the cycle then continues from its last plain period
+    instead. RRE assumes an affine map; a clipped actuator is the measured case where it is not.
 
     Each cycle marches ``rank + 1`` periods from the current estimate and extrapolates; the cycle
     stops as soon as one plain period already meets ``tol``. ``max_cycles`` exhausted RAISES with the
@@ -229,7 +253,8 @@ def periodic_fixed_point(
             residual = difference / scale
             if residual <= tol or difference <= atol:
                 return PeriodicFixedPoint(state=xs[-2], residual=residual, map_calls=calls)
-        x = _rre(xs)
+        candidate = _rre(xs)
+        x = candidate if admissible is None or admissible(candidate) else xs[-1]
     msg = (
         f'no periodic steady state within {max_cycles} RRE cycles ({calls} periods): relative '
         f'residual {residual:.3e} > {tol:g}. The map may not be contractive (an unstable or '

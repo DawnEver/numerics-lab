@@ -11,7 +11,14 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from motronics.gauss.transforms import clarke_forward, park_forward, park_inverse, phase_L_to_dq_L
+from motronics.gauss.transforms import (
+    clarke_forward,
+    park_forward,
+    park_inverse,
+    phase_L_to_dq_L,
+    vsd_matrix,
+    winding_axes,
+)
 
 
 def test_park_roundtrip_three_phase_identity() -> None:
@@ -222,3 +229,45 @@ def test_phase_L_to_dq_L_round_trips_a_given_dq_matrix() -> None:
     # so the forward of (2/n) M.T L M is (2/n) * (n/2) L (n/2) = L on the balanced subspace.
     L_phase = (2.0 / n) * (M.T @ L_dq_target @ M)
     np.testing.assert_allclose(phase_L_to_dq_L(L_phase, theta), L_dq_target, atol=1e-12)
+
+
+# --- VSD: the n-phase decomposition the dual three-phase papers control in ------------------------
+
+
+def test_winding_axes_place_a_DUAL_three_phase_set_30_degrees_apart() -> None:
+    """Two isolated wye sets: set s phase j at ``2*pi*j/m + pi*s/n`` -- the asymmetric six-phase layout."""
+    got = np.degrees(winding_axes(6, star_sets=2))
+    np.testing.assert_allclose(got, [0.0, 120.0, 240.0, 30.0, 150.0, 270.0], atol=1e-12)
+    np.testing.assert_allclose(winding_axes(5), 2.0 * np.pi * np.arange(5) / 5, atol=0.0)
+
+
+@pytest.mark.parametrize(('phases', 'star_sets'), [(3, 1), (5, 1), (6, 2), (9, 3), (12, 4)])
+def test_the_VSD_matrix_is_orthonormal_and_its_last_rows_are_each_star_s_zero_sequence(phases, star_sets) -> None:
+
+    t = vsd_matrix(winding_axes(phases, star_sets=star_sets), star_sets=star_sets)
+    assert t.shape == (phases, phases)
+    np.testing.assert_allclose(t @ t.T, np.eye(phases), atol=1e-12)
+    m = phases // star_sets
+    for s in range(star_sets):
+        indicator = np.zeros(phases)
+        indicator[s * m : (s + 1) * m] = 1.0 / np.sqrt(m)
+        # Each star's common mode lies in the span of the trailing `star_sets` rows -- the o-rows.
+        tail = t[phases - star_sets :]
+        np.testing.assert_allclose(tail.T @ (tail @ indicator), indicator, atol=1e-12)
+
+
+def test_VSD_block_diagonalises_a_salient_dual_three_phase_inductance_matrix() -> None:
+    """The papers' premise, as arithmetic: alpha-beta sees l_d/l_q, z1z2 and o1o2 see only L_sigma."""
+    axes = winding_axes(6, star_sets=2)
+    l_sigma, l_0, l_2 = 0.2e-3, 0.3e-3, 0.1e-3
+    t = vsd_matrix(axes, star_sets=2)
+    for theta_e in (0.0, 0.7, -2.1):
+        matrix = (
+            l_sigma * np.eye(6)
+            + l_0 * np.cos(axes[:, None] - axes[None, :])
+            + l_2 * np.cos(2.0 * theta_e - (axes[:, None] + axes[None, :]))
+        )
+        block = t @ matrix @ t.T
+        np.testing.assert_allclose(block[2:, :2], 0.0, atol=1e-18)
+        np.testing.assert_allclose(block[2:, 2:], l_sigma * np.eye(4), atol=1e-18)
+        assert np.trace(block[:2, :2]) == pytest.approx(2 * l_sigma + 6 * l_0, rel=1e-12)

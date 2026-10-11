@@ -56,7 +56,7 @@ def test_a_declared_edge_is_landed_and_the_march_is_fourth_order() -> None:
         assert edge in solution.times, 'the declared edge must be a marched instant'
         errors.append(float(np.max(np.abs(np.asarray(solution.states)[:, 0] - _exact(times, edge, 1.0, -2.0)))))
     assert errors[0] < 1e-6
-    assert errors[0] / errors[1] == pytest.approx(16.0, rel=0.15), f'RK4 order not seen: {errors}'
+    assert errors[0] / errors[1] == pytest.approx(16.0, rel=0.15, abs=0.0), f'RK4 order not seen: {errors}'
 
 
 def test_a_straddled_edge_is_first_order_the_planted_control() -> None:

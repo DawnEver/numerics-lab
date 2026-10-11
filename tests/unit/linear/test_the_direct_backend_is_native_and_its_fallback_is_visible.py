@@ -76,8 +76,13 @@ def test_an_equal_size_different_pattern_is_never_answered_from_the_cache(monkey
     held = native_direct.native_factor(a)
     first = next(iter(native_direct._cache.values()))
     answer = native_direct.native_solve(other, rhs)
-    # The full-pattern key gives the new pattern its own analysis; the newest entry is not the first.
-    assert next(reversed(native_direct._cache.values())) is not first
+    matching = [
+        entry
+        for entry in native_direct._cache.values()
+        if np.array_equal(entry.indptr, other.indptr) and np.array_equal(entry.indices, other.indices)
+    ]
+    assert len(matching) == 1 and matching[0] is not first
+    assert first in native_direct._cache.values(), 'a different pattern must not overwrite the held analysis'
     assert np.linalg.norm(other @ answer - rhs) < 1e-12
     assert np.linalg.norm(a @ held.solve(rhs) - rhs) < 1e-12
 
@@ -90,14 +95,21 @@ def test_the_cached_pattern_is_owned_when_the_callers_pattern_buffer_changes(mon
     rhs = np.array([1.0, 2.0, 3.0])
     native_direct.native_solve(a, rhs)
     first = next(iter(native_direct._cache.values()))
+    original_indptr, original_indices = a.indptr.copy(), a.indices.copy()
     if move_rows:
         a.indptr[1] = 1
         a.indices[:] = [0, 0, 1, 2]
     else:
         a.indices[1] = 2
     answer = native_direct.native_solve(a, rhs)
-    # The full-pattern key gives the new pattern its own analysis; the newest entry is not the first.
-    assert next(reversed(native_direct._cache.values())) is not first
+    matching = [
+        entry
+        for entry in native_direct._cache.values()
+        if np.array_equal(entry.indptr, a.indptr) and np.array_equal(entry.indices, a.indices)
+    ]
+    assert len(matching) == 1 and matching[0] is not first
+    np.testing.assert_array_equal(first.indptr, original_indptr)
+    np.testing.assert_array_equal(first.indices, original_indices)
     assert np.linalg.norm(a @ answer - rhs) < 1e-12
 
 

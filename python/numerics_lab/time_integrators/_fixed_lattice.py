@@ -4,6 +4,8 @@ import math
 
 from motronics.gauss.time_integrators._forms import same_instant
 
+__all__ = ['fixed_lattice_step_size', 'fixed_lattice_targets']
+
 
 def fixed_lattice_targets(origin, start, end, dt):
     """Evaluate every target as origin+k*dt, never resumed_start+k*dt.

@@ -1,9 +1,39 @@
 """Small-border elimination with local roundoff bounds, not a global mixed-index SVD cutoff."""
 
 import numpy as np
+import scipy.sparse as sp
+
+__all__ = ['border_affine_space', 'homogeneous_zero_coordinates']
 
 
-def border_affine_space(matrix, rhs, *, mandatory_rows=()):
+def homogeneous_zero_coordinates(matrix, rhs, *, row_order=None):
+    """Prove exact zero coordinates from original homogeneous support alone."""
+    original = sp.csr_matrix(matrix, copy=True)
+    original.sum_duplicates()
+    original.eliminate_zeros()
+    rhs = np.asarray(rhs)
+    if rhs.shape != (original.shape[0],) or not np.isfinite(rhs).all() or not np.isfinite(original.data).all():
+        msg = 'homogeneous anchors require finite original equations'
+        raise ValueError(msg)
+    remaining = np.ones(original.shape[1], dtype=bool)
+    consumed = set()
+    order = range(original.shape[0]) if row_order is None else row_order
+    while True:
+        changed = False
+        for row in order:
+            if row in consumed or rhs[row] != 0:
+                continue
+            columns = original.indices[original.indptr[row] : original.indptr[row + 1]]
+            support = columns[remaining[columns]]
+            if len(support) == 1:
+                remaining[support[0]] = False
+                consumed.add(int(row))
+                changed = True
+        if not changed:
+            return remaining, consumed
+
+
+def border_affine_space(matrix, rhs, *, mandatory_rows=(), inherited_allowance=None):
     """Return a representative and explicit free directions of actual border equations.
 
     Re-equilibrate remaining rows after each elimination. A weak independent
@@ -23,6 +53,20 @@ def border_affine_space(matrix, rhs, *, mandatory_rows=()):
         msg = 'border affine equations require a finite bounded matrix and aligned forcing'
         raise ValueError(msg)
     rows, columns = matrix.shape
+    allowance = np.zeros(rows) if inherited_allowance is None else np.asarray(inherited_allowance)
+    if (
+        allowance.shape != (rows,)
+        or allowance.dtype.kind not in 'fiu'
+        or any(isinstance(value, (bool, np.bool_)) for value in np.asarray(allowance, dtype=object).flat)
+        or (
+            inherited_allowance is not None
+            and any(isinstance(value, (bool, np.bool_)) for value in np.asarray(inherited_allowance, dtype=object).flat)
+        )
+        or not np.isfinite(allowance).all()
+        or np.any(allowance < 0)
+    ):
+        msg = 'inherited border allowance requires finite nonnegative actual row bounds'
+        raise ValueError(msg)
     mandatory_rows = np.asarray(mandatory_rows)
     if (
         mandatory_rows.ndim != 1
@@ -34,8 +78,45 @@ def border_affine_space(matrix, rhs, *, mandatory_rows=()):
         msg = 'mandatory border constraints require unique actual equation rows'
         raise ValueError(msg)
     mandatory_rows = mandatory_rows.astype(int)
+    # Original homogeneous singleton equations prove exact zeros. Propagate
+    # only those proven columns, before driven-row arithmetic can contaminate
+    # the representative or its free directions.
+    ordered_rows = np.concatenate((mandatory_rows, np.setdiff1d(np.arange(rows), mandatory_rows)))
+    remaining, consumed = homogeneous_zero_coordinates(matrix, rhs, row_order=ordered_rows)
+    if consumed:
+        support_rows = np.any(matrix[:, remaining] != 0, axis=1)
+        eliminated_rows = (~support_rows) & np.any(matrix != 0, axis=1)
+        if np.any(eliminated_rows & (abs(rhs) > allowance)):
+            msg = 'joint stored state contradicts actual state/rate equations at exact homogeneous anchors'
+            raise ValueError(msg)
+        pending = [int(row) for row in mandatory_rows if row not in consumed]
+        if any(not support_rows[row] for row in pending):
+            msg = 'mandatory border constraints must retain independent actual equation authority'
+            raise ValueError(msg)
+        answer = np.zeros(columns)
+        if not np.any(remaining):
+            return answer, np.zeros((columns, 0))
+        retained = np.flatnonzero(support_rows)
+        if not retained.size:
+            free = np.flatnonzero(remaining)
+            directions = np.zeros((columns, len(free)))
+            directions[free, np.arange(len(free))] = 1
+            return answer, directions
+        positions = {int(row): index for index, row in enumerate(retained)}
+        reduced_answer, reduced_directions = border_affine_space(
+            matrix[retained][:, remaining],
+            rhs[retained],
+            mandatory_rows=tuple(positions[row] for row in pending),
+            inherited_allowance=allowance[retained],
+        )
+        answer[remaining] = reduced_answer
+        directions = np.zeros((columns, reduced_directions.shape[1]))
+        directions[remaining] = reduced_directions
+        return answer, directions
     order = np.concatenate((mandatory_rows, np.setdiff1d(np.arange(rows), mandatory_rows)))
     matrix, rhs = matrix[order], rhs[order]
+    original_matrix, original_rhs = matrix.copy(), rhs.copy()
+    row_ids = np.arange(rows)
     errors = np.zeros_like(matrix)
     eps = np.finfo(float).eps
     bound = 16 * max(matrix.shape)
@@ -59,9 +140,15 @@ def border_affine_space(matrix, rhs, *, mandatory_rows=()):
         column = available.pop(index)
         ratios = ratios_all[:, index]
         chosen = cursor if cursor < len(mandatory_rows) else cursor + int(np.argmax(ratios))
+        if cursor >= len(mandatory_rows):
+            # Exact homogeneous witnesses should not inherit driven-row cancellation.
+            homogeneous = np.flatnonzero((rhs[cursor:] == 0) & (ratios > eps * bound))
+            if homogeneous.size:
+                chosen = cursor + int(homogeneous[np.argmax(ratios[homogeneous])])
         matrix[[cursor, chosen]] = matrix[[chosen, cursor]]
         errors[[cursor, chosen]] = errors[[chosen, cursor]]
         rhs[[cursor, chosen]] = rhs[[chosen, cursor]]
+        row_ids[[cursor, chosen]] = row_ids[[chosen, cursor]]
         pivot = matrix[cursor, column]
         matrix[cursor] /= pivot
         errors[cursor] = errors[cursor] / abs(pivot) + eps * np.abs(matrix[cursor])
@@ -87,6 +174,17 @@ def border_affine_space(matrix, rhs, *, mandatory_rows=()):
     free_columns = np.setdiff1d(np.arange(columns), pivots)
     answer = np.zeros(columns)
     answer[pivots] = rhs[:cursor]
+    if pivots:
+        # Rank discovery is not the physical solve: reconstruct from the
+        # original selected equations before elimination noise becomes a state.
+        selected = row_ids[:cursor]
+        subsystem = original_matrix[selected][:, pivots]
+        answer[pivots] = np.linalg.solve(subsystem, original_rhs[selected])
+        for _ in range(3):
+            defect = original_rhs[selected] - original_matrix[selected] @ answer
+            if not np.any(defect):
+                break
+            answer[pivots] += np.linalg.solve(subsystem, defect)
     directions = np.zeros((columns, len(free_columns)))
     directions[free_columns, np.arange(len(free_columns))] = 1
     directions[pivots] = -matrix[:cursor, free_columns]

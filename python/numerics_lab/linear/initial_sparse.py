@@ -7,9 +7,16 @@ import scipy.sparse as sp
 from scipy.sparse.csgraph import maximum_bipartite_matching
 from scipy.sparse.linalg import splu
 
+from motronics.gauss.linear.initial_rate import (
+    _independent_exact_columns,
+    _independent_exact_rows,
+    normalize_sparse_rows,
+)
 from motronics.gauss.linear.initial_rate_border import complete_rate_border
 from motronics.gauss.linear.initial_storage_border import stored_initial_correction
 from motronics.gauss.linear.storage_border import free_pinned_columns
+
+__all__ = ['SparseInitialPair', 'projected_rate_consistent', 'sparse_complete_initial_rate', 'sparse_initial_pair']
 
 
 @dataclass(frozen=True)
@@ -44,23 +51,6 @@ class SparseInitialPair:
         return value
 
 
-def _independent_exact_columns(matrix, selected, *, dependent_start):
-    """Quotient only exact sparse dependencies in explicitly disposable coordinates."""
-    columns = matrix.tocsc()
-    columns.sort_indices()
-    representatives = {}
-    affected, omitted = set(), set()
-    for column in selected[selected >= dependent_start]:
-        start, stop = columns.indptr[column : column + 2]
-        key = (columns.indices[start:stop].tobytes(), columns.data[start:stop].tobytes())
-        if key in representatives:
-            affected.update((column, representatives[key]))
-            omitted.add(column)
-        else:
-            representatives[key] = column
-    return np.asarray([column for column in selected if column not in omitted], dtype=int), affected
-
-
 def projected_rate_consistent(jacobian, rate, partial_time, *, algebraic_rows, tolerance):
     """Check each actual differentiated equation in its own projected units.
 
@@ -85,6 +75,8 @@ def sparse_initial_pair(
     partial_time,
     stored_increment=None,
     stored_columns=None,
+    rate_jacobian=None,
+    sparse_state_indices=None,
     tolerance=1e-10,
 ):
     """Solve actual index-two equations without dense field-sized nullspaces.
@@ -97,6 +89,7 @@ def sparse_initial_pair(
     initial = np.asarray(initial, dtype=float)
     residual, partial_time = np.asarray(residual, dtype=float), np.asarray(partial_time, dtype=float)
     jacobian, mass, algebraic = map(sp.csr_matrix, (jacobian, mass, algebraic_rows))
+    rate_tangent = jacobian if rate_jacobian is None else sp.csr_matrix(rate_jacobian)
     n = initial.size
     stored_rows = np.asarray(stored_rows)
     stored_change = np.zeros(len(stored_rows)) if stored_increment is None else np.asarray(stored_increment)
@@ -106,6 +99,7 @@ def sparse_initial_pair(
         or partial_time.shape != (n,)
         or jacobian.shape != (n, n)
         or mass.shape != (n, n)
+        or rate_tangent.shape != (n, n)
         or algebraic.shape[1] != n
         or stored_rows.ndim != 1
         or stored_rows.dtype.kind not in 'iu'
@@ -116,7 +110,16 @@ def sparse_initial_pair(
         or stored_change.shape != stored_rows.shape
         or not all(
             np.isfinite(value).all()
-            for value in (initial, residual, partial_time, stored_change, jacobian.data, mass.data, algebraic.data)
+            for value in (
+                initial,
+                residual,
+                partial_time,
+                stored_change,
+                jacobian.data,
+                mass.data,
+                algebraic.data,
+                rate_tangent.data,
+            )
         )
         or not np.isfinite(tolerance)
         or tolerance <= 0
@@ -140,32 +143,31 @@ def sparse_initial_pair(
             partial_time,
             tolerance=tolerance,
             state=initial,
+            rate_tangent=rate_tangent,
+            sparse_state_indices=sparse_state_indices,
         )
         return SparseInitialPair(initial + correction[:n], correction[n:], unique)
     matrix = sp.bmat(
         [
             [jacobian, mass],
             [stored, sp.csr_matrix(stored.shape)],
-            [sp.csr_matrix(algebraic.shape), algebraic @ jacobian],
+            [sp.csr_matrix(algebraic.shape), algebraic @ rate_tangent],
         ],
         format='csr',
     )
     rhs = np.concatenate((-residual, stored_change, -algebraic @ partial_time))
     matrix.eliminate_zeros()
-    scale = np.sqrt(np.asarray(matrix.multiply(matrix).sum(axis=1)).ravel())
-    scale[scale == 0] = 1.0
-    matrix, rhs = sp.diags(1 / scale) @ matrix, rhs / scale
-    # Only structurally zero rate columns may be omitted. Their value never
-    # affects these equations; expose that fact to outgoing-mode consumers.
     nonzero = np.asarray(matrix.getnnz(axis=0)).ravel() != 0
     if not nonzero[:n].all():
         msg = 'initial state requires additional physical authority'
         raise ValueError(msg)
-    selected = np.flatnonzero(nonzero)
-    # Identical actual rate columns constrain their sum, not either rate.
-    # Remove only this exact sparse dependency; state columns are never
-    # quotiented and no numerical rank cutoff invents physical uniqueness.
-    selected, duplicate_rates = _independent_exact_columns(matrix, selected, dependent_start=n)
+    actual_matrix = matrix
+    selected, duplicate_rates = _independent_exact_columns(
+        actual_matrix, np.flatnonzero(nonzero), dependent_start=n, general=False
+    )
+    matrix, rhs = normalize_sparse_rows(matrix, rhs)
+    # Zero and identical rate columns need no rational elimination. A general
+    # exact quotient is attempted only if the sparse physical factor is singular.
     reduced = matrix[:, selected].tocsr()
     # Storage equations are mandatory, even when their increments are tiny
     # compared with the dynamic RHS. Match them first, then verify that none
@@ -173,18 +175,47 @@ def sparse_initial_pair(
     mandatory = np.arange(n, n + len(stored_rows))
     row_order = np.concatenate((mandatory, np.arange(n + len(stored_rows), 2 * n), np.arange(n)))
     matched = maximum_bipartite_matching(reduced[row_order], perm_type='row')
-    if np.any(matched < 0):
-        msg = 'initial state/rate equations require additional physical authority'
-        raise ValueError(msg)
     matched_rows = row_order[matched]
-    if not np.isin(mandatory, matched_rows).all():
+    if not np.any(matched < 0) and not np.isin(mandatory, matched_rows).all():
         msg = 'initial state/rate subsystem cannot discard actual stored-coordinate constraints'
         raise ValueError(msg)
-    try:
-        factor = splu(reduced[matched_rows].tocsc())
-    except RuntimeError as error:
-        msg = 'initial state/rate equations lack a nonsingular sparse physical constraint subsystem'
-        raise ValueError(msg) from error
+    factor = None
+    factor_error = None
+    if not np.any(matched < 0):
+        try:
+            factor = splu(reduced[matched_rows].tocsc())
+        except RuntimeError as error:
+            factor_error = error
+    if factor is None:
+        selected, duplicate_rates = _independent_exact_columns(
+            actual_matrix, np.flatnonzero(nonzero), dependent_start=n
+        )
+        reduced = matrix[:, selected].tocsr()
+        matched = maximum_bipartite_matching(reduced[row_order], perm_type='row')
+        if np.any(matched < 0):
+            msg = 'initial state/rate equations require additional physical authority'
+            raise ValueError(msg) from factor_error
+        matched_rows = row_order[matched]
+        if not np.isin(mandatory, matched_rows).all():
+            msg = 'initial state/rate subsystem cannot discard actual stored-coordinate constraints'
+            raise ValueError(msg) from factor_error
+        try:
+            factor = splu(reduced[matched_rows].tocsc())
+        except RuntimeError:
+            # Structural matching proves only a nonzero pattern, not actual row
+            # independence. Keep every stored equation and choose an exact basis
+            # of the original unscaled rows; all omitted equations are checked below.
+            matched_rows = _independent_exact_rows(actual_matrix[:, selected], mandatory)
+            try:
+                factor = splu(reduced[matched_rows].tocsc())
+            except RuntimeError as basis_error:
+                gauged = _gauge_free_algebraic_rates(matrix, selected, row_order, mandatory, mass, n)
+                if gauged is None:
+                    msg = 'initial state/rate equations lack a nonsingular sparse physical constraint subsystem'
+                    raise ValueError(msg) from basis_error
+                selected, gauge_columns, row_order = gauged
+                nonzero[gauge_columns] = False  # marked free, exactly as a structurally free rate is
+                reduced, matched_rows, factor = _matched_factor(matrix, selected, row_order, mandatory)
     pair = np.zeros(2 * n)
     subsystem = reduced[matched_rows]
     answer = factor.solve(rhs[matched_rows])
@@ -218,6 +249,70 @@ def sparse_initial_pair(
     return SparseInitialPair(initial + pair[:n], pair[n:], unique)
 
 
+def _matched_factor(matrix, selected, row_order, mandatory):
+    """The square subsystem a row matching picks for ``selected`` columns, and its LU factor."""
+    reduced = matrix[:, selected].tocsr()
+    matched = maximum_bipartite_matching(reduced[row_order], perm_type='row')
+    if np.any(matched < 0):
+        msg = 'initial state/rate equations require additional physical authority'
+        raise ValueError(msg)
+    matched_rows = row_order[matched]
+    if not np.isin(mandatory, matched_rows).all():
+        msg = 'initial state/rate subsystem cannot discard actual stored-coordinate constraints'
+        raise ValueError(msg)
+    return reduced, matched_rows, splu(reduced[matched_rows].tocsc())
+
+
+#: The largest matched subsystem the exact-nullspace check below will take a dense SVD of.
+_GAUGE_DENSE_LIMIT = 2000
+
+
+def _gauge_free_algebraic_rates(matrix, selected, row_order, mandatory, mass, n):
+    """Fix the gauge of a rate no stored state reads, or ``None`` when the singularity is anything else.
+
+    THE MEASURED CASE: inverter_3ph_grid_tied's grid star point ``n`` has no reference, so the whole
+    grid cluster {ma, ga, mb, gb, mc, gc, n} floats behind the three inductors. Its potential is
+    fixed only by the DIFFERENTIATED KCL (sum di/dt = 0), so its RATE is an index-two quantity the
+    first differentiation cannot fix: the matched subsystem has one exact null vector, uniform over
+    exactly those seven node-voltage rate columns (singular value 5.9e-15 against 1.7). No mass
+    column reads those rates, so no stored state and no march depends on them.
+
+    Only that shape is admitted: every exact null vector must live on rate columns whose mass column
+    is zero. One such column per null vector is dropped and every rate on the vector is marked free
+    (never asserted as a physical value), and the caller re-matches; the caller's full residual check still judges the
+    answer against every equation, the dropped one included.
+    """
+    reduced = matrix[:, selected].tocsr()
+    matched = maximum_bipartite_matching(reduced[row_order], perm_type='row')
+    if np.any(matched < 0) or len(selected) > _GAUGE_DENSE_LIMIT:
+        return None
+    rows = row_order[matched]
+    block = reduced[rows].toarray()
+    u, sigma, vt = np.linalg.svd(block)
+    exact = sigma <= 1e-12 * sigma[0]
+    null = vt[exact]
+    if not len(null):
+        return None
+    massless = {n + c for c in range(n) if not np.any(mass[:, [c]].toarray())}
+    drop, free = [], []
+    for vector in null:
+        support = np.flatnonzero(np.abs(vector) > 1e-9 * np.max(np.abs(vector)))
+        columns = [int(selected[i]) for i in support]
+        if not set(columns) <= massless:
+            return None
+        drop.append(columns[int(np.argmax(np.abs(vector[support])))])
+        # EVERY rate on the null vector is fixed only relative to the gauge, so all of them are
+        # free, not just the dropped one -- a later differentiation may move them together.
+        free.extend(columns)
+    # The matched rows are dependent along the LEFT null vectors: the equation each one makes
+    # redundant leaves the matching too (it is still judged by the caller's full residual check).
+    redundant = {int(rows[int(np.argmax(np.abs(left)))]) for left in u[:, exact].T}
+    if set(redundant) & set(mandatory.tolist()):
+        return None
+    kept_rows = np.asarray([r for r in row_order if int(r) not in redundant], dtype=int)
+    return np.asarray([c for c in selected if c not in drop], dtype=int), sorted(set(free)), kept_rows
+
+
 def sparse_complete_initial_rate(
     jacobian,
     residual,
@@ -227,6 +322,7 @@ def sparse_complete_initial_rate(
     algebraic_rows,
     partial_time,
     acceleration_remainder,
+    acceleration_jacobian=None,
     storage_curvature=None,
     stored_rows=None,
     stored_columns=None,
@@ -241,6 +337,10 @@ def sparse_complete_initial_rate(
     jacobian, mass, algebraic = map(sp.csr_matrix, (jacobian, mass, algebraic_rows))
     residual, partial, remainder = map(np.asarray, (residual, partial_time, acceleration_remainder))
     n = pair.state.size
+    second = jacobian if acceleration_jacobian is None else sp.csr_matrix(acceleration_jacobian)
+    if second.shape != (n, n) or second.dtype.kind not in 'fiu' or not np.isfinite(second.data).all():
+        msg = 'second acceleration operator requires finite real actual state dimensions'
+        raise ValueError(msg)
     storage_second = np.zeros(n) if storage_curvature is None else np.asarray(storage_curvature)
     if (
         jacobian.shape != (n, n)
@@ -264,7 +364,7 @@ def sparse_complete_initial_rate(
             [mass, zero],
             [algebraic @ jacobian, algebraic_zero],
             [jacobian, mass],
-            [algebraic_zero, algebraic @ jacobian],
+            [algebraic_zero, algebraic @ second],
             [anchors, sp.csr_matrix(anchors.shape)],
         ],
         format='csr',
@@ -305,7 +405,7 @@ def sparse_complete_initial_rate(
             acceleration_rhs=-partial - storage_second - jacobian @ pair.rate,
             rate_is_unique=pair.rate_is_unique,
             stored_rows=stored_rows,
-            stored_columns=free_pinned_columns(stored_columns, mass[stored_rows], algebraic @ jacobian),
+            stored_columns=free_pinned_columns(stored_columns, mass[stored_rows], algebraic @ second),
             evaluation_scale=evaluation_scale,
             tolerance=tolerance,
             acceleration_equation_start=n + algebraic.shape[0],
@@ -319,7 +419,7 @@ def sparse_complete_initial_rate(
     selected = np.flatnonzero(available)
     # Acceleration coordinates are not physical initial conditions. Exact
     # duplicate acceleration columns must not prevent proving a current rate.
-    selected, _ = _independent_exact_columns(matrix, selected, dependent_start=n)
+    selected, _ = _independent_exact_columns(matrix, selected, dependent_start=n, general=False)
     reduced = matrix[:, selected].tocsr()
     rows = maximum_bipartite_matching(reduced, perm_type='row')
     if np.any(rows < 0):

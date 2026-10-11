@@ -98,12 +98,13 @@ from motronics.gauss.time_integrators._forms import (
 )
 from motronics.gauss.time_integrators._integrators import get_integrator
 from motronics.gauss.time_integrators._landing import (
+    AcceptedProjectionResult,
     accepted_landing,
     accepted_observation,
     accepted_projection,
     next_deadline,
 )
-from motronics.gauss.time_integrators._step import HeldFactor, ProblemCapabilities, take_step
+from motronics.gauss.time_integrators._step import HeldFactor, ProblemCapabilities, StepOutcome, take_step
 from motronics.gauss.time_integrators._time_lattice import adaptive_lattice
 from motronics.gauss.time_integrators.checkpoint import (
     EECCheckpointState,
@@ -123,6 +124,7 @@ from motronics.gauss.time_integrators.periodic import (
     periodic_converged,
     validate_eec_restart,
 )
+from motronics.gauss.time_integrators.prepared import PreparedCandidates, PreparedStepProblem, restart_prepared
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +149,7 @@ _MAX_EVENTS_PER_CELL = 512
 # recomputed; large field vectors must not make simultaneous event observers exhaust host memory.
 _EVENT_TRIAL_CACHE_BYTES = 64 * 1024**2
 #: The integrators a portable checkpoint can carry (their full history is ``us`` + ``v``/``a``).
-_CHECKPOINT_INTEGRATORS = ('bdf1', 'bdf2', 'newmark', 'generalized_alpha')
+_CHECKPOINT_INTEGRATORS = ('bdf1', 'bdf2', 'tr_bdf2', 'newmark', 'generalized_alpha')
 
 
 @dataclass(frozen=True)
@@ -497,7 +499,7 @@ def integrate_transient(
     *,
     event_fns: Sequence[Callable[[NDArray[np.floating], float], float]] = (),
     on_event: Callable[[int, float, NDArray[np.floating]], None] | None = None,
-    on_breakpoint: Callable[[float, NDArray[np.floating]], None] | None = None,
+    on_breakpoint: Callable[[float, NDArray[np.floating]], AcceptedProjectionResult | NDArray | None] | None = None,
     time_breakpoints: Sequence[float] = (),
     observation_times: Sequence[float] = (),
     v0: NDArray[np.floating] | None = None,
@@ -605,7 +607,9 @@ def integrate_transient(
 
     ``step_times`` replaces the nominal grid with an explicit table from ``t0`` to ``t1``;
     ``step_origin`` with the absolute parent lattice ``step_origin + k dt`` (a fresh restart window
-    keeps the producing run's products exactly).
+    keeps the producing run's products exactly). BESIDE a table, ``step_origin`` has ONE meaning: it
+    is the table's PROVENANCE -- the parent lattice the table was cut from -- recorded on every
+    checkpoint so a restart re-derives the same table, and it moves no step.
 
     ACCEPTED OBSERVERS see canonical states only, never a Newton or event probe: ``on_landing(t, u)``
     returns the integer identifiers of discontinuities dispatched at that accepted state,
@@ -648,7 +652,6 @@ def integrate_transient(
     held = HeldFactor(refactor_every) if refactor_every is not None else None
     emit = _StepLog(step_log)
     started = time.perf_counter()
-    study = canonical_eec_study(study, restart)
     capabilities = ProblemCapabilities.resolve(problem)
     if factor_cache is None and capabilities.factor_reusable:
         factor_cache = FactorCache()
@@ -666,6 +669,7 @@ def integrate_transient(
         curvature=curvature or adaptive or step_control is not None or refine is not None,
         owner=problem,
     )
+    study, restart = canonical_eec_study(study, restart, uniform_clock=eec_period is not None and step_times is None)
     if steady_period is not None and (not np.isfinite(steady_period) or steady_period <= 0):
         msg = 'steady_period must be finite and positive'
         raise ValueError(msg)
@@ -688,13 +692,9 @@ def integrate_transient(
     if eec and (event_fns or time_breakpoints or observation_times):
         msg = 'EEC corrects a uniform physical cycle: it cannot combine with events, breakpoints or observations'
         raise ValueError(msg)
-    if on_landing is not None:
-        if curvature or eec:
-            msg = 'accepted landing currently requires fixed stepping without EEC'
-            raise ValueError(msg)
-        if integrator.name not in ('bdf1', 'bdf2'):
-            msg = 'accepted landing history restart requires BDF1 or BDF2'
-            raise ValueError(msg)
+    if on_landing is not None and (curvature or eec):
+        msg = 'accepted landing currently requires fixed stepping without EEC'
+        raise ValueError(msg)
     if on_accept is not None and eec:
         msg = 'accepted observation requires a physical trajectory without EEC state corrections'
         raise ValueError(msg)
@@ -702,14 +702,17 @@ def integrate_transient(
         msg = 'live breakpoints cannot combine with EEC schedule corrections'
         raise ValueError(msg)
     if project_accepted_state is not None and (
-        (on_accept is None and on_landing is None) or integrator.name not in ('bdf1', 'bdf2')
+        on_accept is None and on_landing is None and not (event_fns and on_event is not None)
     ):
-        msg = 'accepted state projection requires an accepted observer and BDF1 or BDF2'
+        msg = 'accepted state projection requires an accepted observer, landing or event owner'
         raise ValueError(msg)
     if on_checkpoint is not None and checkpoint_key is None:
         msg = 'on_checkpoint requires checkpoint_key'
         raise ValueError(msg)
     if checkpoint_key is not None:
+        if isinstance(problem, PreparedStepProblem) and not owns_history(problem):
+            msg = 'prepared step checkpoint requires an explicit committed hidden-history owner'
+            raise ValueError(msg)
         if integrator.name not in _CHECKPOINT_INTEGRATORS:
             msg = f'a portable checkpoint carries {_CHECKPOINT_INTEGRATORS} history, not {integrator.name}'
             raise ValueError(msg)
@@ -728,9 +731,6 @@ def integrate_transient(
             or grid[-1] != study.t1
         ):
             msg = 'step_times must increase from t0 to t1 and cannot combine with adaptive'
-            raise ValueError(msg)
-        if step_origin is not None:
-            msg = 'step_times and step_origin are two step plans; declare one'
             raise ValueError(msg)
     if step_origin is not None and (
         curvature
@@ -810,7 +810,7 @@ def integrate_transient(
             t=restart.time,
             v=None if restart.velocity is None else np.array(restart.velocity, dtype=float),
             a=None if restart.acceleration is None else np.array(restart.acceleration, dtype=float),
-            h=restart.previous_dt if len(states) >= 2 else None,
+            h=restart.previous_dt,
         )
         u0 = state.last_u
     solution = TransientSolution(
@@ -818,8 +818,9 @@ def integrate_transient(
     )
     # A fresh march's initial state is canonical too: the owner may declare its law there.
     if restart is None and on_accept is not None and accepted_observation(on_accept, state.t, state.last_u):
-        u0 = accepted_projection(project_accepted_state, state.t, state.last_u)
-        state = integrator.restart(state, u0, state.t)
+        projection = accepted_projection(project_accepted_state, state.t, state.last_u)
+        u0 = projection.state.copy()
+        state = restart_prepared(problem, integrator, state, projection, state.t)
         solution.states[0] = u0
     if eec:
         solution.correction_model = (
@@ -855,11 +856,6 @@ def integrate_transient(
     # every-step samples, MANUAL-635, are genuine new crossings at every target). NAMED HOLE: a
     # GENUINE re-crossing inside one bracket_tol of the firing is suppressed with the spurious one.
     last_fired: dict[int, float] = {} if cursor is None else dict(cursor.last_fired)
-    # Whether the MOST RECENT step to each instant failed. A rejected attempt and the shortened steps
-    # that later reach the same instant share its time, so the time alone cannot say which one landed.
-    latest_failed: dict[float, bool] = {}
-    residual_times: dict[float, float] = {}
-    failed_residual: dict[float, float] = {}
     accepted_dt: float | None = None if restart is None else restart.previous_dt
     stop = False  # the periodic steady state was reached
 
@@ -937,7 +933,8 @@ def integrate_transient(
             if h_hi < curve_lattice.quantum:
                 msg = 'curvature h_max must permit at least one time lattice tick'
                 raise ValueError(msg)
-            h_lo = max(curve_lattice.quantum, np.ceil(h_lo / curve_lattice.quantum) * curve_lattice.quantum)
+            floor_ticks = max(1, int(np.ceil(h_lo / curve_lattice.quantum)))
+            h_lo = floor_ticks * curve_lattice.quantum
             if h_lo > h_hi:
                 msg = 'curvature bounds must contain at least one time lattice step'
                 raise ValueError(msg)
@@ -949,9 +946,9 @@ def integrate_transient(
         if budget is not None:
             budget.check(started, solution.times[-1], solution.states[-1], len(solution.times) - 1)
 
-    def step_from(
-        from_state: IntegratorState, dt_step: float, t_new: float
-    ) -> tuple[IntegratorState, NDArray, bool, NDArray]:
+    prepared = PreparedCandidates(problem) if isinstance(problem, PreparedStepProblem) else None
+
+    def step_from(from_state: IntegratorState, dt_step: float, t_new: float) -> StepOutcome:
         check_budget()
         out = take_step(
             problem,
@@ -960,6 +957,7 @@ def integrate_transient(
             dt_step,
             t_new,
             capabilities=capabilities,
+            candidate_registry=prepared,
             endpoint_left=t_new in breakpoint_set,
             solve=solve,
             max_newton=max_newton,
@@ -974,7 +972,6 @@ def integrate_transient(
         )
         check_budget()
         converged, residual, on_floor = out.converged, out.residual, out.on_floor
-        residual_times[t_new] = out.residual_time
         # Called for steps that will land AND for bisection probes a rollback discards, so a failure
         # is recorded PROVISIONALLY as a probe; `_commit` promotes it when the point actually lands.
         solution.worst_step_residual = max(solution.worst_step_residual, residual)
@@ -983,10 +980,8 @@ def integrate_transient(
             solution.floor_converged_times.append(t_new)
         if not converged:
             solution.nonconverged_probe_times.append(t_new)
-        latest_failed[t_new] = not converged
-        failed_residual[t_new] = residual
         emit('solve', t=t_new, dt=dt_step, residual=residual, converged=converged, iterations=out.iterations)
-        return out.state, out.u, converged, out.rate
+        return out
 
     def checkpoint_now(target: float | None, event_count: int):
         """The portable record of the march at its last accepted state, in this plan's clock."""
@@ -1022,7 +1017,7 @@ def integrate_transient(
                 pending_events=event_count if pending is not None else 0,
                 last_fired=tuple(sorted(last_fired.items())),
             )
-        elif plan == 'lattice' and step_times is None:
+        elif plan == 'lattice' and (step_times is None or step_origin is not None):
             lattice_origin = origin
         return _checkpoint_of(
             problem,
@@ -1030,6 +1025,7 @@ def integrate_transient(
             accepted_dt,
             checkpoint_key,
             integrator.name,
+            previous_time=solution.times[-2],
             eec_state=eec_state,
             step_origin=lattice_origin,
             event_state=event_state,
@@ -1043,17 +1039,23 @@ def integrate_transient(
         if on_checkpoint is not None:
             on_checkpoint(record)
 
-    def _commit(t_new: float, u_new: NDArray, rate: NDArray, *, observe: bool = True) -> bool:
+    def _commit(t_new: float, outcome: StepOutcome, *, observe: bool = True) -> bool:
         """Append an accepted point: material history, labels, accepted observers; True on a law change."""
         nonlocal state, accepted_dt
-        failed = latest_failed.get(t_new, False)
+        u_new, rate = outcome.u, outcome.rate
+        failed = not outcome.converged
         if failed and on_nonconverged == 'raise':
-            emit('nonconverged', t=t_new, residual=failed_residual[t_new])
-            raise StepNotConverged(t_new, failed_residual[t_new], u_new, solution.times[-1], solution.states[-1])
+            emit('nonconverged', t=t_new, residual=outcome.residual)
+            raise StepNotConverged(t_new, outcome.residual, u_new, solution.times[-1], solution.states[-1])
         if failed and (on_accept is not None or on_landing is not None):
-            msg = 'a nonconverged step cannot advance accepted observations'
+            msg = (
+                f'a nonconverged step cannot advance accepted observations (t={t_new:.9g}, '
+                f'dt={t_new - solution.times[-1]:.3g}, residual {outcome.residual:.3e})'
+            )
             raise ValueError(msg)
         accepted_dt = t_new - solution.times[-1]
+        if prepared is not None:
+            prepared.accept(outcome.candidate)
         # THE STEP JOINED THE TRAJECTORY, so its material history is the one the next step starts
         # from -- including a step labelled non-converged: the march continues from `u_new`.
         if capabilities.history:
@@ -1063,13 +1065,13 @@ def integrate_transient(
         assert solution.state_rates is not None
         solution.state_rates.append(rate)
         assert solution.residual_times is not None
-        solution.residual_times.append(residual_times[t_new])
+        solution.residual_times.append(outcome.residual_time)
         emit('step', t=t_new, dt=accepted_dt, index=len(solution.times) - 1)
         check_budget()
         lte_history.append((t_new, u_new))
         del lte_history[: -(integrator.order + 1)]
         if failed:
-            emit('nonconverged', t=t_new, residual=failed_residual[t_new])
+            emit('nonconverged', t=t_new, residual=outcome.residual)
             for j in range(len(solution.nonconverged_probe_times) - 1, -1, -1):
                 if solution.nonconverged_probe_times[j] == t_new:
                     del solution.nonconverged_probe_times[j]
@@ -1089,12 +1091,13 @@ def integrate_transient(
             changed = True
         if changed:
             solution.accepted_discontinuities.append(t_new)
-            right_state = accepted_projection(project_accepted_state, t_new, u_new)
+            projection = accepted_projection(project_accepted_state, t_new, u_new)
+            right_state = projection.state.copy()
             if project_accepted_state is not None:
                 assert solution.rate_state_overrides is not None
                 solution.rate_state_overrides[len(solution.state_rates) - 1] = u_new.copy()
                 solution.states[-1] = right_state
-            state = integrator.restart(state, right_state, t_new)
+            state = restart_prepared(problem, integrator, state, projection, t_new)
             lte_history[:] = [(t_new, right_state)]
         return changed
 
@@ -1146,421 +1149,456 @@ def integrate_transient(
     # fixed step count. Only roundoff at the declared end may terminate it.
     end_tol = 1e-12 * max(abs(study.t0), abs(study.t1), study.t1 - study.t0)
     events_this_cell = 0
-    while not stop and (state.t < study.t1 - end_tol or (len(observations) > 0 and state.t < observations[-1])):
-        continuing_cell = resumed_target is not None
-        lattice_cell = False
-        if plan == 'curvature':
-            h_curve = min(h_curve, study.t1 - state.t)
-            proposed = state.t + h_curve
-            t_target = next_deadline(next_breakpoint, state.t, proposed)
-            h_curve = t_target - state.t
-            if curve_lattice is not None:
-                if t_target < proposed:
-                    curve_lattice.tick(t_target)
-                current_tick = curve_lattice.tick(state.t)
-                count = min(curve_lattice.steps(h_curve), curve_lattice.tick(study.t1) - current_tick)
-                h_curve = count * curve_lattice.quantum
-                t_target = curve_lattice.time(current_tick + count)
-                if not t_target > state.t:
-                    msg = 'curvature time lattice cannot make representable clock progress'
-                    raise ValueError(msg)
-            pending_dt = t_target - state.t
-        elif plan == 'lattice':
-            while lattice_index < len(lattice_targets) and (
-                lattice_targets[lattice_index] <= state.t or same_instant(lattice_targets[lattice_index], state.t)
-            ):
-                lattice_index += 1
-            if lattice_index >= len(lattice_targets):
-                break
-            t_target = lattice_targets[lattice_index]
-            lattice_cell = True
-            if step_times is None:
-                lattice_origin = eec_origin if eec else origin
-                pending_dt = fixed_lattice_step_size(lattice_origin, state.t, t_target, dt)
+    try:
+        while not stop and (state.t < study.t1 - end_tol or (len(observations) > 0 and state.t < observations[-1])):
+            continuing_cell = resumed_target is not None
+            lattice_cell = False
+            if plan == 'curvature':
+                h_curve = min(h_curve, study.t1 - state.t)
+                proposed = state.t + h_curve
+                t_target = next_deadline(next_breakpoint, state.t, proposed)
+                h_curve = t_target - state.t
+                if curve_lattice is not None:
+                    if t_target < proposed:
+                        curve_lattice.tick(t_target)
+                    current_tick = curve_lattice.tick(state.t)
+                    count = min(curve_lattice.steps(h_curve), curve_lattice.tick(study.t1) - current_tick)
+                    h_curve = count * curve_lattice.quantum
+                    t_target = curve_lattice.time(current_tick + count)
+                    if not t_target > state.t:
+                        msg = 'curvature time lattice cannot make representable clock progress'
+                        raise ValueError(msg)
+                pending_dt = t_target - state.t
+            elif plan == 'lattice':
+                while lattice_index < len(lattice_targets) and (
+                    lattice_targets[lattice_index] <= state.t or same_instant(lattice_targets[lattice_index], state.t)
+                ):
+                    lattice_index += 1
+                if lattice_index >= len(lattice_targets):
+                    break
+                t_target = lattice_targets[lattice_index]
+                lattice_cell = True
+                if step_times is None:
+                    lattice_origin = eec_origin if eec else origin
+                    pending_dt = fixed_lattice_step_size(lattice_origin, state.t, t_target, dt)
+                else:
+                    pending_dt = t_target - state.t
+            elif continuing_cell:
+                t_target = min(resumed_target, study.t1)
+                resumed_target = None
+                pending_dt = t_target - state.t
+            elif resume_from is not None:
+                # The re-anchored grid continues from the last breakpoint; the t1 clamp makes the FINAL
+                # re-anchored cell a PARTIAL step, so its dt is the true remainder (SR-025).
+                t_target = min(resume_from, study.t1)
+                resume_from = t_target + dt
+                pending_dt = t_target - state.t
+            elif k >= n_steps:
+                t_target = study.t1
+                pending_dt = t_target - state.t
             else:
-                pending_dt = t_target - state.t
-        elif continuing_cell:
-            t_target = min(resumed_target, study.t1)
-            resumed_target = None
-            pending_dt = t_target - state.t
-        elif resume_from is not None:
-            # The re-anchored grid continues from the last breakpoint; the t1 clamp makes the FINAL
-            # re-anchored cell a PARTIAL step, so its dt is the true remainder (SR-025).
-            t_target = min(resume_from, study.t1)
-            resume_from = t_target + dt
-            pending_dt = t_target - state.t
-        elif k >= n_steps:
-            t_target = study.t1
-            pending_dt = t_target - state.t
-        else:
-            t_target = origin + (k + 1) * dt
-            # dt exactly on a canonical cell (not t_target - state.t, which is off by ulps from dt).
-            pending_dt = dt if origin + k * dt == state.t else t_target - state.t
-            if same_instant(t_target, study.t1):
-                # A full nominal cell retains its weights; its time label is the declared endpoint.
-                t_target = study.t1
-            elif t_target > study.t1:
-                t_target = study.t1
-                pending_dt = t_target - state.t
-        if plan == 'nominal' and not continuing_cell:
-            k += 1
-        events_this_cell = resumed_events if continuing_cell else 0
-        resumed_events = 0
-        while True:  # one cell, possibly interrupted by events, rejections and landings
-            # W1b: a time breakpoint inside the cell clips the target -- a known non-smooth instant
-            # is LANDED on the grid, never sampled past.
-            while bp_index < len(breakpoints) and breakpoints[bp_index] <= state.t:
-                bp_index += 1
-            if bp_index < len(breakpoints) and breakpoints[bp_index] <= t_target + bracket_tol:
-                # Prefer the exact declared edge to a nearly coincident grid point; land it from the
-                # preceding state, never via a tiny extra step.
-                t_target = breakpoints[bp_index]
-                pending_dt = t_target - state.t
-                if not lattice_cell:
-                    resume_from = t_target + dt  # the uniform grid continues from the breakpoint
-            if plan != 'curvature':
-                deadline = next_deadline(next_breakpoint, state.t, t_target)
-                if deadline < t_target:
-                    # The owner's live deadline clips the cell; a nominal grid re-anchors there, a
-                    # lattice keeps its absolute targets and resumes with the true remainder.
-                    t_target = deadline
+                t_target = origin + (k + 1) * dt
+                # dt exactly on a canonical cell (not t_target - state.t, which is off by ulps from dt).
+                pending_dt = dt if origin + k * dt == state.t else t_target - state.t
+                if same_instant(t_target, study.t1):
+                    # A full nominal cell retains its weights; its time label is the declared endpoint.
+                    t_target = study.t1
+                elif t_target > study.t1:
+                    t_target = study.t1
+                    pending_dt = t_target - state.t
+            if plan == 'nominal' and not continuing_cell:
+                k += 1
+            events_this_cell = resumed_events if continuing_cell else 0
+            resumed_events = 0
+            while True:  # one cell, possibly interrupted by events, rejections and landings
+                # W1b: a time breakpoint inside the cell clips the target -- a known non-smooth instant
+                # is LANDED on the grid, never sampled past.
+                while bp_index < len(breakpoints) and breakpoints[bp_index] <= state.t:
+                    bp_index += 1
+                if bp_index < len(breakpoints) and breakpoints[bp_index] <= t_target + bracket_tol:
+                    # Prefer the exact declared edge to a nearly coincident grid point; land it from the
+                    # preceding state, never via a tiny extra step.
+                    t_target = breakpoints[bp_index]
                     pending_dt = t_target - state.t
                     if not lattice_cell:
-                        resume_from = t_target + dt
-            while observation_index < len(observations) and observations[observation_index] <= state.t:
-                observation_index += 1
-            lands_on_breakpoint = t_target in breakpoint_set
-            if observation_index < len(observations) and (
-                observations[observation_index] < t_target
-                or observations[observation_index] == t_target
-                or (not lands_on_breakpoint and same_instant(observations[observation_index], t_target))
-            ):
-                # A nominal endpoint and a requested endpoint separated only by roundoff are one cell,
-                # solved at the requested time; a declared breakpoint is exact, so a distinct
-                # neighbour is its own cell.
-                t_target = observations[observation_index]
-                pending_dt = t_target - state.t
-                resume_from = t_target + dt
-            checkpoint = _take_checkpoint(state, solution)
-            t_from = state.t
-            step_dt = pending_dt
-            t_step = t_target
-            # Event-location precision cannot suppress an LTE-requested smaller step.
-            if step_control is not None and h_ctrl < pending_dt:
-                step_dt = h_ctrl
-                t_step = t_from + step_dt
-            probe_state, u_probe, step_ok, probe_rate = step_from(state, step_dt, t_step)
-            if plan == 'curvature':
-                if len(checkpoint.state.us) >= 2:
-                    u_prev = np.asarray(checkpoint.state.us[-2], dtype=float)
-                    u_extrap = checkpoint.state.last_u + (checkpoint.state.last_u - u_prev) * (step_dt / h_prev_curve)
-                    err = max(float(np.linalg.norm(u_probe - u_extrap)), 1e-300)
-                else:
-                    err = 0.0  # the first step after a start: no history to extrapolate from
-                if not (step_dt <= h_lo or (step_ok and (err == 0.0 or err <= curvature_atol))):
-                    # Reject: halve and propose again, bounded by h_lo where the step is taken with its
-                    # labels rather than spun forever.
-                    h_curve = max(h_lo, step_dt / 2.0)
-                    emit('reject', t=t_step, dt=step_dt, error_ratio=err / curvature_atol, next_dt=h_curve)
-                    break
-                state = probe_state
-                _commit(t_step, u_probe, probe_rate)
-                if err > curvature_atol:
-                    solution.indicator_unmet_times.append(t_step)
-                h_prev_curve = step_dt
-                if err > 0.0:
-                    h_curve = min(h_hi, max(h_lo, step_dt * min(2.0, 1.2 * (curvature_atol / err) ** 0.5)))
-                after_accept(t_step, step_dt, step_ok, checkpoint.state, None)
-                break
-            if adaptive and not step_ok:
-                # REJECT-HALVE-RETRY: only a step that ACTUALLY failed is subdivided. Each rejected
-                # attempt stays in `nonconverged_probe_times`: an iterate the trajectory excludes.
-                while not step_ok and 0.5 * step_dt >= minimum_step:
-                    step_dt *= 0.5
-                    t_step = t_from + step_dt
-                    probe_state, u_probe, step_ok, probe_rate = step_from(state, step_dt, t_step)
-            g_new = [float(g(u_probe, t_step)) for g in event_fns]
-            crossed = [
-                i
-                for i in range(len(event_fns))
-                if _crossed(event_fns[i], g_prev[i], g_new[i]) and t_step - last_fired.get(i, -np.inf) > bracket_tol
-            ]
-            if not crossed:
-                halves = None
-                if step_control is not None and step_ok:
-                    order = integrator.order
-                    if len(lte_history) >= order + 1:
-                        ratio = _lte_ratio(lte_history, t_step, u_probe, order, integrator.error_constant, step_control)
-                    else:
-                        # BOOTSTRAP (no predictor history after a start or a restart): STEP DOUBLING.
-                        # The bootstrap step is BDF1-class whatever the scheme, so the estimate takes order 1.
-                        order, ratio = 1, 0.0
-                        h2 = 0.5 * step_dt
-                        mid = step_from(checkpoint.state.copy(), h2, t_from + h2)
-                        end = step_from(mid[0], h2, t_step) if mid[2] else None
-                        if end is not None and end[2]:
-                            g_mid = [float(g(mid[1], t_from + h2)) for g in event_fns]
-                            g_end = [float(g(end[1], t_step)) for g in event_fns]
-                            if all(
-                                _sign(a) == _sign(b) == _sign(c) for a, b, c in zip(g_prev, g_mid, g_end, strict=True)
-                            ):
-                                scale = step_control.atol + step_control.rtol * np.maximum(
-                                    np.abs(state.last_u), np.abs(end[1])
-                                )
-                                ratio = float(np.max(np.abs(end[1] - u_probe) * 2.0 / scale)) if scale.size else 0.0
-                                halves = (mid, end, g_end)
-                    if ratio > 1.0:
-                        if step_dt <= h_floor * (1.0 + 1e-9):
-                            msg = (
-                                f'step control: the step at t={t_from:g} is still {ratio:.3g}x over its '
-                                f'local-error tolerance at h_min={h_floor:g}; the state reached is t={t_from:g}. '
-                                'An undeclared discontinuity (a source edge without a breakpoint, a switch '
-                                'without an event) is the usual cause.'
-                            )
-                            raise RuntimeError(msg)
-                        h_ctrl = max(h_floor, _resize(step_dt, ratio, order))
-                        emit('reject', t=t_step, dt=step_dt, error_ratio=ratio, next_dt=h_ctrl)
-                        continue
-                    grown = _resize(step_dt, ratio, order)
-                    h_ctrl = max(h_ctrl, grown) if step_dt < h_ctrl else grown
-                if refine is not None and step_ok and step_dt > 2.0 * minimum_step:
-                    # Step-doubling refinement: re-take the step at half size from the same
-                    # checkpoint; a large discrepancy means the full step under-resolved the
-                    # dynamics, and the two half-steps replace it.
-                    h2 = 0.5 * step_dt
-                    t_mid = t_from + h2
-                    mid = step_from(checkpoint.state.copy(), h2, t_mid)
-                    end = step_from(mid[0], h2, t_step) if mid[2] else None
-                    if end is not None and end[2]:
-                        g_mid = [float(g(mid[1], t_mid)) for g in event_fns]
-                        g_end = [float(g(end[1], t_step)) for g in event_fns]
-                        crossed_mid = any(
-                            _crossed(event_fns[i], g_prev[i], g_mid[i])
-                            and t_mid - last_fired.get(i, -np.inf) > bracket_tol
-                            for i in range(len(event_fns))
-                        )
-                        crossed_end = any(
-                            _crossed(event_fns[i], g_mid[i], g_end[i])
-                            and t_step - last_fired.get(i, -np.inf) > bracket_tol
-                            for i in range(len(event_fns))
-                        )
-                        scale = max(float(np.max(np.abs(u_probe))) if u_probe.size else 1.0, 1e-12)
-                        if (
-                            not (crossed_mid or crossed_end)
-                            and float(np.max(np.abs(end[1] - u_probe))) > refine * scale
-                        ):
-                            if (
-                                on_accept is not None
-                                or on_landing is not None
-                                or capabilities.history
-                                or checkpoint_key is not None
-                            ):
-                                # The midpoint can change the physical law: commit it with its own
-                                # derivative state, then re-march -- the speculative second half is
-                                # no longer authoritative.
-                                state = mid[0]
-                                _commit(t_mid, mid[1], mid[3])
-                                after_accept(t_mid, h2, True, checkpoint.state, t_target)
-                                g_prev = [float(g(state.last_u, t_mid)) for g in event_fns]
-                                if stop:
-                                    break
-                                pending_dt = t_target - state.t
-                                continue
-                            halves = (mid, end, g_end)
-                if halves is not None and (on_accept is not None or on_landing is not None):
-                    # An accepted observer sees the midpoint, which may change its law: commit it,
-                    # then re-march the rest of the cell from the canonical midpoint state.
-                    (mid_state, u_mid, _ok, mid_rate), _end, _g = halves
-                    state = mid_state
-                    t_mid = t_from + 0.5 * step_dt
-                    _commit(t_mid, u_mid, mid_rate)
-                    after_accept(t_mid, 0.5 * step_dt, True, checkpoint.state, t_target)
-                    g_prev = [float(g(state.last_u, t_mid)) for g in event_fns]
-                    if stop:
-                        break
+                        resume_from = t_target + dt  # the uniform grid continues from the breakpoint
+                if plan != 'curvature':
+                    deadline = next_deadline(next_breakpoint, state.t, t_target)
+                    if deadline < t_target:
+                        # The owner's live deadline clips the cell; a nominal grid re-anchors there, a
+                        # lattice keeps its absolute targets and resumes with the true remainder.
+                        t_target = deadline
+                        pending_dt = t_target - state.t
+                        if not lattice_cell:
+                            resume_from = t_target + dt
+                while observation_index < len(observations) and observations[observation_index] <= state.t:
+                    observation_index += 1
+                lands_on_breakpoint = t_target in breakpoint_set
+                if observation_index < len(observations) and (
+                    observations[observation_index] < t_target
+                    or observations[observation_index] == t_target
+                    or (not lands_on_breakpoint and same_instant(observations[observation_index], t_target))
+                ):
+                    # A nominal endpoint and a requested endpoint separated only by roundoff are one cell,
+                    # solved at the requested time; a declared breakpoint is exact, so a distinct
+                    # neighbour is its own cell.
+                    t_target = observations[observation_index]
                     pending_dt = t_target - state.t
-                    continue
-                if halves is not None:  # the doubled pair is the more accurate answer: keep it
-                    (_mid_state, u_mid, _ok, mid_rate), (state, u_end, _ok2, end_rate), g_new = halves
-                    before = checkpoint.state
-                    _commit(t_from + 0.5 * step_dt, u_mid, mid_rate)
-                    _commit(t_step, u_end, end_rate)
-                else:
+                    resume_from = t_target + dt
+                checkpoint = _take_checkpoint(state, solution)
+                t_from = state.t
+                step_dt = pending_dt
+                t_step = t_target
+                # Event-location precision cannot suppress an LTE-requested smaller step.
+                if step_control is not None and h_ctrl < pending_dt:
+                    step_dt = h_ctrl
+                    t_step = t_from + step_dt
+                probe = step_from(state, step_dt, t_step)
+                probe_state, u_probe, step_ok = probe.state, probe.u, probe.converged
+                if plan == 'curvature':
+                    if len(checkpoint.state.us) >= 2:
+                        u_prev = np.asarray(checkpoint.state.us[-2], dtype=float)
+                        u_extrap = checkpoint.state.last_u + (checkpoint.state.last_u - u_prev) * (
+                            step_dt / h_prev_curve
+                        )
+                        err = max(float(np.linalg.norm(u_probe - u_extrap)), 1e-300)
+                    else:
+                        err = 0.0  # the first step after a start: no history to extrapolate from
+                    # An absolute lattice owns integer intervals. Subtracting its float time labels
+                    # can put a floor tick just above h_lo and retry the identical tick forever.
+                    at_floor = (
+                        curve_lattice.tick(t_step) - curve_lattice.tick(t_from) <= floor_ticks
+                        if curve_lattice is not None
+                        else step_dt <= h_lo
+                    )
+                    if not (at_floor or (step_ok and (err == 0.0 or err <= curvature_atol))):
+                        # Reject: halve and propose again, bounded by h_lo where the step is taken with its
+                        # labels rather than spun forever.
+                        h_curve = max(h_lo, step_dt / 2.0)
+                        emit('reject', t=t_step, dt=step_dt, error_ratio=err / curvature_atol, next_dt=h_curve)
+                        break
+                    state = probe_state
+                    _commit(t_step, probe)
+                    if err > curvature_atol:
+                        solution.indicator_unmet_times.append(t_step)
+                    h_prev_curve = step_dt
+                    if err > 0.0:
+                        h_curve = min(h_hi, max(h_lo, step_dt * min(2.0, 1.2 * (curvature_atol / err) ** 0.5)))
+                    after_accept(t_step, step_dt, step_ok, checkpoint.state, None)
+                    break
+                if adaptive and not step_ok:
+                    # REJECT-HALVE-RETRY: only a step that ACTUALLY failed is subdivided. Each rejected
+                    # attempt stays in `nonconverged_probe_times`: an iterate the trajectory excludes.
+                    while not step_ok and 0.5 * step_dt >= minimum_step:
+                        step_dt *= 0.5
+                        t_step = t_from + step_dt
+                        probe = step_from(state, step_dt, t_step)
+                        probe_state, u_probe, step_ok = probe.state, probe.u, probe.converged
+                g_new = [float(g(u_probe, t_step)) for g in event_fns]
+                crossed = [
+                    i
+                    for i in range(len(event_fns))
+                    if _crossed(event_fns[i], g_prev[i], g_new[i]) and t_step - last_fired.get(i, -np.inf) > bracket_tol
+                ]
+                if not crossed:
+                    halves = None
+                    if step_control is not None and step_ok:
+                        order = integrator.order
+                        if len(lte_history) >= order + 1:
+                            ratio = _lte_ratio(
+                                lte_history, t_step, u_probe, order, integrator.error_constant, step_control
+                            )
+                        else:
+                            # BOOTSTRAP (no predictor history after a start or a restart): STEP DOUBLING.
+                            # The bootstrap step is BDF1-class whatever the scheme, so the estimate takes order 1.
+                            order, ratio = 1, 0.0
+                            h2 = 0.5 * step_dt
+                            mid = step_from(checkpoint.state.copy(), h2, t_from + h2)
+                            end = step_from(mid.state, h2, t_step) if mid.converged else None
+                            if end is not None and end.converged:
+                                g_mid = [float(g(mid.u, t_from + h2)) for g in event_fns]
+                                g_end = [float(g(end.u, t_step)) for g in event_fns]
+                                if all(
+                                    _sign(a) == _sign(b) == _sign(c)
+                                    for a, b, c in zip(g_prev, g_mid, g_end, strict=True)
+                                ):
+                                    scale = step_control.atol + step_control.rtol * np.maximum(
+                                        np.abs(state.last_u), np.abs(end.u)
+                                    )
+                                    ratio = float(np.max(np.abs(end.u - u_probe) * 2.0 / scale)) if scale.size else 0.0
+                                    halves = (mid, end, g_end)
+                        if ratio > 1.0:
+                            if step_dt <= h_floor * (1.0 + 1e-9):
+                                msg = (
+                                    f'step control: the step at t={t_from:g} is still {ratio:.3g}x over its '
+                                    f'local-error tolerance at h_min={h_floor:g}; the state reached is t={t_from:g}. '
+                                    'An undeclared discontinuity (a source edge without a breakpoint, a switch '
+                                    'without an event) is the usual cause.'
+                                )
+                                raise RuntimeError(msg)
+                            h_ctrl = max(h_floor, _resize(step_dt, ratio, order))
+                            emit('reject', t=t_step, dt=step_dt, error_ratio=ratio, next_dt=h_ctrl)
+                            continue
+                        grown = _resize(step_dt, ratio, order)
+                        h_ctrl = max(h_ctrl, grown) if step_dt < h_ctrl else grown
+                    if refine is not None and step_ok and step_dt > 2.0 * minimum_step:
+                        # Step-doubling refinement: re-take the step at half size from the same
+                        # checkpoint; a large discrepancy means the full step under-resolved the
+                        # dynamics, and the two half-steps replace it.
+                        h2 = 0.5 * step_dt
+                        t_mid = t_from + h2
+                        mid = step_from(checkpoint.state.copy(), h2, t_mid)
+                        end = step_from(mid.state, h2, t_step) if mid.converged else None
+                        if end is not None and end.converged:
+                            g_mid = [float(g(mid.u, t_mid)) for g in event_fns]
+                            g_end = [float(g(end.u, t_step)) for g in event_fns]
+                            crossed_mid = any(
+                                _crossed(event_fns[i], g_prev[i], g_mid[i])
+                                and t_mid - last_fired.get(i, -np.inf) > bracket_tol
+                                for i in range(len(event_fns))
+                            )
+                            crossed_end = any(
+                                _crossed(event_fns[i], g_mid[i], g_end[i])
+                                and t_step - last_fired.get(i, -np.inf) > bracket_tol
+                                for i in range(len(event_fns))
+                            )
+                            scale = max(float(np.max(np.abs(u_probe))) if u_probe.size else 1.0, 1e-12)
+                            if (
+                                not (crossed_mid or crossed_end)
+                                and float(np.max(np.abs(end.u - u_probe))) > refine * scale
+                            ):
+                                if (
+                                    on_accept is not None
+                                    or on_landing is not None
+                                    or capabilities.history
+                                    or checkpoint_key is not None
+                                ):
+                                    # The midpoint can change the physical law: commit it with its own
+                                    # derivative state, then re-march -- the speculative second half is
+                                    # no longer authoritative.
+                                    state = mid.state
+                                    _commit(t_mid, mid)
+                                    after_accept(t_mid, h2, True, checkpoint.state, t_target)
+                                    g_prev = [float(g(state.last_u, t_mid)) for g in event_fns]
+                                    if stop:
+                                        break
+                                    pending_dt = t_target - state.t
+                                    continue
+                                halves = (mid, end, g_end)
+                    if halves is not None and (on_accept is not None or on_landing is not None or capabilities.history):
+                        # An accepted observer sees the midpoint, which may change its law: commit it,
+                        # then re-march the rest of the cell from the canonical midpoint state.
+                        mid, _end, _g = halves
+                        state = mid.state
+                        t_mid = t_from + 0.5 * step_dt
+                        _commit(t_mid, mid)
+                        after_accept(t_mid, 0.5 * step_dt, True, checkpoint.state, t_target)
+                        g_prev = [float(g(state.last_u, t_mid)) for g in event_fns]
+                        if stop:
+                            break
+                        pending_dt = t_target - state.t
+                        continue
+                    if halves is not None:  # the doubled pair is the more accurate answer: keep it
+                        mid, end, g_new = halves
+                        state = end.state
+                        before = checkpoint.state
+                        _commit(t_from + 0.5 * step_dt, mid)
+                        _commit(t_step, end)
+                    else:
+                        state = probe_state
+                        before = checkpoint.state
+                        _commit(t_step, probe)
+                    if bp_index < len(breakpoints) and t_step == breakpoints[bp_index]:
+                        projection = AcceptedProjectionResult(state.last_u)
+                        if on_breakpoint is not None:
+                            if solution.nonconverged_times:
+                                msg = 'a physical breakpoint cannot consume a non-converged history'
+                                raise RuntimeError(msg)
+                            edge_state = state.last_u.copy()
+                            right_state = edge_state.copy()
+                            selected = on_breakpoint(t_step, right_state)
+                            if (
+                                not isinstance(selected, AcceptedProjectionResult)
+                                and not np.isfinite(right_state if selected is None else np.asarray(selected)).all()
+                            ):
+                                msg = 'a breakpoint handler produced a non-finite state'
+                                raise ValueError(msg)
+                            projection = (
+                                selected
+                                if isinstance(selected, AcceptedProjectionResult)
+                                else AcceptedProjectionResult(right_state if selected is None else selected)
+                            )
+                            if projection.state.shape != edge_state.shape:
+                                msg = 'a breakpoint handler must preserve state shape'
+                                raise ValueError(msg)
+                            if not np.array_equal(edge_state, projection.state):
+                                solution.rate_state_overrides[len(solution.times) - 2] = edge_state
+                            solution.states[-1] = projection.state.copy()
+                        # A declared source edge is as nonsmooth as a located state event; no
+                        # integrator or error predictor may extrapolate its pre-edge history.
+                        state = restart_prepared(problem, integrator, state, projection, t_step)
+                        lte_history[:] = [(t_step, state.last_u)]
+                    g_prev = [float(g(state.last_u, t_step)) for g in event_fns]
+                    if t_step < t_target - bracket_tol:
+                        # A SHORTENED step landed inside the cell: the march continues toward the same
+                        # target with the true remainder.
+                        after_accept(t_step, step_dt, step_ok, before, t_target)
+                        if stop:
+                            break
+                        pending_dt = t_target - state.t
+                        continue
+                    after_accept(t_step, step_dt, step_ok, before, t_target)
+                    break
+
+                # Bisect each crossed function to its root; the EARLIEST instant wins, and every function
+                # rooted within ``bracket_tol`` of it fires AT it -- the earliest-only rule would drop a
+                # SIMULTANEOUS crossing (a dead-time H-bridge's complementary pair, hbridge_deadtime
+                # 2026-08-07), and the dropped function would be stuck, not delayed.
+                candidates: list[tuple[float, int]] = []
+                # Every observer below queries the SAME deep-owned checkpoint/history, spacing, integrator
+                # and unchanged problem, so the exact candidate time determines the whole trial form. The
+                # cache lives only in this search; failed/nonfinite trials are not answers to reuse.
+                trials: dict[float, StepOutcome] = {}
+                trial_bytes = 0
+                for i in crossed:
+                    if g_new[i] == 0.0:
+                        candidates.append((t_step, i))
+                    elif t_step - t_from <= bracket_tol:
+                        candidates.append((t_from, i))
+                    else:
+
+                        def _probe(mid_t: float, i: int = i, t_from: float = t_from, checkpoint=checkpoint) -> float:
+                            nonlocal trial_bytes
+                            if mid_t in trials:
+                                trial = trials[mid_t]
+                                u_mid, ok, _rate = trial.u, trial.converged, trial.rate
+                            else:
+                                trial_state = _rollback(checkpoint, solution)
+                                trial = step_from(trial_state, mid_t - t_from, mid_t)
+                                u_mid, ok, _rate = trial.u, trial.converged, trial.rate
+                                size = u_mid.nbytes + _rate.nbytes
+                                if (
+                                    ok
+                                    and np.isfinite(u_mid).all()
+                                    and np.isfinite(_rate).all()
+                                    and size <= _EVENT_TRIAL_CACHE_BYTES
+                                ):
+                                    while trials and trial_bytes + size > _EVENT_TRIAL_CACHE_BYTES:
+                                        old_trial = trials.pop(next(iter(trials)))
+                                        trial_bytes -= old_trial.u.nbytes + old_trial.rate.nbytes
+                                    snapshot, rate = u_mid.copy(), _rate.copy()
+                                    snapshot.setflags(write=False)
+                                    rate.setflags(write=False)
+                                    trials[mid_t] = replace(trial, state=trial.state.copy(), u=snapshot, rate=rate)
+                                    trial_bytes += size
+                            if adaptive and not ok:
+                                msg = (
+                                    f'event probe at t={mid_t:g} did not converge; its event sign cannot '
+                                    'locate a physical switch. Reduce the step or repair the nonlinear solve.'
+                                )
+                                raise RuntimeError(msg)
+                            return float(event_fns[i](u_mid.copy(), mid_t))
+
+                        lo_t, hi_t = _locate_bracket(
+                            t_from, float(g_prev[i]), t_step, float(g_new[i]), _probe, tol=bracket_tol
+                        )
+                        candidates.append((0.5 * (lo_t + hi_t), i))
+                # No observer may retain a trial across an accepted state or physical reset.
+                trials.clear()
+                # The suppression's SECOND half, where the landing INSTANT is known: a crossing located
+                # within the tolerance of the function's last firing is that instant's re-detection.
+                candidates = [c for c in candidates if c[0] - last_fired.get(c[1], -np.inf) > bracket_tol]
+                if not candidates:
                     state = probe_state
                     before = checkpoint.state
-                    _commit(t_step, u_probe, probe_rate)
-                if bp_index < len(breakpoints) and t_step == breakpoints[bp_index]:
-                    if on_breakpoint is not None:
-                        if solution.nonconverged_times:
-                            msg = 'a physical breakpoint cannot consume a non-converged history'
-                            raise RuntimeError(msg)
-                        edge_state = state.last_u.copy()
-                        on_breakpoint(t_step, state.last_u)
-                        if not np.isfinite(state.last_u).all():
-                            msg = 'a breakpoint handler produced a non-finite state'
-                            raise ValueError(msg)
-                        if not np.array_equal(edge_state, state.last_u):
-                            solution.rate_state_overrides[len(solution.times) - 2] = edge_state
-                    # A declared source edge is as nonsmooth as a located state event; no
-                    # integrator or error predictor may extrapolate its pre-edge history.
-                    state = integrator.restart(state, state.last_u, t_step)
-                    lte_history[:] = [(t_step, state.last_u)]
-                g_prev = [float(g(state.last_u, t_step)) for g in event_fns]
-                if t_step < t_target - bracket_tol:
-                    # A SHORTENED step landed inside the cell: the march continues toward the same
-                    # target with the true remainder.
+                    _commit(t_step, probe)
+                    g_prev = [float(g(state.last_u, t_step)) for g in event_fns]
                     after_accept(t_step, step_dt, step_ok, before, t_target)
                     if stop:
                         break
-                    pending_dt = t_target - state.t
-                    continue
-                after_accept(t_step, step_dt, step_ok, before, t_target)
-                break
-
-            # Bisect each crossed function to its root; the EARLIEST instant wins, and every function
-            # rooted within ``bracket_tol`` of it fires AT it -- the earliest-only rule would drop a
-            # SIMULTANEOUS crossing (a dead-time H-bridge's complementary pair, hbridge_deadtime
-            # 2026-08-07), and the dropped function would be stuck, not delayed.
-            candidates: list[tuple[float, int]] = []
-            # Every observer below queries the SAME deep-owned checkpoint/history, spacing, integrator
-            # and unchanged problem, so the exact candidate time determines the whole trial form. The
-            # cache lives only in this search; failed/nonfinite trials are not answers to reuse.
-            trials: dict[float, tuple[NDArray, bool, NDArray]] = {}
-            trial_bytes = 0
-            for i in crossed:
-                if g_new[i] == 0.0:
-                    candidates.append((t_step, i))
-                elif t_step - t_from <= bracket_tol:
-                    candidates.append((t_from, i))
-                else:
-
-                    def _probe(mid_t: float, i: int = i, t_from: float = t_from, checkpoint=checkpoint) -> float:
-                        nonlocal trial_bytes
-                        if mid_t in trials:
-                            u_mid, ok, _rate = trials[mid_t]
-                        else:
-                            trial_state = _rollback(checkpoint, solution)
-                            _ps, u_mid, ok, _rate = step_from(trial_state, mid_t - t_from, mid_t)
-                            size = u_mid.nbytes + _rate.nbytes
-                            if (
-                                ok
-                                and np.isfinite(u_mid).all()
-                                and np.isfinite(_rate).all()
-                                and size <= _EVENT_TRIAL_CACHE_BYTES
-                            ):
-                                while trials and trial_bytes + size > _EVENT_TRIAL_CACHE_BYTES:
-                                    old_state, _old_ok, old_rate = trials.pop(next(iter(trials)))
-                                    trial_bytes -= old_state.nbytes + old_rate.nbytes
-                                snapshot, rate = u_mid.copy(), _rate.copy()
-                                snapshot.setflags(write=False)
-                                rate.setflags(write=False)
-                                trials[mid_t] = snapshot, ok, rate
-                                trial_bytes += size
-                        if adaptive and not ok:
-                            msg = (
-                                f'event probe at t={mid_t:g} did not converge; its event sign cannot '
-                                'locate a physical switch. Reduce the step or repair the nonlinear solve.'
-                            )
-                            raise RuntimeError(msg)
-                        return float(event_fns[i](u_mid.copy(), mid_t))
-
-                    lo_t, hi_t = _locate_bracket(
-                        t_from, float(g_prev[i]), t_step, float(g_new[i]), _probe, tol=bracket_tol
-                    )
-                    candidates.append((0.5 * (lo_t + hi_t), i))
-            # No observer may retain a trial across an accepted state or physical reset.
-            trials.clear()
-            # The suppression's SECOND half, where the landing INSTANT is known: a crossing located
-            # within the tolerance of the function's last firing is that instant's re-detection.
-            candidates = [c for c in candidates if c[0] - last_fired.get(c[1], -np.inf) > bracket_tol]
-            if not candidates:
-                state = probe_state
-                before = checkpoint.state
-                _commit(t_step, u_probe, probe_rate)
-                g_prev = [float(g(state.last_u, t_step)) for g in event_fns]
-                after_accept(t_step, step_dt, step_ok, before, t_target)
-                if stop:
+                    if t_step < t_target - bracket_tol:
+                        pending_dt = t_target - state.t
+                        continue
                     break
-                if t_step < t_target - bracket_tol:
-                    pending_dt = t_target - state.t
-                    continue
-                break
-            t_star = min(c[0] for c in candidates)
-            simultaneous = [c for c in candidates if c[0] - t_star <= bracket_tol]
-            state = _rollback(checkpoint, solution)
-            if t_star > t_from:  # land the march exactly on the event
-                state, u_star, landed, landed_rate = step_from(state, t_star - t_from, t_star)
-                if not landed:
+                t_star = min(c[0] for c in candidates)
+                simultaneous = [c for c in candidates if c[0] - t_star <= bracket_tol]
+                state = _rollback(checkpoint, solution)
+                if t_star > t_from:  # land the march exactly on the event
+                    landing = step_from(state, t_star - t_from, t_star)
+                    state, u_star, landed = landing.state, landing.u, landing.converged
+                    if not landed:
+                        msg = (
+                            f'event landing at t={t_star:g} did not converge; its state cannot '
+                            'trigger a physical switch. Reduce the step or repair the nonlinear solve.'
+                        )
+                        raise RuntimeError(msg)
+                    _commit(t_star, landing, observe=False)
+                else:
+                    u_star = np.array(state.last_u, dtype=float, copy=True)
+                if on_event is not None and solution.nonconverged_times:
                     msg = (
-                        f'event landing at t={t_star:g} did not converge; its state cannot '
-                        'trigger a physical switch. Reduce the step or repair the nonlinear solve.'
+                        f'physical event at t={t_star:g} cannot consume a history containing '
+                        f'non-converged steps {solution.nonconverged_times}. Repair the failed solve '
+                        'before advancing a physical handler.'
                     )
                     raise RuntimeError(msg)
-                _commit(t_star, u_star, landed_rate, observe=False)
-            else:
-                u_star = np.array(state.last_u, dtype=float, copy=True)
-            if on_event is not None and solution.nonconverged_times:
-                msg = (
-                    f'physical event at t={t_star:g} cannot consume a history containing '
-                    f'non-converged steps {solution.nonconverged_times}. Repair the failed solve '
-                    'before advancing a physical handler.'
-                )
-                raise RuntimeError(msg)
-            residual_state = u_star.copy() if on_event is not None and t_star > t_from else None
-            for _root, i in simultaneous:
-                solution.events.append((i, t_star))
-                emit('event', t=t_star, function=i)
-                if on_event is not None:
-                    on_event(i, t_star, u_star)
-                last_fired[i] = t_star
-            # Located state events own the incoming state first; exact scheduled clocks then consume
-            # that same canonical landing, never a probe.
-            if on_landing is not None:
-                landed_ids = accepted_landing(on_landing, t_star, u_star)
-                if landed_ids:
-                    solution.landed_events.extend((int(index), t_star) for index in landed_ids)
+                residual_state = u_star.copy() if on_event is not None and t_star > t_from else None
+                for _root, i in simultaneous:
+                    solution.events.append((i, t_star))
+                    emit('event', t=t_star, function=i)
+                    if on_event is not None:
+                        on_event(i, t_star, u_star)
+                    last_fired[i] = t_star
+                # Located state events own the incoming state first; exact scheduled clocks then consume
+                # that same canonical landing, never a probe.
+                if on_landing is not None:
+                    landed_ids = accepted_landing(on_landing, t_star, u_star)
+                    if landed_ids:
+                        solution.landed_events.extend((int(index), t_star) for index in landed_ids)
+                        solution.accepted_discontinuities.append(t_star)
+                if residual_state is not None and not np.array_equal(residual_state, u_star, equal_nan=True):
+                    assert solution.state_rates is not None
+                    assert solution.rate_state_overrides is not None
+                    rate_index = len(solution.state_rates) - 1
+                    if rate_index >= 0 and rate_index not in solution.rate_state_overrides:
+                        residual_state.flags.writeable = False
+                        solution.rate_state_overrides[rate_index] = residual_state
+                # Select the actual outgoing pair before restarting either numerical owner.
+                projection = AcceptedProjectionResult(u_star)
+                if on_accept is not None and accepted_observation(on_accept, t_star, u_star):
                     solution.accepted_discontinuities.append(t_star)
-            if residual_state is not None and not np.array_equal(residual_state, u_star, equal_nan=True):
-                assert solution.state_rates is not None
-                assert solution.rate_state_overrides is not None
-                rate_index = len(solution.state_rates) - 1
-                if rate_index >= 0 and rate_index not in solution.rate_state_overrides:
-                    residual_state.flags.writeable = False
-                    solution.rate_state_overrides[rate_index] = residual_state
-            # RESTART the history at the event: the toggle invalidates the pre-event derivative
-            # history (see the module docstring for the kink-rounding measurement). The landing
-            # step's v/a carry over for second-order integrators.
-            state = integrator.restart(state, u_star, t_star)
-            if on_accept is not None and accepted_observation(on_accept, t_star, u_star):
-                solution.accepted_discontinuities.append(t_star)
-            if project_accepted_state is not None:
-                right_state = accepted_projection(project_accepted_state, t_star, u_star)
-                rate_index = len(solution.state_rates) - 1
-                if t_star > t_from and rate_index not in solution.rate_state_overrides:
-                    solution.rate_state_overrides[rate_index] = u_star.copy()
-                solution.states[-1] = right_state
-                u_star = right_state
-                state = integrator.restart(state, right_state, t_star)
-            lte_history[:] = [(t_star, u_star)]
-            g_prev = [float(g(u_star, t_star)) for g in event_fns]
-            pending_dt = t_target - t_star  # the genuine remainder of this cell
-            events_this_cell += 1
-            emit_checkpoint(t_target, events_this_cell)
-            if events_this_cell > _MAX_EVENTS_PER_CELL:
-                msg = (
-                    f'more than {_MAX_EVENTS_PER_CELL} events inside one nominal cell ending at '
-                    f'{t_target:g}: an event function whose sign does not flip when its callback runs '
-                    're-triggers at the same instant forever. on_event must change what the crossing '
-                    'MEANS (the toggle), so the same zero is not re-located; a function that cannot '
-                    'do that is chattering, and the honest answer is to fix its model, not to march on'
-                )
-                raise RuntimeError(msg)
-            if pending_dt <= bracket_tol:  # the event consumed the rest of the cell
-                break
-        # end of one cell
-    if held is not None:
-        logger.info('held-factor march: factorizations=%d solves=%d', held.factorizations, held.solves)
-    if checkpoint_key is not None and accepted_dt is not None:
-        solution.checkpoint = checkpoint_now(None, 0)
-    solution.final_integrator_state = state.copy()
-    return solution
+                if project_accepted_state is not None:
+                    projection = accepted_projection(project_accepted_state, t_star, u_star)
+                    right_state = projection.state.copy()
+                    rate_index = len(solution.state_rates) - 1
+                    if t_star > t_from and rate_index not in solution.rate_state_overrides:
+                        solution.rate_state_overrides[rate_index] = u_star.copy()
+                    solution.states[-1] = right_state
+                    u_star = right_state
+                state = restart_prepared(problem, integrator, state, projection, t_star)
+                lte_history[:] = [(t_star, u_star)]
+                g_prev = [float(g(u_star, t_star)) for g in event_fns]
+                pending_dt = t_target - t_star  # the genuine remainder of this cell
+                events_this_cell += 1
+                emit_checkpoint(t_target, events_this_cell)
+                if events_this_cell > _MAX_EVENTS_PER_CELL:
+                    msg = (
+                        f'more than {_MAX_EVENTS_PER_CELL} events inside one nominal cell ending at '
+                        f'{t_target:g}: an event function whose sign does not flip when its callback runs '
+                        're-triggers at the same instant forever. on_event must change what the crossing '
+                        'MEANS (the toggle), so the same zero is not re-located; a function that cannot '
+                        'do that is chattering, and the honest answer is to fix its model, not to march on'
+                    )
+                    raise RuntimeError(msg)
+                if pending_dt <= bracket_tol:  # the event consumed the rest of the cell
+                    break
+            # end of one cell
+        if held is not None:
+            logger.info('held-factor march: factorizations=%d solves=%d', held.factorizations, held.solves)
+        if checkpoint_key is not None and accepted_dt is not None:
+            solution.checkpoint = checkpoint_now(None, 0)
+        solution.final_integrator_state = state.copy()
+        return solution
+    finally:
+        if prepared is not None:
+            prepared.close()

@@ -7,7 +7,7 @@ consume this leaf, so importing a concrete scheme never creates a cycle.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 import numpy as np
 import scipy.sparse as sp
@@ -20,6 +20,7 @@ from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint
 __all__ = [
     'ITimeIntegrator',
     'IntegratorState',
+    'ProjectedRestartIntegrator',
     'StepForm',
     'TransientSolution',
     'residual_floor',
@@ -111,6 +112,9 @@ class IntegratorState:
     because a multistep form differentiates against it, so it lives here and is checkpointed and
     rolled back with the vectors rather than tracked by each marcher. ``stage`` is the next stage
     of a multi-stage scheme (TR-BDF2); single-stage schemes keep it 0.
+    ``prepared_candidate`` is an immutable handle to an owner's speculative hidden-history
+    snapshot. Copies retain this explicit authority; portable checkpoints restore the owner's
+    actual history instead of serializing process-local handles.
     """
 
     us: list[NDArray[np.floating]]
@@ -119,6 +123,7 @@ class IntegratorState:
     a: NDArray[np.floating] | None = None
     h: float | None = None
     stage: int = 0
+    prepared_candidate: object | None = None
 
     def copy(self) -> IntegratorState:
         """A deep copy -- a checkpoint must never alias the arrays a probe step goes on to touch."""
@@ -129,6 +134,7 @@ class IntegratorState:
             a=None if self.a is None else np.array(self.a, dtype=float, copy=True),
             h=self.h,
             stage=self.stage,
+            prepared_candidate=self.prepared_candidate,
         )
 
     @property
@@ -205,6 +211,13 @@ class ITimeIntegrator(Protocol):
     def restart(self, state: IntegratorState, u: NDArray[np.floating], t: float) -> IntegratorState:
         """Drop the derivative history at a discontinuity (an event), keeping what stays continuous."""
         ...
+
+
+@runtime_checkable
+class ProjectedRestartIntegrator(Protocol):
+    """Optional actual scheme-owned seed of an explicit outgoing derivative pair."""
+
+    def restart_at_pair(self, state, u, t, rate, acceleration) -> IntegratorState: ...
 
 
 #: THE CONCRETE INTEGRATORS AND THEIR REGISTRY live in `_integrators.py`, split 2026-08-22

@@ -1,17 +1,64 @@
 """Sparse bulk plus declared small-border mass rank decomposition."""
 
 from dataclasses import dataclass
+from fractions import Fraction
 
 import numpy as np
 import scipy.sparse as sp
-from scipy.linalg import qr, solve, svd
+from scipy.linalg import qr
 from scipy.sparse.linalg import splu
+
+__all__ = ['StorageRows', 'free_pinned_columns', 'storage_border_columns', 'storage_border_rows']
 
 
 @dataclass(frozen=True)
 class StorageRows:
     stored_rows: np.ndarray
     algebraic_rows: sp.csr_matrix
+
+
+def _exact_border_dependencies(matrix):
+    """Rank only the declared sparse border, with exact binary-float witnesses."""
+    basis, independent, dependencies = {}, [], []
+    for row in range(matrix.shape[0]):
+        start, end = matrix.indptr[row : row + 2]
+        vector = {
+            int(column): Fraction(float(value))
+            for column, value in zip(matrix.indices[start:end], matrix.data[start:end], strict=True)
+            if value
+        }
+        witness = {row: Fraction(1)}
+        while vector:
+            pivot = min(vector)
+            if pivot not in basis:
+                divisor = vector[pivot]
+                basis[pivot] = (
+                    {index: value / divisor for index, value in vector.items()},
+                    {index: value / divisor for index, value in witness.items()},
+                )
+                independent.append(row)
+                break
+            previous, provenance = basis[pivot]
+            multiplier = vector[pivot]
+            for target, source in ((vector, previous), (witness, provenance)):
+                for index, value in source.items():
+                    target[index] = target.get(index, Fraction(0)) - multiplier * value
+                    if not target[index]:
+                        del target[index]
+        if not vector:
+            dependencies.append(witness)
+    null = np.zeros((len(dependencies), matrix.shape[0]))
+    for row, witness in enumerate(dependencies):
+        # Row scaling is arbitrary: normalize exactly before converting, so
+        # extreme but finite original storage units do not overflow the basis.
+        scale = max(map(abs, witness.values()))
+        for column, value in witness.items():
+            coefficient = float(value / scale)
+            if not np.isfinite(coefficient) or coefficient == 0:
+                msg = 'exact storage dependency has no representable finite null witness'
+                raise ValueError(msg)
+            null[row, column] = coefficient
+    return np.asarray(independent, dtype=int), null
 
 
 def storage_border_rows(mass, *, bulk_indices, border_rows):
@@ -41,33 +88,10 @@ def storage_border_rows(mass, *, bulk_indices, border_rows):
         msg = 'declared storage bulk/border omits actual mass rows or bulk rate dependencies'
         raise ValueError(msg)
     # Dense allocation is only the explicitly declared border width.
-    tail = mass[border][:, remaining].toarray()
-    norms = np.linalg.norm(tail, axis=1)
-    norms[norms == 0] = 1.0
-    normalized = tail / norms[:, None]
-    if len(border):
-        singular = svd(normalized, compute_uv=False)
-        rank_bar = np.finfo(float).eps * max(normalized.shape) * (singular[0] if singular.size else 0.0)
-        rank = int(np.count_nonzero(singular > rank_bar))
-        _, _, pivots = qr(normalized.T, mode='economic', pivoting=True)
-        independent = pivots[:rank]
-        independent_border = border[independent]
-        dependent = np.setdiff1d(np.arange(len(border)), independent)
-        null_border = np.zeros((len(dependent), len(border)))
-        null_border[np.arange(len(dependent)), dependent] = 1.0
-        if rank and len(dependent):
-            # Explicit actual row dependencies, not a dense SVD rotation of
-            # disconnected blocks. SVD roundoff otherwise invents nonzero rate
-            # columns through null-vector noise in an unrelated storage row.
-            basis = normalized[independent]
-            _, _, columns = qr(basis, mode='economic', pivoting=True)
-            minor = columns[:rank]
-            dependency = solve(basis[:, minor].T, normalized[dependent][:, minor].T).T
-            null_border[:, independent] = -dependency
-        null_border /= norms[None, :]
-    else:
-        independent_border = np.array([], dtype=int)
-        null_border = np.zeros((0, 0))
+    sparse_tail = mass[border][:, remaining]
+    supported = np.unique(sparse_tail.indices)
+    independent, null_border = _exact_border_dependencies(sparse_tail[:, supported].tocsr())
+    independent_border = border[independent]
     if len(bulk):
         try:
             factor = splu(mass[bulk][:, bulk].tocsc())
@@ -78,6 +102,9 @@ def storage_border_rows(mass, *, bulk_indices, border_rows):
         correction = factor.solve(mass[border][:, bulk].T.toarray(), trans='T').T
     else:
         correction = np.zeros((len(border), 0))
+    if not np.isfinite(correction).all():
+        msg = 'storage bulk elimination requires finite representable operands'
+        raise ValueError(msg)
     selectors = sp.eye(n, format='csr')
     algebraic = sp.vstack(
         [
@@ -86,7 +113,51 @@ def storage_border_rows(mass, *, bulk_indices, border_rows):
         ],
         format='csr',
     )
+    if not np.isfinite(algebraic.data).all():
+        msg = 'storage elimination requires finite original algebraic witnesses'
+        raise ValueError(msg)
     return StorageRows(np.concatenate((bulk, independent_border)), algebraic)
+
+
+def storage_border_columns(mass, *, bulk_indices, stored_rows):
+    """Select an actual stored minor with only small-border dense pivot work.
+
+    The caller's independent rows already establish the required rank. Column
+    pivoting selects that many candidates, not a new floating rank threshold;
+    an actual sparse LU proves the selected minor is nonsingular.
+    """
+    mass = sp.csr_matrix(mass)
+    mass.eliminate_zeros()
+    bulk, rows = np.asarray(bulk_indices), np.asarray(stored_rows)
+    n = mass.shape[0]
+    if (
+        mass.shape != (n, n)
+        or not np.isfinite(mass.data).all()
+        or any(value.ndim != 1 or value.dtype.kind not in 'iu' for value in (bulk, rows))
+        or any(len(np.unique(value)) != len(value) for value in (bulk, rows))
+        or any(np.any(value < 0) or np.any(value >= n) for value in (bulk, rows))
+        or not np.isin(bulk, rows).all()
+    ):
+        msg = 'stored columns require finite square mass and explicit unique bulk/stored indices'
+        raise ValueError(msg)
+    if not len(rows):
+        return np.array([], dtype=int)
+    remaining = np.setdiff1d(np.arange(mass.shape[1]), bulk)
+    border_rows = rows[~np.isin(rows, bulk)]
+    sparse_tail = mass[border_rows][:, remaining]
+    supported = np.unique(sparse_tail.indices)
+    if len(supported) < len(border_rows):
+        msg = 'declared stored rows lack a nonsingular actual stored column minor'
+        raise ValueError(msg)
+    tail = sparse_tail[:, supported].toarray()
+    _, _, pivots = qr(tail, mode='economic', pivoting=True)
+    columns = np.concatenate((bulk, remaining[supported[pivots[: len(border_rows)]]]))
+    try:
+        splu(mass[rows][:, columns].tocsc())
+    except RuntimeError as error:
+        msg = 'declared stored rows and bulk require a nonsingular actual stored column minor'
+        raise ValueError(msg) from error
+    return columns
 
 
 def free_pinned_columns(columns, stored_mass, pinned_rows):

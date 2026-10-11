@@ -130,6 +130,7 @@ class TransientCheckpoint:
             not in (
                 'bdf1',
                 'bdf2',
+                'tr_bdf2',
                 'newmark',
                 'generalized_alpha',
             )
@@ -149,8 +150,11 @@ class TransientCheckpoint:
             for value in state:
                 _number(value)
         second_order = self.integrator in ('newmark', 'generalized_alpha')
-        if (second_order and (self.velocity is None or self.acceleration is None)) or (
-            not second_order and (self.velocity is not None or self.acceleration is not None)
+        carried_rate = self.integrator == 'tr_bdf2'
+        if (
+            (second_order and (self.velocity is None or self.acceleration is None))
+            or (carried_rate and (self.velocity is None or self.acceleration is not None))
+            or (not second_order and not carried_rate and (self.velocity is not None or self.acceleration is not None))
         ):
             msg = 'checkpoint derivative history must match the integrator order'
             raise ValueError(msg)
@@ -267,7 +271,7 @@ class TransientCheckpoint:
 
 
 def validate_history_json(value):
-    """No class tags, pickle, arbitrary keys/coercion, NaN or opaque object payloads."""
+    """Validate plain JSON; physics owners validate their metadata and numeric schemas."""
     if isinstance(value, dict):
         if any(not isinstance(key, str) for key in value):
             msg = 'checkpoint history object keys must be strings'
@@ -277,7 +281,7 @@ def validate_history_json(value):
     elif isinstance(value, list):
         for item in value:
             validate_history_json(item)
-    elif value is not None and not isinstance(value, str):
+    elif value is not None and not isinstance(value, (str, bool)):
         _number(value)
 
 
@@ -300,6 +304,8 @@ def validate_context_json(value):
         elif isinstance(item, list):
             for child in item:
                 visit(child, depth + 1)
+        elif isinstance(item, bool):
+            _number(item)
         else:
             validate_history_json(item)
 
@@ -317,13 +323,13 @@ def restore_history_checkpoint(problem, checkpoint):
     if contextual != (checkpoint.problem_context is not None):
         msg = 'checkpoint physical context does not match the problem context requirement'
         raise ValueError(msg)
-    if contextual:
-        problem.restore_checkpoint_context(checkpoint.problem_context)
     validate_history_owner(problem)
     stateful = owns_history(problem)
     if stateful != (checkpoint.material_history is not None):
         msg = 'checkpoint material history does not match the problem history requirement'
         raise ValueError(msg)
+    if contextual:
+        problem.restore_checkpoint_context(checkpoint.problem_context)
     if stateful:
         problem.restore_checkpoint_history(checkpoint.material_history)
 
@@ -341,7 +347,12 @@ def owns_history(problem) -> bool:
     return isinstance(problem, HistoryProblem) and (not isinstance(problem, HistoryPresence) or problem.has_history)
 
 
-def _checkpoint_of(problem, state, dt, key, name, *, eec_state=None, step_origin=None, event_state=None):
+def _checkpoint_of(
+    problem, state, dt, key, name, *, previous_time=None, eec_state=None, step_origin=None, event_state=None
+):
+    if state.stage != 0:
+        msg = 'portable checkpoint requires an accepted macrostep, not an intermediate stage'
+        raise ValueError(msg)
     return TransientCheckpoint(
         key,
         name,
@@ -350,6 +361,7 @@ def _checkpoint_of(problem, state, dt, key, name, *, eec_state=None, step_origin
         tuple(tuple(float(x) for x in u) for u in state.us),
         None if state.v is None else tuple(float(x) for x in state.v),
         None if state.a is None else tuple(float(x) for x in state.a),
+        previous_time=previous_time,
         material_history=capture_history(problem),
         problem_context=problem.checkpoint_context(state.t) if isinstance(problem, CheckpointContext) else None,
         eec_state=eec_state,

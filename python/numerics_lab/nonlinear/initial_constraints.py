@@ -4,8 +4,11 @@ import numpy as np
 from scipy.linalg import null_space
 from scipy.sparse import csr_matrix
 
+from motronics.gauss.linear.border_rank import border_affine_space
 from motronics.gauss.linear.initial_constraints import initial_subspaces, linear_dae_initial_state
 from motronics.gauss.nonlinear import AssembledState, NewtonStrategy
+
+__all__ = ['nonlinear_dae_initial_state']
 
 
 def nonlinear_dae_initial_state(
@@ -20,12 +23,18 @@ def nonlinear_dae_initial_state(
     tolerance=1e-10,
     allow_preferred_changes=True,
     stored_state=None,
+    affine_constraints=None,
 ):
     """Use the shared Newton/line-search owner; never guess a free preferred IC.
 
     The algebraic rate space must remain invariant during projection. Without
     stored_state the storage coordinates must also be invariant; with that
     explicit primitive its actual Jacobian is mass, never a frozen surrogate.
+
+    affine_constraints, when supplied, must be owner-declared equations valid
+    throughout the search, not a sampled tangent certificate. They restrict the
+    search coordinates; acceptance still checks the original nonlinear DAE,
+    stored-state equations, and final preferred-coordinate uniqueness.
     """
     initial = np.asarray(initial, dtype=float)
     initial_mass = csr_matrix(mass(initial)).toarray()
@@ -53,21 +62,82 @@ def nonlinear_dae_initial_state(
     system = _InitialConstraints(
         residual, jacobian, mass, initial, algebraic, stored, anchors, extra_rate_columns, stored_state
     )
-    result = NewtonStrategy().solve(system, max_iter=max_iter, rtol_energy_pct=tolerance * 100)
+    reduced = system if affine_constraints is None else _AffineInitialConstraints(system, affine_constraints, tolerance)
+    result = NewtonStrategy().solve(reduced, max_iter=max_iter, rtol_energy_pct=tolerance * 100)
     if not result.converged:
         msg = 'nonlinear stored initial state did not close its actual algebraic DAE constraints'
         raise ValueError(msg)
-    state = system.assemble(result.x)
-    reference = np.linalg.norm(state.system_matrix) * np.linalg.norm(result.x) + np.linalg.norm(stored @ initial)
-    if system.residual_norm(result.x, state) > tolerance * reference:
+    value = result.x if affine_constraints is None else reduced.full_state(result.x)
+    state = system.assemble(value)
+    reference = np.linalg.norm(state.system_matrix) * np.linalg.norm(value) + np.linalg.norm(stored @ initial)
+    if system.residual_norm(value, state) > tolerance * reference:
         msg = 'nonlinear initial constraints did not satisfy the measured final-state residual scale'
         raise ValueError(msg)
-    free = null_space(state.system_matrix)
+    free = (
+        null_space(state.system_matrix)
+        if affine_constraints is None
+        else border_affine_space(state.system_matrix, np.zeros(state.system_matrix.shape[0]))[1]
+    )
     indices = np.asarray(preferred_indices, dtype=int)
-    if np.any(np.linalg.norm(free[indices], axis=1) > np.finfo(float).eps * max(state.system_matrix.shape) * 16):
+    if (
+        np.any(free[indices] != 0)
+        if affine_constraints is not None
+        else np.any(np.linalg.norm(free[indices], axis=1) > np.finfo(float).eps * max(state.system_matrix.shape) * 16)
+    ):
         msg = 'nonlinear initial preferred states require additional physical initial authority'
         raise ValueError(msg)
-    return result.x
+    return value
+
+
+class _AffineInitialConstraints:
+    """Newton in caller-owned exact affine coordinates, with original constraints retained."""
+
+    is_linear = False
+
+    def __init__(self, original, constraints, tolerance) -> None:
+        self.original = original
+        self.tolerance = tolerance
+        self.matrix, self.rhs = (np.asarray(value, dtype=float) for value in constraints)
+        if self.matrix.ndim != 2 or self.matrix.shape[1] != original.initial.size:
+            msg = 'affine initial constraints must cover the actual full state'
+            raise ValueError(msg)
+        self.origin, self.directions = border_affine_space(self.matrix, self.rhs)
+
+    def full_state(self, value):
+        state = self.origin + self.directions @ value
+        defect = self.matrix @ state - self.rhs
+        scale = np.abs(self.matrix) @ np.abs(state) + np.abs(self.rhs)
+        if (
+            not np.isfinite(state).all()
+            or not np.isfinite(scale).all()
+            or np.any(np.abs(defect) > self.tolerance * scale)
+        ):
+            msg = 'affine initial coordinates contradict their original physical equations'
+            raise ValueError(msg)
+        return state
+
+    def initial_guess(self):
+        # This selects only a numerical search seed, never a physical free state.
+        return np.linalg.lstsq(self.directions, self.original.initial - self.origin, rcond=None)[0]
+
+    def assemble(self, value):
+        state = self.original.assemble(self.full_state(value))
+        return AssembledState(state.system_matrix @ self.directions, state.total_energy, payload=state.payload)
+
+    def residual(self, value, state):
+        return state.payload
+
+    def residual_norm(self, value, state):
+        return float(np.linalg.norm(state.payload))
+
+    def tangent(self, value, state):
+        return state.system_matrix
+
+    def solve_system(self, matrix, rhs):
+        return np.linalg.lstsq(matrix, rhs, rcond=None)[0]
+
+    def on_iteration(self, iteration, state, error, alpha, increment):
+        pass
 
 
 class _InitialConstraints:

@@ -6,6 +6,8 @@ from scipy.sparse.linalg import splu
 
 from motronics.gauss.linear.initial_sparse import projected_rate_consistent, sparse_initial_pair
 
+__all__ = ['constant_storage_initial_pair', 'constant_storage_right_state']
+
 
 def constant_storage_right_state(
     initial, *, residual_at, jacobian_at, mass_at, storage_rows, max_newton=30, tolerance=1e-10

@@ -3,6 +3,8 @@
 import math
 from dataclasses import asdict, dataclass, fields
 
+__all__ = ['EventCheckpointState']
+
 
 @dataclass(frozen=True)
 class EventCheckpointState:

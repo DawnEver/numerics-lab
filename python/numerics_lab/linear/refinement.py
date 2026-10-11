@@ -44,11 +44,70 @@ __all__ = [
     'direct_refinement_correction',
     'direct_relative_residual',
     'move_is_this_systems_conditioning',
+    'refine_factored_solution',
     'refinement_move_trajectory',
     'refinement_residual',
     'reject_unsolved_direct_system',
     'repair_direct_solution',
 ]
+
+
+def refine_factored_solution(matrix, rhs, initial, solve_correction):
+    """Refine original rows with an owned factor; retain the best backward error."""
+    matrix = sp.csr_matrix(matrix)
+    rhs, best = np.asarray(rhs, dtype=float), np.array(initial, dtype=float, copy=True)
+    if (
+        matrix.shape != (best.size, best.size)
+        or best.ndim != 1
+        or rhs.shape != best.shape
+        or not np.isfinite(matrix.data).all()
+    ):
+        msg = 'factored refinement requires finite square operators and aligned vectors'
+        raise LinearSolveError(msg)
+
+    def measured(value):
+        defect = rhs - matrix @ value
+        magnitude = abs(matrix) @ abs(value) + abs(rhs)
+        if not all(np.isfinite(item).all() for item in (value, defect, magnitude)):
+            msg = 'factored refinement requires finite original row operands'
+            raise LinearSolveError(msg)
+        ratio = np.divide(abs(defect), magnitude, out=np.zeros_like(defect), where=magnitude != 0)
+        ratio[(magnitude == 0) & (defect != 0)] = np.inf
+        return defect, float(np.max(ratio, initial=0))
+
+    defect, score = measured(best)
+    for _ in range(3):
+        if not np.any(defect):
+            break
+        correction = np.asarray(solve_correction(defect), dtype=float)
+        if correction.shape != best.shape:
+            msg = 'factored refinement correction must retain actual coordinate shape'
+            raise LinearSolveError(msg)
+        candidate = best + correction
+        next_defect, next_score = measured(candidate)
+        if next_score >= score:
+            break
+        best, defect, score = candidate, next_defect, next_score
+    move = None
+    relative = direct_relative_residual(matrix, rhs, best)
+    if relative is not None and relative > _DIRECT_RESIDUAL_RTOL:
+        # The owned factor may use actual mixed-unit minors or row normalization.
+        # Refactoring the unscaled operator would judge a different numerical solve.
+        compensated = refinement_residual(matrix, rhs, best)
+        forcing = defect if compensated is None else compensated
+        correction = np.asarray(solve_correction(forcing), dtype=float)
+        if correction.shape != best.shape or not np.isfinite(correction).all():
+            msg = 'factored refinement correction must retain finite actual coordinate shape'
+            raise LinearSolveError(msg)
+        # A callback cannot certify itself by returning a small or zero vector.
+        # First retain the original equation guard for A*correction = forcing.
+        reject_unsolved_direct_system(matrix, forcing, correction, 'factored_refinement_correction')
+        correction_norm, solution_norm = float(np.linalg.norm(correction)), float(np.linalg.norm(best))
+        move = (
+            correction_norm / solution_norm if solution_norm != 0 else (0.0 if correction_norm == 0 else float('inf'))
+        )
+    reject_unsolved_direct_system(matrix, rhs, best, 'factored_refinement', refinement=move)
+    return best
 
 
 # Direct-solve singular guard, in TWO stages. The residual is the TRIGGER, never the verdict.
