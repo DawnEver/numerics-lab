@@ -322,3 +322,27 @@ def test_rate_validation_retry_never_runs_general_exact_elimination_on_a_large_f
     rhs[-1] = 1e-30
     with pytest.raises(ValueError, match='original physical constraints'):
         initial_rate.sparse_initial_rate(matrix, rhs)
+
+
+@pytest.mark.parametrize('drive', [1.0, -1.0, 1e-12])
+def test_original_homogeneous_rate_equations_survive_a_scaled_factor_roundoff_retry(drive):
+    # Actual homogeneous constraints fix theta and both linkage rates to zero,
+    # while finite field/current rates remain driven. No coordinate is snapped.
+    matrix = sp.csr_matrix(
+        [
+            [-2, 4, -3, -4, 4, 5],
+            [9, 0, 4, -8, 2, -1],
+            [-2, 11, -9, 4, 0, -1],
+            [1, 0, 0, 0, 1, 0],
+            [5, 0, 0, 0, 0, 1],
+            [0, 0, 0, 0, 0.5, 1],
+            [0, 1, 1, 0, -1, 0],
+        ],
+        dtype=float,
+    )
+    rhs = drive * np.array([-5, -28, 32, 0, 0, 0, 0])
+    rate, unique = initial_rate.sparse_initial_rate(matrix, rhs)
+    assert unique.all()
+    assert rate[0] == rate[4] == rate[5] == 0.0
+    np.testing.assert_allclose(rate, drive * np.array([0, 1, -1, 3, 0, 0]), rtol=1e-10, atol=0.0)
+    np.testing.assert_allclose(matrix @ rate, rhs, rtol=1e-10, atol=0.0)

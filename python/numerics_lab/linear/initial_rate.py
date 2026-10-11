@@ -131,6 +131,55 @@ def _refined_rate_values(factor, reduced, rows, forcing):
     return values
 
 
+def _exact_rate_values(matrix, rhs):
+    """Reconstruct a bounded original subsystem when floating refinement loses its witnesses."""
+    size = matrix.shape[1]
+    if matrix.shape != (size, size) or size > 512:
+        msg = 'exact rate reconstruction requires a bounded square physical subsystem'
+        raise ValueError(msg)
+    vectors = []
+    forcing = [Fraction(float(value)) for value in rhs]
+    for row in range(size):
+        vector = {}
+        start, end = matrix.indptr[row : row + 2]
+        for column, value in zip(matrix.indices[start:end], matrix.data[start:end], strict=True):
+            vector[int(column)] = vector.get(int(column), Fraction(0)) + Fraction(float(value))
+        vectors.append(vector)
+    for column in range(size):
+        pivot = next((row for row in range(column, size) if vectors[row].get(column)), None)
+        if pivot is None:
+            msg = 'actual rate equations lack a nonsingular original physical subsystem'
+            raise ValueError(msg)
+        vectors[column], vectors[pivot] = vectors[pivot], vectors[column]
+        forcing[column], forcing[pivot] = forcing[pivot], forcing[column]
+        diagonal = vectors[column][column]
+        for row in range(column + 1, size):
+            if not vectors[row].get(column):
+                continue
+            multiplier = vectors[row].pop(column) / diagonal
+            forcing[row] -= multiplier * forcing[column]
+            for index, value in vectors[column].items():
+                if index > column:
+                    updated = vectors[row].get(index, Fraction(0)) - multiplier * value
+                    if updated:
+                        vectors[row][index] = updated
+                    else:
+                        vectors[row].pop(index, None)
+    values = [Fraction(0)] * size
+    for row in range(size - 1, -1, -1):
+        tail = sum(value * values[column] for column, value in vectors[row].items() if column > row)
+        values[row] = (forcing[row] - tail) / vectors[row][row]
+    try:
+        result = np.asarray([float(value) for value in values])
+    except OverflowError as error:
+        msg = 'actual exact rate requires a finite representable solution'
+        raise ValueError(msg) from error
+    if not np.isfinite(result).all():
+        msg = 'actual exact rate requires a finite representable solution'
+        raise ValueError(msg)
+    return result
+
+
 def sparse_initial_rate(matrix, rhs, *, tolerance=1e-10, residual_allowance=None):
     """Solve actual frozen-state rate equations; dependent rates stay unavailable.
 
@@ -211,6 +260,15 @@ def sparse_initial_rate(matrix, rhs, *, tolerance=1e-10, residual_allowance=None
         if not np.isfinite(defect).all() or not np.isfinite(bar).all():
             msg = 'actual rate physical validation requires finite defects and bounds'
             raise ValueError(msg)
+        if np.any(abs(defect) > bar):
+            # Exact original coefficient/RHS reconstruction, not zero snapping:
+            # rounded outputs still face every original row and its same bar.
+            answer[selected] = _exact_rate_values(matrix[rows][:, selected].tocsr(), rhs[rows])
+            defect = matrix @ answer - rhs
+            bar = tolerance * (abs(matrix) @ abs(answer) + abs(rhs)) + allowance
+            if not np.isfinite(defect).all() or not np.isfinite(bar).all():
+                msg = 'actual exact rate physical validation requires finite defects and bounds'
+                raise ValueError(msg)
     if np.any(abs(defect) > bar):
         msg = 'actual rate equations contradict original physical constraints'
         raise ValueError(msg)
