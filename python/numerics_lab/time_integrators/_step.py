@@ -38,9 +38,19 @@ __all__ = [
     'HeldFactor',
     'ProblemCapabilities',
     'StepOutcome',
+    'TrialNotEvaluable',
     'directional_line_search',
     'take_step',
 ]
+
+
+class TrialNotEvaluable(RuntimeError):
+    """Raised by a problem's ``residual`` when a line-search TRIAL point has no value to give.
+
+    The condensed field-circuit residual is an inner field root; far from the outer root that inner
+    Newton can have none. The backtracking search treats the trial as rejected and halves, exactly as
+    for a residual above its band -- the march fails only if the step itself cannot converge.
+    """
 
 
 @dataclass(frozen=True)
@@ -475,10 +485,19 @@ def _solve_step(
             )
         elif max_newton > 1 and backtrack_cap > 0:
             raised = False
+            evaluable = True
             for _ in range(backtrack_cap):
                 u_try = project_trial(u + step)
                 u_arg, u_dot, u_ddot = form.u_arg(u_try), form.u_dot(u_try), form.u_ddot(u_try)
-                r_try = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
+                try:
+                    r_try = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
+                except TrialNotEvaluable:
+                    # The problem cannot evaluate this trial (an inner solve without a root): the
+                    # trial is REJECTED exactly like one whose residual is too large -- halve.
+                    evaluable = False
+                    step = 0.5 * step
+                    continue
+                evaluable = True
                 limit = residual if backtrack_band is None else backtrack_band * residual
                 trial = float(np.linalg.norm(r_try))
                 if trial < limit:
@@ -487,7 +506,9 @@ def _solve_step(
                     break
                 step = 0.5 * step
             else:
-                u = project_trial(u + step)
+                # Exhausted: take the last trial only if it could be evaluated at all.
+                if evaluable:
+                    u = project_trial(u + step)
                 capped = True
             if tangent_active and (capped or raised):
                 # THE POLISH IS A TRIAL, NOT A ONE-WAY SWITCH: an alternative operator whose step
