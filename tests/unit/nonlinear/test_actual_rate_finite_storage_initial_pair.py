@@ -14,6 +14,38 @@ from motronics.gauss.nonlinear.finite_storage import finite_storage_actual_rate_
 pytestmark = pytest.mark.unit
 
 
+def test_final_rank_proof_does_not_readmit_mutual_zero_charge_under_nonzero_rate_forcing():
+    stiffness = sp.diags((-np.ones(3), 2 * np.ones(4), -np.ones(3)), (-1, 0, 1), format='csr')
+    incidence = sp.csr_matrix([[1.0, 0], [1.0, 1.0], [0, 1.0], [0, 0]])
+    jacobian = sp.bmat(
+        [
+            [stiffness, -incidence, None],
+            [None, sp.diags([4.0, 2.0]), sp.csr_matrix((2, 2))],
+            [-incidence.T, None, sp.eye(2)],
+        ],
+        format='csr',
+    )
+    mass = sp.csr_matrix((np.ones(2), ([4, 5], [6, 7])), shape=(8, 8))
+    forcing = np.array([0.0, 0, 0, 0, 24.0, 0, 0, 0])
+    storage = StorageRows(np.array([4, 5]), sp.eye(8, format='csr')[[0, 1, 2, 3, 6, 7]])
+    pair = finite_storage_actual_rate_initial_pair(
+        np.zeros(8),
+        residual_at=lambda state, rate: jacobian @ state + mass @ rate - forcing,
+        jacobian_at=lambda _state, _rate: jacobian,
+        mass_at=lambda _state, _rate: mass,
+        partial_time_at=lambda _state, _rate: np.zeros(8),
+        storage_at=lambda state: mass @ state,
+        storage_rows_at=lambda _state, _rate: storage,
+        stored_columns_at=lambda _state, _rate, _storage: np.array([6, 7]),
+        rate_constraint_jacobian_at=lambda _state, _rate: jacobian,
+    )
+    np.testing.assert_array_equal(pair.state, np.zeros(8))
+    np.testing.assert_array_equal(mass @ pair.state, np.zeros(8))
+    np.testing.assert_allclose(mass @ pair.rate, forcing, rtol=1e-14, atol=1e-14)
+    np.testing.assert_allclose(storage.algebraic_rows @ jacobian @ pair.rate, 0.0, atol=1e-13)
+    assert pair.rate_is_unique.all()
+
+
 @pytest.mark.parametrize('mass', [np.array([[1e308]]), np.array([[1.0, 0], [1.0, 1e-30]])])
 def test_actual_border_preserves_every_finite_independent_storage_row(mass):
     result = storage_border_rows(

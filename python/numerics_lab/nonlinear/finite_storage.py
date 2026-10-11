@@ -245,7 +245,9 @@ def finite_storage_actual_rate_initial_pair(
     partial_time_at,
     storage_rows_at,
     rate_constraint_jacobian_at,
+    target_storage=None,
     stored_columns_at=None,
+    sparse_state_indices=None,
     max_newton=30,
     tolerance=1e-10,
 ):
@@ -303,7 +305,10 @@ def finite_storage_actual_rate_initial_pair(
             raise ValueError(msg)
         return charge
 
-    target = charge_at(state).copy()
+    target = charge_at(state).copy() if target_storage is None else np.asarray(target_storage, dtype=float).copy()
+    if target.shape != state.shape or not np.isfinite(target).all():
+        msg = 'actual-rate admission requires an aligned finite full storage target'
+        raise ValueError(msg)
 
     # First separate state authority wherever Q and the actual algebraic
     # equations already determine it. A rate RHS must not introduce numerical
@@ -376,18 +381,21 @@ def finite_storage_actual_rate_initial_pair(
             ):
                 # State search used a frozen-nullspace quasi-Newton tangent.
                 # Its nonsingularity is not the final physical state proof:
-                # re-factor the actual-rate state/storage equations as well.
+                # Re-factor the homogeneous perturbation equations at this
+                # actual pair. Re-admitting nonzero rate forcing here would
+                # introduce cancellation noise into an already frozen state.
                 sparse_initial_pair(
                     final_jacobian,
-                    final_residual - final_mass @ rate,
+                    np.zeros_like(state),
                     final_mass,
-                    state,
+                    np.zeros_like(state),
                     algebraic_rows=final_storage.algebraic_rows,
                     stored_rows=final_storage.stored_rows,
-                    partial_time=final_jacobian @ rate + final_partial - final_tangent @ rate,
+                    partial_time=np.zeros_like(state),
                     stored_increment=np.zeros(len(final_storage.stored_rows)),
                     rate_jacobian=final_tangent,
                     stored_columns=None if stored_columns_at is None else stored_columns_at(state, rate, final_storage),
+                    sparse_state_indices=sparse_state_indices,
                     tolerance=tolerance,
                 )
                 _, unique = sparse_initial_rate(
@@ -419,6 +427,7 @@ def finite_storage_actual_rate_initial_pair(
                 partial_time=jacobian @ rate + partial - rate_tangent @ rate,
                 stored_increment=(target - charge_at(state))[storage.stored_rows],
                 stored_columns=None if stored_columns_at is None else stored_columns_at(state, rate, storage),
+                sparse_state_indices=sparse_state_indices,
                 rate_jacobian=rate_tangent,
                 tolerance=tolerance,
             )
@@ -465,6 +474,7 @@ def finite_storage_actual_rate_initial_pair(
                 partial_time=jacobian @ rate + partial - final_tangent @ rate,
                 stored_increment=np.zeros(len(storage.stored_rows)),
                 stored_columns=None if stored_columns_at is None else stored_columns_at(state, rate, storage),
+                sparse_state_indices=sparse_state_indices,
                 rate_jacobian=final_tangent,
                 tolerance=tolerance,
             )
