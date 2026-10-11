@@ -34,7 +34,7 @@ from motronics.gauss.time_integrators import integrate_transient
 from motronics.gauss.time_integrators._forms import residual_floor
 from motronics.laplace.circuit.core.build import CircuitBuilder
 from motronics.laplace.circuit.core.mna import assemble_mna
-from motronics.laplace.circuit.core.mna_solves import _roundoff_floor as _op_roundoff_floor
+from motronics.laplace.circuit.core.transient.mna_solves import _roundoff_floor as _op_roundoff_floor
 from motronics.laplace.circuit.sources import DC
 
 #: The absolute bar this file retires as the DEFAULT decision. Kept here as the FLOOR of the

@@ -181,7 +181,7 @@ def _gmin_continue(
 ) -> tuple[NDArray[np.floating], bool, float, bool]:
     """The gmin continuation for an exhausted step: solve ``(J + gmin I) delta = -R`` for
     each stage, the residual always the TRUE one (the same contract the DC-op's
-    :func:`~motronics.laplace.circuit.core.mna_solves._gmin_stepped` follows). Each stage is
+    :func:`~motronics.laplace.circuit.core.transient.mna_solves._gmin_stepped` follows). Each stage is
     seeded by the previous stage's iterate; the bar is the caller's own (``tol`` or
     ``tol_rel * residual_0`` -- the plain Newton's first-iteration residual, the same bar the
     step already failed) PLUS, once the continuation is spent, :func:`residual_floor` -- the damped
