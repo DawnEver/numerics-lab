@@ -5,6 +5,15 @@ from numbers import Integral, Real
 
 import numpy as np
 
+__all__ = [
+    'AcceptedProjectionResult',
+    'accepted_landing',
+    'accepted_observation',
+    'accepted_projection',
+    'live_targets',
+    'next_deadline',
+]
+
 
 @dataclass(frozen=True)
 class AcceptedProjectionResult:
@@ -21,6 +30,12 @@ class AcceptedProjectionResult:
             value = getattr(self, name)
             if value is None:
                 continue
+            primitives = value if isinstance(value, np.ndarray) else np.asarray(value, dtype=object)
+            if primitives.dtype.kind == 'b' or (
+                primitives.dtype.kind == 'O' and any(isinstance(item, (bool, np.bool_)) for item in primitives.flat)
+            ):
+                msg = 'accepted projection requires aligned finite real state and declared derivatives'
+                raise ValueError(msg)
             array = np.asarray(value)
             if state.ndim != 1 or array.shape != state.shape or not np.isrealobj(array) or not np.isfinite(array).all():
                 msg = 'accepted projection requires aligned finite real state and declared derivatives'
