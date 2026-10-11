@@ -55,7 +55,7 @@ different costume, and has the same owner: the key.
 NAMED HOLE: the cache trusts the key exactly as it trusts ``residual`` / ``jacobian``. A key that
 under-reads the jacobian's inputs (say, one that ignores a device state the tangent depends on)
 reuses a STALE factor and silently solves the wrong system. That failure class is pinned on the
-problem's side (``tests/unit/laplace/solver/test_factor_reuse.py``'s toggle-is-a-new-key anchor), and a
+problem's side (``tests/unit/laplace/solver/test_circuit_factor_reuse_key.py``'s toggle-is-a-new-key anchor), and a
 problem that cannot derive the implication should not expose the seam at all -- ``None`` keys and
 keyless problems always take the plain per-solve path, which is what every pre-W6 problem does.
 
