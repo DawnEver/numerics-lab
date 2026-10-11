@@ -12,6 +12,7 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import splu
 
 from motronics.gauss.linear.algebraic_bulk_initial import algebraic_bulk_initial_pair
+from motronics.gauss.linear.arithmetic import affine_residual_bound
 from motronics.gauss.linear.initial_rate import _independent_exact_columns, sparse_initial_rate
 from motronics.gauss.linear.initial_sparse import (
     SparseInitialPair,
@@ -251,6 +252,7 @@ def finite_storage_actual_rate_initial_pair(
     partial_time_at,
     storage_rows_at,
     rate_constraint_jacobian_at,
+    residual_evaluation_at=None,
     target_storage=None,
     stored_columns_at=None,
     sparse_state_indices=None,
@@ -265,6 +267,14 @@ def finite_storage_actual_rate_initial_pair(
     manufacturing null-basis derivatives. Sparse bulk/small-border rank
     construction remains the caller's actual storage owner.
     """
+
+    def construction_allowance(rate, mass, residual, evaluation):
+        if evaluation is None:
+            return np.zeros_like(residual)
+        bound = evaluation.bound
+        bound = affine_residual_bound(mass, rate, -residual, bound)
+        return np.where(bound.known, bound.values, 0.0)
+
     state = np.asarray(initial, dtype=float).copy()
     if (
         state.ndim != 1
@@ -343,7 +353,8 @@ def finite_storage_actual_rate_initial_pair(
                 mass, jacobian = mass_at(state, rate), jacobian_at(state, rate)
                 partial, tangent = partial_time_at(state, rate), rate_constraint_jacobian_at(state, rate)
                 storage = storage_rows_at(state, rate)
-                residual = residual_at(state, rate)
+                evaluation = None if residual_evaluation_at is None else residual_evaluation_at(state, rate)
+                residual = residual_at(state, rate) if evaluation is None else evaluation.residual
                 derivative = storage.algebraic_rows @ (jacobian @ rate + partial)
                 equations = sp.bmat(
                     [
@@ -361,6 +372,7 @@ def finite_storage_actual_rate_initial_pair(
                     abs(jacobian) @ abs(state) + abs(residual_at(state, np.zeros_like(rate)))
                 )
                 state_allowance[~algebraic_state] = 0.0
+                state_allowance += construction_allowance(rate, mass, residual, evaluation)
                 solution, unique = sparse_initial_rate(
                     equations,
                     rhs,
@@ -404,7 +416,8 @@ def finite_storage_actual_rate_initial_pair(
             partial = np.asarray(partial_time_at(state, rate))
             tangent = sp.csr_matrix(rate_constraint_jacobian_at(state, rate))
             storage = storage_rows_at(state, rate)
-            residual = np.asarray(residual_at(state, rate))
+            evaluation = None if residual_evaluation_at is None else residual_evaluation_at(state, rate)
+            residual = np.asarray(residual_at(state, rate) if evaluation is None else evaluation.residual)
             derivative = storage.algebraic_rows @ (jacobian @ rate + partial)
             # Exact zero-mass rows are already admitted STATE equations, not
             # dynamic rate forcing. Preserve their same physical state bar;
@@ -416,6 +429,7 @@ def finite_storage_actual_rate_initial_pair(
                 + abs(np.asarray(residual_at(state, np.zeros_like(rate))))
             )
             state_allowance[~algebraic_state] = 0.0
+            state_allowance += construction_allowance(rate, mass, residual, evaluation)
             rate, _unique = sparse_initial_rate(
                 sp.vstack((mass, storage.algebraic_rows @ tangent), format='csr'),
                 np.concatenate((mass @ rate - residual, storage.algebraic_rows @ tangent @ rate - derivative)),
