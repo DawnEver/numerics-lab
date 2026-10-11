@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
+from motronics.gauss.linear import refinement as module
 from motronics.gauss.linear.errors import LinearSolveError
 from motronics.gauss.linear.refinement import refine_factored_solution
 
@@ -41,3 +42,36 @@ def test_finite_garbage_and_nonfinite_corrections_cannot_claim_physical_authorit
         refine_factored_solution(sp.eye(1), np.ones(1), np.zeros(1), lambda _rhs: np.zeros(1))
     with pytest.raises(LinearSolveError):
         refine_factored_solution(sp.eye(1), np.ones(1), np.zeros(1), lambda _rhs: np.full(1, np.nan))
+
+
+def test_cancellation_guard_measures_the_actual_owned_factor_not_another_factor(monkeypatch):
+    matrix = sp.csr_matrix([[1e20, 1e20], [0.0, 1.0]])
+    rhs, initial = np.ones(2), np.array([-1.0, 1.0])
+    calls = []
+
+    def owned(forcing):
+        calls.append(forcing.copy())
+        rate = forcing[1]
+        return np.array([forcing[0] / 1e20 - rate, rate])
+
+    def forbidden_factor(_matrix):
+        msg = 'a factored response must retain its actual owned factor'
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(module, 'splu', forbidden_factor)
+    answer = refine_factored_solution(matrix, rhs, initial, owned)
+    np.testing.assert_array_equal(answer, initial)
+    assert len(calls) == 2
+    np.testing.assert_array_equal(calls[-1], module.refinement_residual(matrix, rhs, answer))
+
+
+def test_cancellation_guard_rejects_a_lying_tiny_owned_correction():
+    matrix = sp.csr_matrix([[1e20, 1e20], [0.0, 1.0]])
+    with pytest.raises(LinearSolveError):
+        refine_factored_solution(matrix, np.ones(2), np.array([-1.0, 1.0]), lambda _rhs: np.full(2, 1e-30))
+
+
+def test_singular_owned_correction_cannot_supply_a_successful_guard_measurement():
+    matrix = sp.csr_matrix([[1.0, 1.0], [1.0, 1.0]])
+    with pytest.raises(LinearSolveError):
+        refine_factored_solution(matrix, np.array([1.0, 0.0]), np.zeros(2), lambda _rhs: np.zeros(2))

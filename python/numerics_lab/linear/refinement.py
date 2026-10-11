@@ -88,7 +88,25 @@ def refine_factored_solution(matrix, rhs, initial, solve_correction):
         if next_score >= score:
             break
         best, defect, score = candidate, next_defect, next_score
-    reject_unsolved_direct_system(matrix, rhs, best, 'factored_refinement')
+    move = None
+    relative = direct_relative_residual(matrix, rhs, best)
+    if relative is not None and relative > _DIRECT_RESIDUAL_RTOL:
+        # The owned factor may use actual mixed-unit minors or row normalization.
+        # Refactoring the unscaled operator would judge a different numerical solve.
+        compensated = refinement_residual(matrix, rhs, best)
+        forcing = defect if compensated is None else compensated
+        correction = np.asarray(solve_correction(forcing), dtype=float)
+        if correction.shape != best.shape or not np.isfinite(correction).all():
+            msg = 'factored refinement correction must retain finite actual coordinate shape'
+            raise LinearSolveError(msg)
+        # A callback cannot certify itself by returning a small or zero vector.
+        # First retain the original equation guard for A*correction = forcing.
+        reject_unsolved_direct_system(matrix, forcing, correction, 'factored_refinement_correction')
+        correction_norm, solution_norm = float(np.linalg.norm(correction)), float(np.linalg.norm(best))
+        move = (
+            correction_norm / solution_norm if solution_norm != 0 else (0.0 if correction_norm == 0 else float('inf'))
+        )
+    reject_unsolved_direct_system(matrix, rhs, best, 'factored_refinement', refinement=move)
     return best
 
 
