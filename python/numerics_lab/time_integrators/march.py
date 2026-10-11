@@ -669,7 +669,7 @@ def integrate_transient(
         curvature=curvature or adaptive or step_control is not None or refine is not None,
         owner=problem,
     )
-    study = canonical_eec_study(study, restart, uniform_clock=eec_period is not None and step_times is None)
+    study, restart = canonical_eec_study(study, restart, uniform_clock=eec_period is not None and step_times is None)
     if steady_period is not None and (not np.isfinite(steady_period) or steady_period <= 0):
         msg = 'steady_period must be finite and positive'
         raise ValueError(msg)
