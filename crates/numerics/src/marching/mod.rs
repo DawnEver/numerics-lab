@@ -27,7 +27,7 @@
 //!
 //! So any step whose size differs from the previous spacing is prepared with the standard
 //! VARIABLE-step BDF2 formula, the derivative of the quadratic through three unevenly spaced
-//! points ([`bdf2_variable_form`]), which reduces to the uniform weights at `h == dt` exactly.
+//! points (`Bdf2::prepare` reads it off `IntegratorState::h`), which reduces to the uniform weights at `h == dt` exactly.
 //! Only BDF2 carries the assumption: BDF1 has no second state, and the second-order structural
 //! schemes propagate `v`/`a` with formulas already valid at arbitrary `dt`. The variable form
 //! is used ONLY when the spacings differ, so an event-free march is bit-identical to a plain
@@ -49,8 +49,7 @@
 //! stated rather than hidden. For a second-order integrator the restart CARRIES the landing
 //! step's `v`/`a` — continuous state is preserved, only the derivative HISTORY is dropped.
 
-use crate::integrators::{IntegratorError, IntegratorState, StepForm, TimeIntegrator};
-use contracts::weights::DerivativeWeights;
+use crate::integrators::{IntegratorError, IntegratorState, TimeIntegrator};
 use std::fmt;
 
 /// Events tolerated inside ONE nominal cell before the function is declared chattering.
@@ -113,63 +112,14 @@ impl From<IntegratorError> for MarchError {
     }
 }
 
-/// The variable-spacing BDF2 step form; `h` is the PREVIOUS step's size.
-///
-/// ```text
-/// u_dot = u * (2dt + h)/(dt(dt + h))  -  u_n * (dt + h)/(dt h)  +  u_{n-1} * dt/(h(dt + h))
-/// ```
-///
-/// At `h == dt` this is exactly the uniform-weight BDF2 (`alpha1 = 1.5/dt`,
-/// `h_dot = (-4u_n + u_{n-1})/(2dt)`), which is what lets the driver call it only when the
-/// spacings differ and keep an event-free march bit-identical.
-///
-/// # Errors
-/// [`IntegratorError::NonPositiveStep`] for a non-positive `dt` or `h`;
-/// [`IntegratorError::MissingSecondOrderHistory`] when the state carries fewer than two past
-/// vectors — the variable form is a quadratic through THREE points and there is no honest
-/// answer with two.
-pub fn bdf2_variable_form(
-    state: &IntegratorState,
-    dt: f64,
-    h: f64,
-    t_new: f64,
-) -> Result<StepForm, IntegratorError> {
-    for step in [dt, h] {
-        if step.is_nan() || step <= 0.0 {
-            return Err(IntegratorError::NonPositiveStep { dt: step });
-        }
-    }
-    if state.us.len() < 2 {
-        return Err(IntegratorError::MissingSecondOrderHistory {
-            name: "bdf2-variable",
-        });
-    }
-    let u_n = &state.us[state.us.len() - 1];
-    let u_nm1 = &state.us[state.us.len() - 2];
-    let c_n = -(dt + h) / (dt * h);
-    let c_nm1 = dt / (h * (dt + h));
-    Ok(StepForm {
-        weights: DerivativeWeights::real(1.0, (2.0 * dt + h) / (dt * (dt + h)), 0.0),
-        h_u: vec![0.0; u_n.len()],
-        h_dot: u_n
-            .iter()
-            .zip(u_nm1)
-            .map(|(&a, &b)| c_n * a + c_nm1 * b)
-            .collect(),
-        h_ddot: vec![0.0; u_n.len()],
-        t_eval: t_new,
-    })
-}
-
 /// The march state at an instant, deep enough that probing past it cannot alias into it.
 ///
-/// `prev_dt` is part of the HISTORY — BDF2's weights read the previous spacing — so it is
-/// checkpointed and restored alongside the state vectors. Forgetting it is how a rollback
-/// silently restores the right numbers against the wrong spacing.
+/// The previous spacing is part of the HISTORY — BDF2's weights read it — and it travels inside
+/// the state (`IntegratorState::h`), so a rollback cannot restore the right numbers against the
+/// wrong spacing: there is no second copy of the spacing to forget.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Checkpoint {
     state: IntegratorState,
-    prev_dt: Option<f64>,
     n_points: usize,
 }
 
@@ -181,18 +131,17 @@ impl Checkpoint {
     /// checkpoint sharing storage with the live march would be rewritten by the thing it
     /// exists to undo.
     #[must_use]
-    pub fn take(state: &IntegratorState, prev_dt: Option<f64>, n_points: usize) -> Self {
+    pub fn take(state: &IntegratorState, n_points: usize) -> Self {
         Self {
             state: state.clone(),
-            prev_dt,
             n_points,
         }
     }
 
-    /// The history to resume from, and the spacing that history was built at.
+    /// The history to resume from, its spacing included.
     #[must_use]
-    pub fn restore(&self) -> (IntegratorState, Option<f64>) {
-        (self.state.clone(), self.prev_dt)
+    pub fn restore(&self) -> IntegratorState {
+        self.state.clone()
     }
 
     /// How many solution points existed when this checkpoint was taken — everything past it is

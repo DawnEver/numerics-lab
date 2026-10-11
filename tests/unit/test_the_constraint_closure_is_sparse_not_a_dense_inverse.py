@@ -1,6 +1,6 @@
 """The entangled closure is a shallow FOREST of tiny cycles, so it is not a dense inverse.
 
-``resolve_constraint_chains`` priced its ``np.eye(n)`` on ipm_uv_cummins under ``--max-aspect 4``,
+``resolve_constraint_chains`` priced its ``np.eye(n)`` on ipm_uv_cummins under ``--set mesh.max_aspect=4``,
 where "of 3892 hanging nodes, 4 are chained" -- a 4x4 dense solve, free at any price. That
 declaration is a statement about ONE mesh, and synrm_parametric's ``fea,quad`` leg refutes it:
 measured 2026-09-06 on the real leg, 13,575 of its 32,343 constraints are entangled (42%), the
