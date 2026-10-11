@@ -48,7 +48,13 @@ from motronics.gauss.time_integrators._integrators import (
     TRBDF2Integrator,
     get_integrator,
 )
-from motronics.gauss.time_integrators._step import HELD_STALL_RATIO, HeldFactor, _solve_step, directional_line_search
+from motronics.gauss.time_integrators._step import (
+    HELD_STALL_RATIO,
+    HeldFactor,
+    TrialNotEvaluable,
+    _solve_step,
+    directional_line_search,
+)
 from motronics.gauss.time_integrators.explicit import integrate_explicit_sampled
 from motronics.gauss.time_integrators.factor_reuse import FactorCache
 from motronics.gauss.time_integrators.march import (
@@ -94,6 +100,7 @@ __all__ = [
     'TRBDF2Integrator',
     'TransientSolution',
     'TrapezoidIntegrator',
+    'TrialNotEvaluable',
     '_solve_step',
     'base_sample_time',
     'directional_line_search',
