@@ -20,6 +20,7 @@ from motronics.gauss.linear.initial_sparse import (
     sparse_initial_pair,
 )
 from motronics.gauss.nonlinear import AssembledState, NewtonStrategy
+from motronics.gauss.nonlinear.initial_joint import joint_finite_storage_initial_pair
 
 
 class StorageRateAuthorityRequired(ValueError):
@@ -253,6 +254,7 @@ def finite_storage_actual_rate_initial_pair(
     storage_rows_at,
     rate_constraint_jacobian_at,
     residual_evaluation_at=None,
+    joint_coordinates_at=None,
     target_storage=None,
     stored_columns_at=None,
     sparse_state_indices=None,
@@ -325,6 +327,22 @@ def finite_storage_actual_rate_initial_pair(
     if target.shape != state.shape or not np.isfinite(target).all():
         msg = 'actual-rate admission requires an aligned finite full storage target'
         raise ValueError(msg)
+
+    if joint_coordinates_at is not None:
+        return joint_finite_storage_initial_pair(
+            state,
+            target,
+            joint_coordinates_at,
+            residual_at,
+            jacobian_at,
+            mass_at,
+            charge_at,
+            partial_time_at,
+            storage_rows_at,
+            max_newton,
+            tolerance,
+            residual_evaluation_at=residual_evaluation_at,
+        )
 
     # First separate state authority wherever Q and the actual algebraic
     # equations already determine it. A rate RHS must not introduce numerical
