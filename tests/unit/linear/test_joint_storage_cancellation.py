@@ -116,6 +116,22 @@ def test_sparse_joint_elimination_refuses_a_singular_actual_state_minor():
         _large_correction(jacobian.tocsr(), residual, mass, algebraic, np.arange(count))
 
 
+@pytest.mark.parametrize('storage', [2.0, 3.0, 7.0])
+def test_sparse_retained_border_cannot_invent_a_unique_physical_state(storage):
+    count, jacobian, residual, mass, algebraic = _large_sparse_joint_equations()
+    jacobian = jacobian.tolil()
+    mass = mass.tolil()
+    mass[0, 0] = storage
+    jacobian[count + 1, 0] = storage
+    jacobian[count, count] = -1
+    residual[:] = 0
+    # Every current i is admissible: A=0, lambda=0, A'=i/storage,
+    # lambda'=i. The selected sparse minors are nonsingular; the retained
+    # original KVL is identical to the differentiated linkage constraint.
+    with pytest.raises(ValueError, match='physical state authority'):
+        _large_correction(jacobian.tocsr(), residual, mass.tocsr(), algebraic, np.arange(count))
+
+
 def test_large_algebraic_state_block_does_not_invent_a_nonempty_storage_minor():
     count, jacobian, residual, mass, _algebraic = _large_sparse_joint_equations()
     n = mass.shape[0]
@@ -244,3 +260,52 @@ def test_a_pinned_stored_column_is_exchanged_for_its_storage_partner():
     pinned = sp.csr_matrix([[0, 0, 1.0], [-1.0, 0, 0]])
     assert free_pinned_columns(np.array([0]), mass[[0]], pinned).tolist() == [1]
     assert free_pinned_columns(np.array([1]), mass[[0]], pinned).tolist() == [1]
+
+
+@pytest.mark.parametrize('voltage', [0.1, -0.1, 0.3, 1e-12])
+def test_homogeneous_stored_field_keeps_exact_circuit_constraints_at_startup(voltage):
+    # Actual three-field-coordinate conducting/MNA topology: source, node KCL,
+    # series inductance and independent physical linkage. Zero full Q fixes the
+    # field, series current and linkage; the source drives a 100 A/s rate only.
+    n = 12
+    jacobian = np.zeros((n, n))
+    stiffness = 1.0 / (4e-7 * np.pi)
+    jacobian[:3, :3] = stiffness * np.array([[1, 0, -0.5], [0, 1, -0.5], [-0.5, -0.5, 1]])
+    jacobian[:3, 10] = -1 / 3
+    for row, entries in {
+        3: {7: 1, 8: 1},
+        4: {4: 1, 5: -1, 8: -1},
+        5: {4: -1, 5: 1, 10: 1},
+        6: {9: -1, 10: -1},
+        7: {3: -1},
+        8: {3: -1, 4: 1},
+        9: {6: 1},
+        10: {5: -1, 6: 1, 10: 3.448e-6},
+        11: {0: -1 / 300, 1: -1 / 300, 2: -1 / 300, 11: 1},
+    }.items():
+        for column, value in entries.items():
+            jacobian[row, column] = value
+    mass = np.zeros((n, n))
+    mass[:3, :3] = (5 / 12) * (np.eye(3) + np.ones((3, 3)))
+    mass[8, 8], mass[10, 11] = 0.001, 1.0
+    state = np.zeros(n)
+    state[3] = np.nextafter(voltage, 0.0)
+    residual = jacobian @ state
+    residual[7] += voltage
+    jacobian, mass = sp.csr_matrix(jacobian), sp.csr_matrix(mass)
+    correction, _unique = stored_initial_correction(
+        jacobian,
+        residual,
+        mass,
+        sp.eye(n, format='csr')[[3, 4, 5, 6, 7, 9, 11]],
+        np.array([0, 1, 2, 8, 10]),
+        np.array([0, 1, 2, 8, 11]),
+        np.zeros(5),
+        np.zeros(n),
+        tolerance=1e-10,
+        state=state,
+        rate_tangent=jacobian,
+    )
+    np.testing.assert_array_equal(correction[[0, 1, 2, 8, 11]], np.zeros(5))
+    np.testing.assert_array_equal(correction[n : n + 3], np.zeros(3))
+    assert correction[n + 8] == pytest.approx(voltage / 0.001, rel=1e-12, abs=0.0)

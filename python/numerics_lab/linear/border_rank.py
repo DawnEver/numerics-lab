@@ -36,6 +36,8 @@ def border_affine_space(matrix, rhs, *, mandatory_rows=()):
     mandatory_rows = mandatory_rows.astype(int)
     order = np.concatenate((mandatory_rows, np.setdiff1d(np.arange(rows), mandatory_rows)))
     matrix, rhs = matrix[order], rhs[order]
+    original_matrix, original_rhs = matrix.copy(), rhs.copy()
+    row_ids = np.arange(rows)
     errors = np.zeros_like(matrix)
     eps = np.finfo(float).eps
     bound = 16 * max(matrix.shape)
@@ -59,9 +61,15 @@ def border_affine_space(matrix, rhs, *, mandatory_rows=()):
         column = available.pop(index)
         ratios = ratios_all[:, index]
         chosen = cursor if cursor < len(mandatory_rows) else cursor + int(np.argmax(ratios))
+        if cursor >= len(mandatory_rows):
+            # Exact homogeneous witnesses should not inherit driven-row cancellation.
+            homogeneous = np.flatnonzero((rhs[cursor:] == 0) & (ratios > eps * bound))
+            if homogeneous.size:
+                chosen = cursor + int(homogeneous[np.argmax(ratios[homogeneous])])
         matrix[[cursor, chosen]] = matrix[[chosen, cursor]]
         errors[[cursor, chosen]] = errors[[chosen, cursor]]
         rhs[[cursor, chosen]] = rhs[[chosen, cursor]]
+        row_ids[[cursor, chosen]] = row_ids[[chosen, cursor]]
         pivot = matrix[cursor, column]
         matrix[cursor] /= pivot
         errors[cursor] = errors[cursor] / abs(pivot) + eps * np.abs(matrix[cursor])
@@ -87,6 +95,17 @@ def border_affine_space(matrix, rhs, *, mandatory_rows=()):
     free_columns = np.setdiff1d(np.arange(columns), pivots)
     answer = np.zeros(columns)
     answer[pivots] = rhs[:cursor]
+    if pivots:
+        # Rank discovery is not the physical solve: reconstruct from the
+        # original selected equations before elimination noise becomes a state.
+        selected = row_ids[:cursor]
+        subsystem = original_matrix[selected][:, pivots]
+        answer[pivots] = np.linalg.solve(subsystem, original_rhs[selected])
+        for _ in range(3):
+            defect = original_rhs[selected] - original_matrix[selected] @ answer
+            if not np.any(defect):
+                break
+            answer[pivots] += np.linalg.solve(subsystem, defect)
     directions = np.zeros((columns, len(free_columns)))
     directions[free_columns, np.arange(len(free_columns))] = 1
     directions[pivots] = -matrix[:cursor, free_columns]
