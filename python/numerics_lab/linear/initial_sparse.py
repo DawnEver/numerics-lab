@@ -16,6 +16,8 @@ from motronics.gauss.linear.initial_rate_border import complete_rate_border
 from motronics.gauss.linear.initial_storage_border import stored_initial_correction
 from motronics.gauss.linear.storage_border import free_pinned_columns
 
+__all__ = ['SparseInitialPair', 'projected_rate_consistent', 'sparse_complete_initial_rate', 'sparse_initial_pair']
+
 
 @dataclass(frozen=True)
 class SparseInitialPair:
@@ -251,6 +253,7 @@ def sparse_complete_initial_rate(
     algebraic_rows,
     partial_time,
     acceleration_remainder,
+    acceleration_jacobian=None,
     storage_curvature=None,
     stored_rows=None,
     stored_columns=None,
@@ -265,6 +268,10 @@ def sparse_complete_initial_rate(
     jacobian, mass, algebraic = map(sp.csr_matrix, (jacobian, mass, algebraic_rows))
     residual, partial, remainder = map(np.asarray, (residual, partial_time, acceleration_remainder))
     n = pair.state.size
+    second = jacobian if acceleration_jacobian is None else sp.csr_matrix(acceleration_jacobian)
+    if second.shape != (n, n) or second.dtype.kind not in 'fiu' or not np.isfinite(second.data).all():
+        msg = 'second acceleration operator requires finite real actual state dimensions'
+        raise ValueError(msg)
     storage_second = np.zeros(n) if storage_curvature is None else np.asarray(storage_curvature)
     if (
         jacobian.shape != (n, n)
@@ -288,7 +295,7 @@ def sparse_complete_initial_rate(
             [mass, zero],
             [algebraic @ jacobian, algebraic_zero],
             [jacobian, mass],
-            [algebraic_zero, algebraic @ jacobian],
+            [algebraic_zero, algebraic @ second],
             [anchors, sp.csr_matrix(anchors.shape)],
         ],
         format='csr',
@@ -329,7 +336,7 @@ def sparse_complete_initial_rate(
             acceleration_rhs=-partial - storage_second - jacobian @ pair.rate,
             rate_is_unique=pair.rate_is_unique,
             stored_rows=stored_rows,
-            stored_columns=free_pinned_columns(stored_columns, mass[stored_rows], algebraic @ jacobian),
+            stored_columns=free_pinned_columns(stored_columns, mass[stored_rows], algebraic @ second),
             evaluation_scale=evaluation_scale,
             tolerance=tolerance,
             acceleration_equation_start=n + algebraic.shape[0],

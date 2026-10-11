@@ -8,6 +8,8 @@ import scipy.sparse as sp
 from scipy.linalg import qr
 from scipy.sparse.linalg import splu
 
+__all__ = ['StorageRows', 'free_pinned_columns', 'storage_border_columns', 'storage_border_rows']
+
 
 @dataclass(frozen=True)
 class StorageRows:

@@ -347,7 +347,9 @@ def owns_history(problem) -> bool:
     return isinstance(problem, HistoryProblem) and (not isinstance(problem, HistoryPresence) or problem.has_history)
 
 
-def _checkpoint_of(problem, state, dt, key, name, *, eec_state=None, step_origin=None, event_state=None):
+def _checkpoint_of(
+    problem, state, dt, key, name, *, previous_time=None, eec_state=None, step_origin=None, event_state=None
+):
     if state.stage != 0:
         msg = 'portable checkpoint requires an accepted macrostep, not an intermediate stage'
         raise ValueError(msg)
@@ -359,6 +361,7 @@ def _checkpoint_of(problem, state, dt, key, name, *, eec_state=None, step_origin
         tuple(tuple(float(x) for x in u) for u in state.us),
         None if state.v is None else tuple(float(x) for x in state.v),
         None if state.a is None else tuple(float(x) for x in state.a),
+        previous_time=previous_time,
         material_history=capture_history(problem),
         problem_context=problem.checkpoint_context(state.t) if isinstance(problem, CheckpointContext) else None,
         eec_state=eec_state,

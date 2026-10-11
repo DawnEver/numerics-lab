@@ -19,8 +19,16 @@ from motronics.gauss.linear.initial_sparse import (
     projected_rate_consistent,
     sparse_initial_pair,
 )
+from motronics.gauss.linear.initial_storage_border import joint_coordinate_sparse_correction
 from motronics.gauss.nonlinear import AssembledState, NewtonStrategy
 from motronics.gauss.nonlinear.initial_joint import joint_finite_storage_initial_pair
+
+__all__ = [
+    'StorageRateAuthorityRequired',
+    'finite_storage_actual_rate_initial_pair',
+    'finite_storage_initial_pair',
+    'finite_storage_right_state',
+]
 
 
 class StorageRateAuthorityRequired(ValueError):
@@ -255,6 +263,7 @@ def finite_storage_actual_rate_initial_pair(
     rate_constraint_jacobian_at,
     residual_evaluation_at=None,
     joint_coordinates_at=None,
+    differentiated_residual_at=None,
     target_storage=None,
     stored_columns_at=None,
     sparse_state_indices=None,
@@ -342,6 +351,8 @@ def finite_storage_actual_rate_initial_pair(
             max_newton,
             tolerance,
             residual_evaluation_at=residual_evaluation_at,
+            sparse_state_indices=sparse_state_indices,
+            differentiated_residual_at=differentiated_residual_at,
         )
 
     # First separate state authority wherever Q and the actual algebraic
@@ -391,18 +402,56 @@ def finite_storage_actual_rate_initial_pair(
                 )
                 state_allowance[~algebraic_state] = 0.0
                 state_allowance += construction_allowance(rate, mass, residual, evaluation)
-                solution, unique = sparse_initial_rate(
-                    equations,
-                    rhs,
-                    tolerance=tolerance,
-                    residual_allowance=np.concatenate((state_allowance, np.zeros(storage.algebraic_rows.shape[0]))),
-                )
-                count = directions.shape[1]
-                if not unique[:count].all():
-                    msg = 'original boundary state freedom lacks unique source-selected authority'
-                    raise ValueError(msg)
-                candidate = state + directions @ solution[:count]
-                rate = solution[count:]
+                if sparse_state_indices is not None and len(sparse_state_indices):
+                    stored = mass[storage.stored_rows]
+                    original = sp.bmat(
+                        [
+                            [jacobian, mass],
+                            [stored, sp.csr_matrix(stored.shape)],
+                            [sp.csr_matrix(storage.algebraic_rows.shape), storage.algebraic_rows @ tangent],
+                        ],
+                        format='csr',
+                    )
+                    actual_charge = charge_at(state)
+                    charge_scale = abs(actual_charge) + abs(target) + abs(mass) @ abs(state)
+                    if np.any(abs(actual_charge - target) > tolerance * charge_scale):
+                        msg = 'boundary particular contradicts original finite charge witnesses'
+                        raise ValueError(msg)
+                    # Preserve this already admitted particular. The remaining
+                    # correction lies in homogeneous stored-coordinate directions;
+                    # the unchanged target still owns the final full-Q guard.
+                    forcing = np.concatenate((
+                        rhs[: len(state)],
+                        np.zeros(len(storage.stored_rows)),
+                        rhs[len(state) :],
+                    ))
+                    correction, unique = joint_coordinate_sparse_correction(
+                        original,
+                        forcing,
+                        mass=mass,
+                        algebraic_rows=storage.algebraic_rows,
+                        stored_rows=storage.stored_rows,
+                        indices=sparse_state_indices,
+                        state_directions=directions,
+                        residual_allowance=np.concatenate((state_allowance, np.zeros(original.shape[0] - len(state)))),
+                    )
+                    candidate = state + correction[: len(state)]
+                    rate = correction[len(state) :]
+                    rate_unique = unique[len(state) :]
+                else:
+                    solution, unique = sparse_initial_rate(
+                        equations,
+                        rhs,
+                        tolerance=tolerance,
+                        residual_allowance=np.concatenate((state_allowance, np.zeros(storage.algebraic_rows.shape[0]))),
+                    )
+                    count = directions.shape[1]
+                    if not unique[:count].all():
+                        msg = 'original boundary state freedom lacks unique source-selected authority'
+                        raise ValueError(msg)
+                    candidate = state + directions @ solution[:count]
+                    rate = solution[count:]
+                    rate_unique = unique[count:]
                 charge = charge_at(candidate)
                 charge_scale = abs(charge) + abs(target) + abs(mass_at(candidate, rate)) @ abs(candidate)
                 if np.any(abs(charge - target) > tolerance * charge_scale):
@@ -418,7 +467,7 @@ def finite_storage_actual_rate_initial_pair(
                 if np.all(abs(residual) <= tolerance * scale) and projected_rate_consistent(
                     jacobian, rate, partial, algebraic_rows=storage.algebraic_rows, tolerance=tolerance
                 ):
-                    return SparseInitialPair(state, rate, unique[count:])
+                    return SparseInitialPair(state, rate, rate_unique)
             msg = 'original boundary state/rate equations did not converge'
             raise ValueError(msg)
     else:
@@ -557,14 +606,17 @@ def finite_storage_actual_rate_initial_pair(
             )
         ):
             final_tangent = sp.csr_matrix(rate_constraint_jacobian_at(state, rate))
+            # Uniqueness asks for homogeneous directions at this accepted pair,
+            # not a second nonhomogeneous representative from rounded defects.
+            # The original full F/Q/G guards above remain the admission owner.
             final_pair = sparse_initial_pair(
                 jacobian,
-                residual - mass @ rate,
+                np.zeros_like(residual),
                 mass,
                 state,
                 algebraic_rows=storage.algebraic_rows,
                 stored_rows=storage.stored_rows,
-                partial_time=jacobian @ rate + partial - final_tangent @ rate,
+                partial_time=np.zeros_like(partial),
                 stored_increment=np.zeros(len(storage.stored_rows)),
                 stored_columns=None if stored_columns_at is None else stored_columns_at(state, rate, storage),
                 sparse_state_indices=sparse_state_indices,

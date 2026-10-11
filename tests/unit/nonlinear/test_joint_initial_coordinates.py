@@ -59,7 +59,15 @@ def _problem(*, malicious=False, missing=False, tiny=False, raw=False):
         if malicious:
             v[3] = 0.0
         return InitialJointEvaluation(
-            v, joint_j, mass, None if missing else g_state, physical_j, state_map, sp.eye(4, format='csr')
+            v,
+            joint_j,
+            mass,
+            None if missing else g_state,
+            joint_j,
+            state_map,
+            sp.eye(4, format='csr'),
+            physical_j @ v + mass @ (state_map @ v),
+            state_map @ v,
         )
 
     options = {
@@ -71,6 +79,7 @@ def _problem(*, malicious=False, missing=False, tiny=False, raw=False):
         'storage_rows_at': lambda _u, _v: StorageRows(np.array([0, 2]), algebraic),
         'stored_columns_at': lambda _u, _v, _s: np.array([0, 3]),
         'rate_constraint_jacobian_at': lambda _u, _v: physical_j,
+        'differentiated_residual_at': lambda _u, v, a: physical_j @ v + mass @ a,
     }
     # Physical jets are separately owned, not reconstructed from the bad raw joint rank.
     options['jacobian_at'] = lambda _u, _v: raw_j if raw else physical_j
@@ -127,6 +136,8 @@ def test_nonidentity_independent_rate_map_transports_unknown_rates_to_physical_r
             sample.differentiated_rate_columns @ permutation,
             sample.physical_rate_state_map,
             permutation,
+            sample.differentiated_value,
+            sample.physical_acceleration_offset,
         )
 
     pair = finite_storage_actual_rate_initial_pair(np.zeros(4), joint_coordinates_at=chart, **options)
@@ -149,6 +160,23 @@ def test_joint_physical_rate_vector_is_copied_and_readonly():
         sample.physical_rate[0] = 3.0
 
 
+@pytest.mark.parametrize('name', ['differentiated_value', 'physical_acceleration_offset'])
+@pytest.mark.parametrize('bad', [[True], [1.0 + 1j], [np.inf], [1.0, 2.0]])
+def test_joint_lifted_vectors_reject_nonphysical_values(name, bad):
+    with pytest.raises(ValueError, match='physical'):
+        InitialJointEvaluation(np.zeros(1), None, None, None, None, None, None, **{name: bad})
+
+
+@pytest.mark.parametrize('name', ['differentiated_value', 'physical_acceleration_offset'])
+def test_joint_lifted_vectors_are_copied_readonly(name):
+    original = np.ones(1)
+    sample = InitialJointEvaluation(np.zeros(1), None, None, None, None, None, None, **{name: original})
+    original[0] = 3.0
+    np.testing.assert_array_equal(getattr(sample, name), [1.0])
+    with pytest.raises(ValueError, match='read-only'):
+        getattr(sample, name)[0] = 4.0
+
+
 def test_large_sparse_joint_chart_never_densifies_or_exact_rationalizes(monkeypatch):
     def forbidden(*_args, **_kwargs):
         pytest.fail('joint sparse bulk must not densify or rationalize field columns')
@@ -159,11 +187,12 @@ def test_large_sparse_joint_chart_never_densifies_or_exact_rationalizes(monkeypa
     identity, zero = sp.eye(n, format='csr'), sp.csr_matrix((n, n))
 
     def chart(_u, r):
-        return InitialJointEvaluation(r, identity, identity, zero, identity, zero, identity)
+        return InitialJointEvaluation(r, identity, identity, zero, identity, zero, identity, r, np.zeros(n))
 
     pair = finite_storage_actual_rate_initial_pair(
         np.zeros(n),
         joint_coordinates_at=chart,
+        differentiated_residual_at=lambda _u, v, a: v + a,
         residual_at=lambda u, v: u + v - 1,
         jacobian_at=lambda _u, _v: identity,
         mass_at=lambda _u, _v: identity,

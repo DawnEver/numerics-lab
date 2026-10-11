@@ -1024,6 +1024,7 @@ def integrate_transient(
             accepted_dt,
             checkpoint_key,
             integrator.name,
+            previous_time=solution.times[-2],
             eec_state=eec_state,
             step_origin=lattice_origin,
             event_state=event_state,

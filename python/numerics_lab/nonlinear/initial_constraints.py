@@ -8,6 +8,8 @@ from motronics.gauss.linear.border_rank import border_affine_space
 from motronics.gauss.linear.initial_constraints import initial_subspaces, linear_dae_initial_state
 from motronics.gauss.nonlinear import AssembledState, NewtonStrategy
 
+__all__ = ['nonlinear_dae_initial_state']
+
 
 def nonlinear_dae_initial_state(
     residual,

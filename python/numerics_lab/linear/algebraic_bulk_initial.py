@@ -10,6 +10,8 @@ from motronics.gauss.linear.border_rank import border_affine_space
 from motronics.gauss.linear.initial_sparse import SparseInitialPair
 from motronics.gauss.linear.storage_border import storage_border_rows
 
+__all__ = ['algebraic_bulk_initial_pair']
+
 
 def algebraic_bulk_initial_pair(
     jacobian, residual, mass, initial, *, bulk_size, partial_time, stored_increment, tolerance, fixed_state=False

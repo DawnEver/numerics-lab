@@ -6,6 +6,8 @@ from scipy.sparse.linalg import splu
 
 from motronics.gauss.linear.border_rank import border_affine_space
 
+__all__ = ['complete_rate_border']
+
 
 def complete_rate_border(
     matrix,
@@ -101,7 +103,11 @@ def complete_rate_border(
     reduced, forcing = reduced / norms[:, None], forcing / norms
     column_norms = np.linalg.norm(reduced, axis=0)
     column_norms[column_norms == 0] = 1
-    answer_scaled, free_scaled = border_affine_space(reduced / column_norms, forcing)
+    # These rows inherit the already-admitted first pair's evaluated arithmetic,
+    # not a new physical zero floor. The final original-equation guard below
+    # still decides acceptance with exactly its existing scale and tolerance.
+    allowance = tolerance * (evaluation_scale + abs(rhs) + abs(matrix) @ abs(base)) / norms
+    answer_scaled, free_scaled = border_affine_space(reduced / column_norms, forcing, inherited_allowance=allowance)
     answer = answer_scaled / column_norms
     correction = np.asarray(mapping @ answer).ravel() + base
     # Re-evaluate the actual stored equations with the final border values.

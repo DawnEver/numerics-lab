@@ -4,12 +4,12 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
+from motronics.gauss.linear import initial_storage_border as owner
 from motronics.gauss.linear.initial_storage_border import stored_initial_correction
 from motronics.gauss.linear.storage_border import free_pinned_columns
 
 
-def _large_sparse_joint_equations():
-    count = 300
+def _large_sparse_joint_equations(count=300):
     n = count + 2
     jacobian = sp.lil_matrix((n, n))
     jacobian[:count, :count] = sp.eye(count)
@@ -26,6 +26,25 @@ def _large_sparse_joint_equations():
     residual = np.zeros(n)
     residual[count] = -7
     return count, jacobian, residual, mass, algebraic
+
+
+def test_declared_sparse_coordinates_are_consumed_below_dense_border_ceiling(monkeypatch):
+    count, jacobian, residual, mass, algebraic = _large_sparse_joint_equations(3)
+    original = owner._sparse_joint_border
+    consumed = []
+
+    def actual_sparse_closure(*args):
+        consumed.append(args[-1].copy())
+        return original(*args)
+
+    monkeypatch.setattr(owner, '_sparse_joint_border', actual_sparse_closure)
+    indices = np.arange(count)
+    correction, unique = _large_correction(jacobian, residual, mass, algebraic, indices)
+    assert len(consumed) == 1
+    np.testing.assert_array_equal(consumed[0], indices)
+    np.testing.assert_array_equal(correction[:count], np.zeros(count))
+    assert correction[count] == pytest.approx(7 / 5.5, abs=1e-14)
+    assert unique[:count].all()
 
 
 def _large_correction(jacobian, residual, mass, algebraic, indices):
@@ -208,7 +227,7 @@ def test_an_algebraically_pinned_stored_rate_survives_cancellation_against_a_lar
     assert unique.all()
     assert state == pytest.approx([0.0, 0.0, 0.05], abs=1e-15)
     free_rate = (0.05 + stored_residual) / mass
-    assert rate[1] == pytest.approx(free_rate, rel=1e-12)
+    assert rate[1] == pytest.approx(free_rate, rel=1e-12, abs=0.0)
     # The pinned rate stays on the border: exactly zero, not ulps of the free rate.
     assert rate[0] == 0
     assert rate[2] == 0

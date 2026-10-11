@@ -5,6 +5,8 @@ from scipy.sparse import csr_matrix
 
 from motronics.contracts.runtime.ports import ResidualAssemblyBound
 
+__all__ = ['affine_residual_bound', 'matrix_vector_roundoff', 'transport_residual_bound']
+
 
 def _row_arithmetic(matrix, vector, offset):
     matrix = csr_matrix(matrix)

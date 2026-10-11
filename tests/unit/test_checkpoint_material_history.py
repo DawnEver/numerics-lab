@@ -34,6 +34,23 @@ class RememberingProblem:
         self.memory, self.last_time = data['memory'], data['last_time']
 
 
+def test_checkpoint_preserves_actual_previous_accepted_endpoint_bits():
+    source_edge = 0.0003
+    motion_edge = 0.0008854084409738354
+    assert motion_edge - (motion_edge - source_edge) != source_edge
+    solved = integrate_transient(
+        RememberingProblem(),
+        TransientStudy(0.0, motion_edge, 0.001),
+        np.zeros(1),
+        step_times=(0.0, source_edge, motion_edge),
+        checkpoint_key='exact-source-clock',
+    )
+    restored = TransientCheckpoint.from_mapping(json.loads(json.dumps(solved.checkpoint.to_mapping())))
+    assert solved.times[-2] == source_edge
+    assert restored.previous_time == source_edge
+    assert restored.time == motion_edge
+
+
 def test_committed_material_and_bdf_history_restart_together():
     whole = integrate_transient(RememberingProblem(), TransientStudy(0.0, 1.0, 0.1), np.zeros(1))
     first = integrate_transient(

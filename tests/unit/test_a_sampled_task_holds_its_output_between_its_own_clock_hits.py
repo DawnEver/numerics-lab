@@ -228,7 +228,7 @@ def test_a_clock_does_not_fire_before_its_activation_offset() -> None:
     ('periods', 'base'), [((1.0, 3.0), 1.0), ((2e-4, 3e-4), 1e-4), ((1e-4, 1.5e-4), 5e-5), ((0.05,), 0.05)]
 )
 def test_the_auto_sample_time_is_the_rational_gcd(periods, base) -> None:
-    assert base_sample_time(periods) == pytest.approx(base, rel=1e-12)
+    assert base_sample_time(periods) == pytest.approx(base, rel=1e-12, abs=0.0)
 
 
 def test_rational_clock_gcd_is_not_limited_to_machine_integer_products() -> None:

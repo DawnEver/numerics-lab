@@ -7,6 +7,8 @@ import scipy.sparse as sp
 from scipy.sparse.csgraph import min_weight_full_bipartite_matching
 from scipy.sparse.linalg import splu
 
+__all__ = ['normalize_sparse_rows', 'sparse_initial_rate']
+
 
 def _independent_exact_columns(matrix, selected, *, dependent_start, general=True):
     """Quotient only exact sparse dependencies in explicitly disposable coordinates."""

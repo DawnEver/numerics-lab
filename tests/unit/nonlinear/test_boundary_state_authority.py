@@ -8,6 +8,44 @@ from motronics.gauss.linear.storage_border import StorageRows
 from motronics.gauss.nonlinear import finite_storage as runtime
 
 
+@pytest.mark.parametrize('value', [1.0, 1e-30])
+@pytest.mark.parametrize('admitted', [True, False])
+def test_sparse_boundary_correction_preserves_only_admitted_stored_particular(monkeypatch, value, admitted):
+    initial = np.array([value, 0.0])
+    particular = initial.copy()
+    particular[0] = np.nextafter(value, np.inf) if admitted else 2 * value
+    mass = sp.diags([1.0, 0.0], format='csr')
+    storage = StorageRows(np.array([0]), sp.csr_matrix([[0.0, 1.0]]))
+
+    def state_authority(*_args):
+        msg = 'explicit boundary direction'
+        raise runtime.StorageRateAuthorityRequired(
+            msg,
+            state=particular,
+            directions=sp.csr_matrix([[0.0], [1.0]]),
+        )
+
+    monkeypatch.setattr(runtime, '_actual_finite_storage_state', state_authority)
+    kwargs = {
+        'residual_at': lambda state, rate: state + mass @ rate,
+        'jacobian_at': lambda _state, _rate: sp.eye(2, format='csr'),
+        'mass_at': lambda _state, _rate: mass,
+        'storage_at': lambda state: mass @ state,
+        'partial_time_at': lambda _state, _rate: np.zeros(2),
+        'storage_rows_at': lambda _state, _rate: storage,
+        'rate_constraint_jacobian_at': lambda _state, _rate: sp.eye(2, format='csr'),
+        'sparse_state_indices': np.array([0]),
+    }
+    if not admitted:
+        with pytest.raises(ValueError, match='boundary particular contradicts original finite charge'):
+            runtime.finite_storage_actual_rate_initial_pair(initial, **kwargs)
+        return
+    pair = runtime.finite_storage_actual_rate_initial_pair(initial, **kwargs)
+    np.testing.assert_array_equal(pair.state, particular)
+    np.testing.assert_array_equal(mass @ pair.state, mass @ particular)
+    assert pair.state[0] != 0.0
+
+
 def test_boundary_tangent_direction_does_not_authorize_changing_nonlinear_finite_charge():
     with pytest.raises(ValueError, match='boundary state direction contradicts original finite charge'):
         runtime.finite_storage_actual_rate_initial_pair(
