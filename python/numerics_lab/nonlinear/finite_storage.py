@@ -5,12 +5,14 @@ and a proven invariant left-nullspace of DQ. A changing storage nullspace
 requires its own coordinate authority rather than a constant-mass surrogate.
 """
 
+from fractions import Fraction
+
 import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import splu
 
 from motronics.gauss.linear.algebraic_bulk_initial import algebraic_bulk_initial_pair
-from motronics.gauss.linear.initial_rate import sparse_initial_rate
+from motronics.gauss.linear.initial_rate import _independent_exact_columns, sparse_initial_rate
 from motronics.gauss.linear.initial_sparse import (
     SparseInitialPair,
     projected_rate_consistent,
@@ -21,6 +23,10 @@ from motronics.gauss.nonlinear import AssembledState, NewtonStrategy
 
 class StorageRateAuthorityRequired(ValueError):
     """Finite stored coordinates and undifferentiated constraints do not fix every state."""
+
+    def __init__(self, message, *, state=None, directions=None) -> None:
+        super().__init__(message)
+        self.state, self.directions = state, directions
 
 
 def finite_storage_right_state(
@@ -327,9 +333,64 @@ def finite_storage_actual_rate_initial_pair(
             max_newton,
             tolerance,
             stored_columns_at,
+            sparse_state_indices,
         )
-    except StorageRateAuthorityRequired:
-        pass
+    except StorageRateAuthorityRequired as authority:
+        if authority.directions is not None:
+            state = authority.state
+            directions = authority.directions
+            for _iteration in range(max_newton):
+                mass, jacobian = mass_at(state, rate), jacobian_at(state, rate)
+                partial, tangent = partial_time_at(state, rate), rate_constraint_jacobian_at(state, rate)
+                storage = storage_rows_at(state, rate)
+                residual = residual_at(state, rate)
+                derivative = storage.algebraic_rows @ (jacobian @ rate + partial)
+                equations = sp.bmat(
+                    [
+                        [jacobian @ directions, mass],
+                        [
+                            sp.csr_matrix((storage.algebraic_rows.shape[0], directions.shape[1])),
+                            storage.algebraic_rows @ tangent,
+                        ],
+                    ],
+                    format='csr',
+                )
+                rhs = np.concatenate((-residual + mass @ rate, -derivative + storage.algebraic_rows @ tangent @ rate))
+                algebraic_state = np.asarray(mass.getnnz(axis=1)).ravel() == 0
+                state_allowance = tolerance * (
+                    abs(jacobian) @ abs(state) + abs(residual_at(state, np.zeros_like(rate)))
+                )
+                state_allowance[~algebraic_state] = 0.0
+                solution, unique = sparse_initial_rate(
+                    equations,
+                    rhs,
+                    tolerance=tolerance,
+                    residual_allowance=np.concatenate((state_allowance, np.zeros(storage.algebraic_rows.shape[0]))),
+                )
+                count = directions.shape[1]
+                if not unique[:count].all():
+                    msg = 'original boundary state freedom lacks unique source-selected authority'
+                    raise ValueError(msg)
+                candidate = state + directions @ solution[:count]
+                rate = solution[count:]
+                charge = charge_at(candidate)
+                charge_scale = abs(charge) + abs(target) + abs(mass_at(candidate, rate)) @ abs(candidate)
+                if np.any(abs(charge - target) > tolerance * charge_scale):
+                    msg = 'boundary state direction contradicts original finite charge witnesses'
+                    raise ValueError(msg)
+                state = candidate
+                mass, jacobian = mass_at(state, rate), jacobian_at(state, rate)
+                residual, partial = residual_at(state, rate), partial_time_at(state, rate)
+                scale = (
+                    abs(jacobian) @ abs(state) + abs(mass) @ abs(rate) + abs(residual_at(state, np.zeros_like(rate)))
+                )
+                storage = storage_rows_at(state, rate)
+                if np.all(abs(residual) <= tolerance * scale) and projected_rate_consistent(
+                    jacobian, rate, partial, algebraic_rows=storage.algebraic_rows, tolerance=tolerance
+                ):
+                    return SparseInitialPair(state, rate, unique[count:])
+            msg = 'original boundary state/rate equations did not converge'
+            raise ValueError(msg)
     else:
         state_mass = sp.csr_matrix(mass_at(state, rate))
         actual_charge = charge_at(state)
@@ -494,6 +555,7 @@ def _actual_finite_storage_state(
     max_newton,
     tolerance,
     stored_columns_at,
+    sparse_state_indices,
 ):
     """Quasi-Newton state search; full Q and actual algebraic rows decide admission."""
     state = initial.copy()
@@ -531,6 +593,24 @@ def _actual_finite_storage_state(
         else:
             matrix = sp.vstack((storage.algebraic_rows @ jacobian, mass[storage.stored_rows]), format='csc')
             rhs = -np.concatenate((projected, (charge - target)[storage.stored_rows]))
+            free = np.arange(len(state))
+        if sparse_state_indices is not None:
+            boundary = np.flatnonzero(~np.isin(free, sparse_state_indices))
+            if 0 < len(boundary) <= 512:
+                independent, _ = _independent_exact_columns(
+                    matrix[:, boundary], np.arange(len(boundary)), dependent_start=0
+                )
+                if len(independent) != len(boundary):
+                    msg = 'original boundary state equations require actual differentiated rate authority'
+                    charge_scale = abs(charge) + abs(target) + abs(mass) @ abs(state)
+                    projected_scale = abs(storage.algebraic_rows) @ (abs(jacobian) @ abs(state) + abs(residual))
+                    admitted = np.all(abs(charge - target) <= tolerance * charge_scale) and np.all(
+                        abs(projected) <= tolerance * projected_scale
+                    )
+                    directions = _exact_boundary_directions(matrix[:, boundary]) if admitted else None
+                    if directions is not None:
+                        directions = mapping[:, boundary] @ directions
+                    raise StorageRateAuthorityRequired(msg, state=state, directions=directions)
         try:
             factor = splu(matrix)
         except RuntimeError as error:
@@ -546,3 +626,44 @@ def _actual_finite_storage_state(
         state += base + mapping @ correction
     msg = 'actual finite storage state equations did not converge with all original charge witnesses'
     raise ValueError(msg)
+
+
+def _exact_boundary_directions(matrix):
+    """Exact sparse dependencies of the already bounded physical border only."""
+    columns = matrix.tocsc()
+    basis, dependencies = {}, []
+    for column in range(columns.shape[1]):
+        start, stop = columns.indptr[column : column + 2]
+        vector = {
+            int(row): Fraction(float(value))
+            for row, value in zip(columns.indices[start:stop], columns.data[start:stop], strict=True)
+            if value
+        }
+        support = {column: Fraction(1)}
+        while vector:
+            pivot = min(vector)
+            if pivot not in basis:
+                divisor = vector[pivot]
+                basis[pivot] = (
+                    {row: value / divisor for row, value in vector.items()},
+                    {index: value / divisor for index, value in support.items()},
+                )
+                break
+            previous, provenance = basis[pivot]
+            multiplier = vector[pivot]
+            for target, source in ((vector, previous), (support, provenance)):
+                for index, value in source.items():
+                    target[index] = target.get(index, Fraction(0)) - multiplier * value
+                    if target[index] == 0:
+                        del target[index]
+        if not vector:
+            dependencies.append(support)
+    rows, cols, data = [], [], []
+    for index, support in enumerate(dependencies):
+        if any(Fraction(float(value)) != value for value in support.values()):
+            return None
+        for row, value in support.items():
+            rows.append(row)
+            cols.append(index)
+            data.append(float(value))
+    return sp.csr_matrix((data, (rows, cols)), shape=(matrix.shape[1], len(dependencies)))

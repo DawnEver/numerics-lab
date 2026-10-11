@@ -613,12 +613,15 @@ def take_step(
     try:
         for index in range(integrator.stages):
             form = integrator.prepare(state, dt, t_new)
-            if endpoint_left and form.t_eval == t_new:
+            stage_endpoint_left = endpoint_left and form.t_eval == t_new
+            if stage_endpoint_left and attempt is None:
                 form = replace(form, t_eval=float(np.nextafter(t_new, -np.inf)))
             stage_problem = problem
             stage_capabilities = capabilities
             if attempt is not None:
-                stage_problem = prepared_stage(attempt, PreparedStageContext(form, state.copy(), index))
+                stage_problem = prepared_stage(
+                    attempt, PreparedStageContext(form, state.copy(), index, stage_endpoint_left)
+                )
                 stage_capabilities = None
             u, ok, its, residual, floor = _solve_step(
                 stage_problem, form, state.last_u, capabilities=stage_capabilities, **solve_kw

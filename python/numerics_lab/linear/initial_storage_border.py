@@ -167,7 +167,11 @@ def _frozen_rate_forcing(jacobian, residual, correction, mass, state, tolerance)
     nonzero_mass = mass.copy()
     nonzero_mass.eliminate_zeros()
     zero_mass = np.asarray(nonzero_mass.getnnz(axis=1)).ravel() == 0
-    roundoff[zero_mass] += tolerance * np.asarray(abs(jacobian[zero_mass]) @ abs(state)).ravel()
+    # These original rows contain no rate: their already-validated STATE
+    # residual keeps exactly the same unsigned operands after freezing state.
+    # Dynamic and independently differentiated rows inherit no such allowance.
+    state_scale = unsigned + np.asarray(abs(jacobian) @ abs(state)).ravel()
+    roundoff[zero_mass] += tolerance * state_scale[zero_mass]
     if not np.isfinite(roundoff).all():
         msg = 'joint rate forcing requires finite row-local arithmetic bounds'
         raise ValueError(msg)
@@ -331,6 +335,19 @@ def _validate_joint_correction(
     rate_tangent,
 ):
     n = mass.shape[0]
+    state_defect = jacobian @ correction[:n] + mass @ correction[n:] + residual
+    state_scale = (
+        np.asarray(abs(jacobian) @ abs(correction[:n]) + abs(mass) @ abs(correction[n:])).ravel()
+        + abs(residual)
+        + np.asarray(abs(jacobian) @ abs(state)).ravel()
+    )
+    if (
+        not np.isfinite(state_defect).all()
+        or not np.isfinite(state_scale).all()
+        or np.any(abs(state_defect) > tolerance * state_scale)
+    ):
+        msg = 'joint stored state contradicts actual state/rate equations'
+        raise ValueError(msg)
     # Stored state is exact authority; stored rate is not reconstructed by a
     # subtraction of large dynamic operands. Solve every original frozen-state
     # rate equation, retaining the independently differentiated weak constraints.

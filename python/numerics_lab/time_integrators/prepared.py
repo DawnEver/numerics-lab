@@ -33,9 +33,17 @@ class PreparedStepContext:
 
 @dataclass(frozen=True)
 class PreparedStageContext:
+    """Actual scheme clock and declared incoming endpoint side.
+
+    ``endpoint_left`` applies only to the stage evaluated at the declared cut
+    endpoint. The prepared owner binds its genuine incoming law there; earlier
+    stages keep their actual clocks and regular right-side evaluation.
+    """
+
     form: StepForm
     state: IntegratorState
     index: int
+    endpoint_left: bool = False
 
 
 @dataclass(frozen=True)

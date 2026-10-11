@@ -188,6 +188,39 @@ class FullProblem:
         return np.array([[a + b, a], [-a, a + b]])
 
 
+@pytest.mark.parametrize('kind', [IntegratorKind.BDF1, IntegratorKind.TR_BDF2])
+def test_prepared_cut_retains_actual_stage_clock_and_explicit_endpoint_side(kind):
+    contexts = []
+
+    class ClockAttempt(Attempt):
+        def prepare_stage(self, context):
+            contexts.append(context)
+            return super().prepare_stage(context)
+
+    class ClockOwner(PreparedOwner):
+        def begin_step(self, context):
+            inner = context.integrator.start(np.zeros(1), context.state.t, np.zeros(1))
+            return ClockAttempt(self, context, inner)
+
+    integrator = get_integrator(kind)
+    take_step(
+        ClockOwner(),
+        integrator,
+        integrator.start(np.zeros(1), 0.0, np.ones(1)),
+        0.1,
+        0.1,
+        endpoint_left=True,
+        max_newton=3,
+        solve=np.linalg.solve,
+        tol=1e-12,
+    )
+    assert contexts[-1].form.t_eval == 0.1
+    assert contexts[-1].endpoint_left is True
+    if kind == IntegratorKind.TR_BDF2:
+        assert 0.0 < contexts[0].form.t_eval < 0.1
+        assert contexts[0].endpoint_left is False
+
+
 @pytest.mark.parametrize('kind', [IntegratorKind.BDF1, IntegratorKind.BDF2, IntegratorKind.TR_BDF2])
 def test_prepared_stages_match_independent_full_system(kind):
     owner = PreparedOwner()
@@ -458,7 +491,8 @@ def test_scheduled_source_cut_restarts_actual_hidden_history_at_conserved_state(
     assert len(owner.restarts) == 1 and owner.restarts[0].t == 0.31
     assert len(owner.restarts[0].us) == 1 and owner.restarts[0].h is None
     assert np.linalg.norm(owner.restarts[0].last_u) > 0.01
-    assert owner.attempts[1].forms[0].t_eval == np.nextafter(0.31, -np.inf)
+    assert owner.attempts[1].forms[0].t_eval == 0.31
+    assert owner.attempts[1].stage.endpoint_left is True
     assert owner.attempts[2].context.parent_candidate is None
     np.testing.assert_allclose(actual.states[-1], expected.states[-1][:1], atol=1e-13, rtol=1e-13)
     np.testing.assert_allclose(owner.inner.last_u, expected.states[-1][1:], atol=1e-13, rtol=1e-13)
