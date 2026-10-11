@@ -227,6 +227,9 @@ def sparse_initial_rate(matrix, rhs, *, tolerance=1e-10, residual_allowance=None
             except RuntimeError:
                 factor = None
         if factor is None:
+            if matrix.shape[1] > 512:
+                msg = 'singular field-size rate equations require an owned sparse subsystem, not unbounded exact elimination'
+                raise ValueError(msg)
             selected, affected = _independent_exact_columns(matrix, np.flatnonzero(nonzero), dependent_start=0)
             reduced = normalized[:, selected].tocsr()
             rows = _independent_exact_rows(matrix[:, selected], np.array([], dtype=int))
