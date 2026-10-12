@@ -134,16 +134,38 @@ def _sparse_joint_border(
 
     coupling = matrix[selected_rows][:, remaining_columns]
 
-    def column_response(column):
+    def column_forcing(column):
         entries = coupling[:, column].tocoo()
         forcing = np.zeros(block.shape[0])
         np.add.at(forcing, entries.row, entries.data)
-        return solve(forcing) if entries.nnz else forcing
+        return forcing
+
+    def column_response(column):
+        forcing = column_forcing(column)
+        return solve(forcing) if np.any(forcing) else forcing
+
+    def response_error(column):
+        residual = column_forcing(column) - block @ response[:, column]
+        return abs(raw_solve(residual)) if np.any(residual) else residual
 
     response = np.column_stack([column_response(column) for column in range(len(remaining_columns))])
     left = matrix[remaining_rows][:, selected_columns]
-    schur = matrix[remaining_rows][:, remaining_columns] - sp.csr_matrix(left @ response)
+    direct = matrix[remaining_rows][:, remaining_columns]
+    schur = direct - sp.csr_matrix(left @ response)
     schur.eliminate_zeros()
+    # The Schur border is COMPUTED, and a solid body's net-current row is exactly
+    # dependent on its hidden row: in the border it is a cancellation of terms many
+    # orders larger than what is left. Its entries' own error seeds the eliminator, or
+    # it pivots on that remainder (Cummins step 1: body rows at 1e-15 of their 5.2
+    # operands, subsystem cond 1e18). Formation rounding is gamma_k over the summed
+    # |terms|; the responses' forward error is the image of their next refinement
+    # correction, an ESTIMATE as in `_driven_allowance_image`.
+    count = np.asarray(sp.csr_matrix(left).getnnz(axis=1)).ravel() + 1.0
+    unit = np.finfo(float).eps / 2
+    gamma = count * unit / (1 - count * unit)
+    errors = np.column_stack([response_error(column) for column in range(len(remaining_columns))])
+    abs_left = abs(sp.csr_matrix(left))
+    schur_errors = gamma[:, None] * np.asarray(abs(direct) + abs_left @ abs(response)) + abs_left @ errors
     # An eliminated row's ADMITTED slack (its forcing within its own allowance -- the remainder a
     # converged field seed hands over) does not vanish with the row: elimination carries it into
     # the Schur forcing. So the forcing is formed as two images, driven and slack, and a retained
@@ -173,7 +195,10 @@ def _sparse_joint_border(
         msg = 'joint stored state contradicts actual eliminated original rows'
         raise ValueError(msg)
     answer, directions = border_affine_space(
-        schur[supported].toarray(), forcing[supported], inherited_allowance=inherited[supported]
+        schur[supported].toarray(),
+        forcing[supported],
+        inherited_allowance=inherited[supported],
+        entry_errors=schur_errors[supported],
     )
     correction = np.zeros(matrix.shape[1])
     correction[remaining_columns] = answer

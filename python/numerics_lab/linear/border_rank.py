@@ -33,13 +33,16 @@ def homogeneous_zero_coordinates(matrix, rhs, *, row_order=None):
             return remaining, consumed
 
 
-def border_affine_space(matrix, rhs, *, mandatory_rows=(), inherited_allowance=None):
+def border_affine_space(matrix, rhs, *, mandatory_rows=(), inherited_allowance=None, entry_errors=None):
     """Return a representative and explicit free directions of actual border equations.
 
     Re-equilibrate remaining rows after each elimination. A weak independent
     index constraint is not discarded just because another row has different
     units. Cancellation-only rows are removed using propagated arithmetic
     error bounds before any normalization can turn their noise into authority.
+    ``entry_errors`` bounds a COMPUTED matrix's own entries (a Schur border's
+    formation error); it seeds that propagation, so an entry inside its bound
+    is never a pivot. Omitted, the entries are taken as exact.
     """
     matrix, rhs = np.asarray(matrix, dtype=float).copy(), np.asarray(rhs, dtype=float).copy()
     if (
@@ -78,6 +81,10 @@ def border_affine_space(matrix, rhs, *, mandatory_rows=(), inherited_allowance=N
         msg = 'mandatory border constraints require unique actual equation rows'
         raise ValueError(msg)
     mandatory_rows = mandatory_rows.astype(int)
+    seeded = np.zeros_like(matrix) if entry_errors is None else np.asarray(entry_errors, dtype=float)
+    if seeded.shape != matrix.shape or not np.isfinite(seeded).all() or np.any(seeded < 0):
+        msg = 'border entry error bounds require a finite nonnegative aligned matrix'
+        raise ValueError(msg)
     # Original homogeneous singleton equations prove exact zeros. Propagate
     # only those proven columns, before driven-row arithmetic can contaminate
     # the representative or its free directions.
@@ -108,6 +115,7 @@ def border_affine_space(matrix, rhs, *, mandatory_rows=(), inherited_allowance=N
             rhs[retained],
             mandatory_rows=tuple(positions[row] for row in pending),
             inherited_allowance=allowance[retained],
+            entry_errors=seeded[retained][:, remaining],
         )
         answer[remaining] = reduced_answer
         directions = np.zeros((columns, reduced_directions.shape[1]))
@@ -117,7 +125,7 @@ def border_affine_space(matrix, rhs, *, mandatory_rows=(), inherited_allowance=N
     matrix, rhs = matrix[order], rhs[order]
     original_matrix, original_rhs = matrix.copy(), rhs.copy()
     row_ids = np.arange(rows)
-    errors = np.zeros_like(matrix)
+    errors = seeded[order].copy()
     eps = np.finfo(float).eps
     bound = 16 * max(matrix.shape)
     pivots = []

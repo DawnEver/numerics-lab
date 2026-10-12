@@ -1,9 +1,12 @@
 """Authentic joint residual-rate and physical stored-state minors are separate."""
 
+from fractions import Fraction
+
 import numpy as np
 import pytest
 import scipy.sparse as sp
 
+from motronics.gauss.linear import initial_storage_border
 from motronics.gauss.linear.initial_storage_border import joint_coordinate_sparse_correction
 
 
@@ -163,3 +166,44 @@ def test_owned_state_range_refuses_nonphysical_numeric_authority(directions):
             indices=np.arange(2),
             state_directions=directions,
         )
+
+
+def test_the_computed_schur_border_carries_a_bound_on_its_own_formation_error(monkeypatch):
+    # The border handed to the eliminator is fl(A_rr - L B^-1 C); its entries' distance
+    # from the exact rational Schur complement must sit inside the bound handed with it,
+    # or a cancellation remainder (a solid body's dependent net-current row) reads as a pivot.
+
+    captured = {}
+    real = initial_storage_border.border_affine_space
+
+    def spy(matrix, rhs, **kwargs):
+        captured.update(matrix=np.array(matrix), errors=kwargs.get('entry_errors'))
+        return real(matrix, rhs, **kwargs)
+
+    monkeypatch.setattr(initial_storage_border, 'border_affine_space', spy)
+    matrix = sp.csr_matrix([[0.3, 0.7, 0.1, 0.0], [0.7, 1.9, 0.0, 0.0], [0.1, 0.0, 0.0, 0.0], [0.0, 0.0, 0.7, 1.9]])
+    rhs = matrix @ np.array([1.0, 2.0, 3.0, 4.0])
+    joint_coordinate_sparse_correction(
+        matrix,
+        rhs,
+        mass=sp.diags([0.1, 0.0], format='csr'),
+        algebraic_rows=sp.csr_matrix([[0.0, 1.0]]),
+        stored_rows=np.array([0]),
+        indices=np.array([0]),
+    )
+    dense = [[Fraction(float(value)) for value in row] for row in matrix.toarray()]
+    selected_rows, selected_columns, remaining_rows, remaining_columns = (0, 2), (0, 2), (1, 3), (1, 3)
+    b = [[dense[r][c] for c in selected_columns] for r in selected_rows]
+    det = b[0][0] * b[1][1] - b[0][1] * b[1][0]
+    inverse = [[b[1][1] / det, -b[0][1] / det], [-b[1][0] / det, b[0][0] / det]]
+    for i, r in enumerate(remaining_rows):
+        for j, c in enumerate(remaining_columns):
+            image = sum(
+                dense[r][selected_columns[k]] * inverse[k][m] * dense[selected_rows[m]][c]
+                for k in range(2)
+                for m in range(2)
+            )
+            exact = dense[r][c] - image
+            computed = Fraction(float(captured['matrix'][i, j]))
+            assert abs(computed - exact) <= Fraction(float(captured['errors'][i, j]))
+    assert captured['errors'] is not None and np.all(captured['errors'] >= 0)
