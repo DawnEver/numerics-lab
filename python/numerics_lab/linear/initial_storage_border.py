@@ -4,8 +4,10 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import splu
 
+from motronics.gauss.linear.arithmetic import certified_sparse_product
 from motronics.gauss.linear.border_rank import border_affine_space, homogeneous_zero_coordinates
-from motronics.gauss.linear.initial_rate import normalize_sparse_rows, sparse_initial_rate
+from motronics.gauss.linear.index_two import index_two_frozen_rate
+from motronics.gauss.linear.initial_rate import normalize_sparse_rows
 from motronics.gauss.linear.refinement import refine_factored_solution
 from motronics.gauss.linear.storage_border import free_pinned_columns
 
@@ -328,7 +330,7 @@ def stored_initial_correction(
     ):
         msg = 'joint storage elimination requires independently declared mass columns'
         raise ValueError(msg)
-    columns = free_pinned_columns(columns, mass[stored_rows], algebraic @ rate_tangent)
+    columns = free_pinned_columns(columns, mass[stored_rows], certified_sparse_product(algebraic, rate_tangent))
     free = np.setdiff1d(np.arange(n), columns)
     width = 2 * len(free)
     if sparse_state_indices is not None:
@@ -337,7 +339,7 @@ def stored_initial_correction(
             [
                 [jacobian, mass],
                 [stored, sp.csr_matrix(stored.shape)],
-                [sp.csr_matrix(algebraic.shape), algebraic @ rate_tangent],
+                [sp.csr_matrix(algebraic.shape), certified_sparse_product(algebraic, rate_tangent)],
             ],
             format='csr',
         )
@@ -395,7 +397,7 @@ def stored_initial_correction(
         [
             [jacobian, mass],
             [stored, sp.csr_matrix(stored.shape)],
-            [sp.csr_matrix(algebraic.shape), algebraic @ rate_tangent],
+            [sp.csr_matrix(algebraic.shape), certified_sparse_product(algebraic, rate_tangent)],
         ],
         format='csr',
     )
@@ -474,12 +476,19 @@ def _validate_joint_correction(
     # Give the independent differentiated equations first choice of numerical
     # pivots. All dynamic rows still remain original physical witnesses.
     try:
-        correction[n:], rate_unique = sparse_initial_rate(
-            sp.vstack((algebraic @ rate_tangent, mass), format='csr'),
-            np.concatenate((-algebraic @ partial, forcing)),
+        # An index-two state (a solid body's voltage) is re-solved here with
+        # the rates: its value is fixed only by the differentiated hidden rows.
+        columns, state_step, correction[n:], rate_unique = index_two_frozen_rate(
+            algebraic,
+            certified_sparse_product(algebraic, rate_tangent),
+            mass,
+            jacobian,
+            -algebraic @ partial,
+            forcing,
             tolerance=tolerance,
-            residual_allowance=np.concatenate((np.zeros(algebraic.shape[0]), roundoff)),
+            allowance=roundoff,
         )
+        correction[columns] += state_step
     except ValueError as error:
         msg = f'joint stored state contradicts actual state/rate equations: {error}'
         raise ValueError(msg) from error

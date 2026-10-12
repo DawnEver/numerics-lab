@@ -226,9 +226,11 @@ def integrate_sampled(
     :func:`~motronics.gauss.time_integrators.march.integrate_transient`. Coincident tasks run by
     ascending priority, then fastest clock, then declaration order. The returned trajectory is the segments joined at their hits
     (each hit appears once), with every convergence label carried.
-    ``consistent_start`` recomputes first-order rates after tasks update held inputs,
-    holding all declared states fixed. Inconsistent algebraic states are refused rather
-    than silently jumped; this option is for index-1 first-order systems, not acceleration.
+    ``consistent_start`` re-solves each segment's start after its tasks update the held inputs:
+    the differential unknowns stay where the last segment ended, the algebraic ones a held input
+    moves (an ideal source's node voltage) are placed on the new hold, and the rates follow. The
+    joined trajectory keeps the left limit at each hit; this option is for index-1 first-order
+    systems, not acceleration.
     ``segment_step_limit(start, stop)`` optionally tightens the study's maximum step
     for each actual interval. It changes resolution, never task instants or priorities.
     """
@@ -260,8 +262,8 @@ def integrate_sampled(
                 raise ValueError(msg)
             dt = min(dt, limit)
         if consistent_start:
-            start = consistent_initial_condition(problem, u, t_a, fixed=range(u.size), tol=march.get('tol', 1e-10))
-            v = start.u_dot
+            start = consistent_initial_condition(problem, u, t_a, tol=march.get('tol', 1e-10))
+            u, v = start.u, start.u_dot
             if budget is not None:
                 budget.check(started, out.times[-1], u, len(out.times) - 1)
         remaining = budget

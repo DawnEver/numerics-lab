@@ -5,7 +5,7 @@ from scipy.sparse import csr_matrix
 
 from motronics.contracts.runtime.ports import ResidualAssemblyBound
 
-__all__ = ['affine_residual_bound', 'matrix_vector_roundoff', 'transport_residual_bound']
+__all__ = ['affine_residual_bound', 'certified_sparse_product', 'matrix_vector_roundoff', 'transport_residual_bound']
 
 
 def _row_arithmetic(matrix, vector, offset):
@@ -34,6 +34,31 @@ def _row_arithmetic(matrix, vector, offset):
     values = gamma * magnitude / (1 - gamma)
     known[(magnitude != 0) & (values < np.finfo(float).tiny)] = False
     return matrix, values, known, gamma
+
+
+def certified_sparse_product(left, right):
+    """``left @ right`` without coefficients its own summation cannot certify.
+
+    An entry no larger than the gamma bound of its own dot product,
+    ``gamma_k * (|left| @ |right|)``, has neither sign nor magnitude
+    authority: an exact cancellation (a left-null storage row against a
+    column in the range of the mass) lands there. Kept, it reads as a
+    structural dependence and a sparse LU pivots on it.
+    """
+    left, right = csr_matrix(left), csr_matrix(right)
+    product = csr_matrix(left @ right)
+    magnitude = csr_matrix(abs(left) @ abs(right))
+    counts = csr_matrix((left != 0).astype(float) @ (right != 0).astype(float))
+    product.sort_indices()
+    for matrix in (magnitude, counts):
+        matrix.sort_indices()
+    gamma = counts.multiply(np.finfo(float).eps).tocsr()
+    gamma.data = gamma.data / (1 - gamma.data)
+    bound = csr_matrix(magnitude.multiply(gamma))
+    uncertified = csr_matrix(abs(product) <= bound).multiply(product != 0)
+    product = product - product.multiply(uncertified)
+    product.eliminate_zeros()
+    return csr_matrix(product)
 
 
 def matrix_vector_roundoff(matrix, vector, offset):

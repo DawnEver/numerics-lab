@@ -341,12 +341,15 @@ def _solve_step(
     if capabilities is None:
         capabilities = ProblemCapabilities.resolve(problem)
     if capabilities.step_evaluation:
-        # The endpoint owner's problem is a different object: its protocols are its own.
-        problem = problem.step_problem(form.t_eval)
-        if not isinstance(problem, SemiDiscreteProblem):
-            msg = 'step endpoint owner must return a semi-discrete problem'
-            raise TypeError(msg)
-        capabilities = ProblemCapabilities.resolve(problem)
+        # An endpoint owner's DIFFERENT problem has protocols of its own; the owner itself
+        # (no endpoint at this instant) keeps the march's resolution -- re-resolving it cost
+        # seven runtime protocol checks per stage (measured 2026-10-12, ~11% of a dq march).
+        stepped = problem.step_problem(form.t_eval)
+        if stepped is not problem:
+            if not isinstance(stepped, SemiDiscreteProblem):
+                msg = 'step endpoint owner must return a semi-discrete problem'
+                raise TypeError(msg)
+            problem, capabilities = stepped, ProblemCapabilities.resolve(stepped)
     reusable = factor_cache is not None and capabilities.factor_reusable
     # The stall-polish's phase-2 source (MANUAL-627 (i)): the problem's local-derivative
     # jacobian, engaged when the default jacobian's per-iteration creep marks a stalled

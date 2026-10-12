@@ -7,6 +7,7 @@ import scipy.sparse as sp
 from scipy.sparse.csgraph import maximum_bipartite_matching
 from scipy.sparse.linalg import splu
 
+from motronics.gauss.linear.arithmetic import certified_sparse_product
 from motronics.gauss.linear.initial_rate import (
     _independent_exact_columns,
     _independent_exact_rows,
@@ -151,7 +152,7 @@ def sparse_initial_pair(
         [
             [jacobian, mass],
             [stored, sp.csr_matrix(stored.shape)],
-            [sp.csr_matrix(algebraic.shape), algebraic @ rate_tangent],
+            [sp.csr_matrix(algebraic.shape), certified_sparse_product(algebraic, rate_tangent)],
         ],
         format='csr',
     )
