@@ -100,7 +100,7 @@ def _at_roundoff_floor(problem, tangent, u: NDArray[np.floating], form, capabili
         # before: `float(...)` would have raised on it, so `mna_solves.transient_residual_floor`
         # said "no floor" by returning `0.0`, which is finite, was accepted, and suppressed the
         # fallback entirely while comparing every real residual against zero.
-        declared = problem.residual_roundoff_floor(u, form)
+        declared = problem.residual_roundoff_floor(u, form, residual=r)
         if declared is not None:
             floor = np.asarray(declared, dtype=float)
             if np.isfinite(floor).all():

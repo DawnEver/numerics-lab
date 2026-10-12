@@ -275,6 +275,21 @@ def direct_relative_residual(matrix, rhs, x) -> float | None:
     NOT cast to ``float``: the time-harmonic operator is COMPLEX, and casting its residual to a
     real dtype is what kept the harmonic call sites from being able to consult this guard at all.
     """
+    # THE DENSE REAL VECTOR CASE, spelled without the storage dispatch: `np.linalg.norm` of a real
+    # 1-D array IS `sqrt(v.dot(v))`, so this is the same statistic to the bit, at a fraction of
+    # the call overhead the general path pays on the tiny systems a circuit march solves.
+    if (
+        type(matrix) is np.ndarray
+        and type(rhs) is np.ndarray
+        and type(x) is np.ndarray
+        and rhs.ndim == 1
+        and rhs.dtype.kind == x.dtype.kind == matrix.dtype.kind == 'f'
+    ):
+        b_square = float(rhs.dot(rhs))
+        if b_square == 0.0:
+            return None
+        defect = matrix @ x.reshape(rhs.shape) - rhs
+        return math.sqrt(float(defect.dot(defect))) / math.sqrt(b_square)
     b = np.asarray(rhs.todense() if sp.issparse(rhs) else rhs)
     b_norm = float(np.linalg.norm(b.ravel()))
     if b_norm == 0.0:
