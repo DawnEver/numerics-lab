@@ -46,3 +46,20 @@ def test_a_waveform_whose_seed_has_no_shape_is_measured_against_zero() -> None:
 def test_an_ill_posed_iteration_is_refused(relaxation: float, max_iter: int) -> None:
     with pytest.raises(ValueError, match='relaxation|max_iter'):
         waveform_relaxation(lambda x: (x, None), 0.0, relaxation=relaxation, tol=1.0, max_iter=max_iter)
+
+
+def _sweeps(scale: float, **bar: float) -> int:
+    # G(x) = 0.5 x + scale: the gap halves every sweep from `scale`, the fixed point is 2 * scale.
+    return waveform_relaxation(lambda x: (0.5 * x + scale, None), 0.0, max_iter=100, **bar).iterations
+
+
+def test_a_relative_bar_stops_at_the_same_sweep_in_any_unit() -> None:
+    """``tol_rel`` is measured against the proposal's own peak, so a unit change cannot move the stop."""
+    assert len({_sweeps(scale, tol_rel=1e-6) for scale in (1e-3, 1.0, 1e3)}) == 1
+    # PLANTED: the same number spelled absolutely stops at a unit-dependent sweep.
+    assert _sweeps(1e-3, tol=1e-6) < _sweeps(1e3, tol=1e-6)
+
+
+def test_a_bar_of_zero_is_refused() -> None:
+    with pytest.raises(ValueError, match='tol'):
+        waveform_relaxation(lambda x: (x, None), 0.0, max_iter=3)
