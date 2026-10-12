@@ -206,6 +206,17 @@ class _InitialConstraints:
     def residual_norm(self, x, state):
         return float(np.linalg.norm(state.payload))
 
+    def rhs_norm(self, state):
+        """The scale the Newton stop is judged on: the one the final acceptance check uses.
+
+        Without it the stop was relative to the SEED residual, so a seed near the root (a cold
+        Shockley bridge whose currents are already ~0) demanded an answer tighter than roundoff
+        and never converged -- the `_FiniteRightSystem` sibling owns the same source norm.
+        """
+        return float(np.linalg.norm(state.system_matrix) * np.linalg.norm(self.initial)) + float(
+            np.linalg.norm(self.stored @ self.initial)
+        )
+
     def tangent(self, x, state):
         return state.system_matrix
 
