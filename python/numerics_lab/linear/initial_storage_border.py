@@ -229,7 +229,12 @@ def _driven_allowance_image(block, left, bound, needed):
     gamma = count * np.finfo(float).eps / (1 - count * np.finfo(float).eps)
     for row in rows:
         target = np.asarray(left[row].toarray()).ravel()
-        adjoint = refine_factored_solution(transposed, target, correction(target), correction)
+        # Refined here rather than through `refine_factored_solution`, whose magnitude gate
+        # refuses this mixed-unit adjoint (cond_1 ~ 1e25 on Cummins) although its refinement
+        # trajectory collapses; the normwise check below is the acceptance.
+        adjoint = correction(target)
+        for _ in range(4):
+            adjoint = adjoint + correction(target - transposed @ adjoint)
         defect = target - transposed @ adjoint
         scale = np.max(abs(transposed) @ abs(adjoint) + abs(target))
         if np.all(np.isfinite(adjoint)) and np.max(abs(defect)) <= gamma * scale:
