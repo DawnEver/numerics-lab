@@ -1025,7 +1025,9 @@ def integrate_transient(
             accepted_dt,
             checkpoint_key,
             integrator.name,
-            previous_time=solution.times[-2],
+            # A resume whose window is under the end tolerance takes no step (a source corner one ulp
+            # before t1): its accepted step is still the restart's, and so is the instant before it.
+            previous_time=solution.times[-2] if len(solution.times) > 1 else restart.previous_time,
             eec_state=eec_state,
             step_origin=lattice_origin,
             event_state=event_state,
