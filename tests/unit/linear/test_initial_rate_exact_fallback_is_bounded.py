@@ -1,4 +1,4 @@
-"""Singular field-size systems cannot enter an unbounded rational fallback."""
+"""Singular field-size systems cannot enter an unbounded rational fallback: the sparse least-squares retry refuses them."""
 
 import numpy as np
 import pytest
@@ -20,5 +20,5 @@ def test_large_singular_rate_requires_owned_sparse_subsystem_without_rationalizi
     matrix[1, -1] = 1
     monkeypatch.setattr(initial_rate, 'Fraction', forbidden)
     monkeypatch.setattr(sp.csr_matrix, 'toarray', forbidden)
-    with pytest.raises(ValueError, match='bounded|owned sparse'):
+    with pytest.raises(ValueError, match='lack full column rank'):
         initial_rate.sparse_initial_rate(matrix.tocsr(), np.zeros(n))
