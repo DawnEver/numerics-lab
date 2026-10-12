@@ -33,9 +33,9 @@ def test_declared_sparse_coordinates_are_consumed_below_dense_border_ceiling(mon
     original = owner._sparse_joint_border
     consumed = []
 
-    def actual_sparse_closure(*args):
+    def actual_sparse_closure(*args, **kwargs):
         consumed.append(args[-1].copy())
-        return original(*args)
+        return original(*args, **kwargs)
 
     monkeypatch.setattr(owner, '_sparse_joint_border', actual_sparse_closure)
     indices = np.arange(count)
@@ -328,3 +328,69 @@ def test_homogeneous_stored_field_keeps_exact_circuit_constraints_at_startup(vol
     np.testing.assert_array_equal(correction[[0, 1, 2, 8, 11]], np.zeros(5))
     np.testing.assert_array_equal(correction[n : n + 3], np.zeros(3))
     assert correction[n + 8] == pytest.approx(voltage / 0.001, rel=1e-12, abs=0.0)
+
+
+def test_the_residuals_certified_rounding_reaches_the_sparse_elimination_and_its_validator(monkeypatch):
+    # A solid body's net-current row depends on its conducting field rows, so it keeps the image
+    # of their certified rounding (Cummins dual_star_pwm: 4.5e-8 against an 8.6e-9 tolerance bar).
+    count, jacobian, residual, mass, algebraic = _large_sparse_joint_equations(3)
+    n = mass.shape[0]
+    border, validator = owner._sparse_joint_border, owner._validate_joint_correction
+    seen = {}
+
+    def forwarded_border(*args, **kwargs):
+        seen['allowance'] = kwargs['residual_allowance']
+        result = border(*args, **kwargs)
+        seen['admitted'] = result[2]
+        return result
+
+    def forwarded_validator(*args, **kwargs):
+        seen['validated'] = kwargs['admitted']
+        return validator(*args, **kwargs)
+
+    monkeypatch.setattr(owner, '_sparse_joint_border', forwarded_border)
+    monkeypatch.setattr(owner, '_validate_joint_correction', forwarded_validator)
+    bound = np.full(n, 1e-13)
+    stored_initial_correction(
+        jacobian,
+        residual,
+        mass,
+        algebraic,
+        np.array([0, count]),
+        np.array([0, count + 1]),
+        np.zeros(2),
+        np.zeros(n),
+        tolerance=1e-10,
+        state=np.zeros(n),
+        rate_tangent=jacobian,
+        sparse_state_indices=np.arange(count),
+        residual_allowance=bound,
+    )
+    np.testing.assert_array_equal(seen['allowance'][:n], bound)
+    assert not seen['allowance'][n:].any()
+    assert seen['validated'] is seen['admitted']
+    assert np.all(seen['admitted'][:n] >= bound)
+
+
+def test_a_row_defect_inside_its_admitted_image_is_not_a_contradiction():
+    # One row, one coordinate: x = 1 with a defect of 1e-12 left in the correction.
+    jacobian = sp.csr_matrix([[1.0]])
+    mass = sp.csr_matrix((1, 1))
+    matrix = sp.csr_matrix([[1.0, 0.0], [0.0, 1.0]])
+    arguments = (
+        np.array([1.0 + 2.0**-40, 0.0]),
+        np.zeros((1, 0)),
+        matrix,
+        np.array([1.0, 0.0]),
+        jacobian,
+        np.array([-1.0]),
+        mass,
+        sp.csr_matrix([[1.0]]),
+        np.zeros(1),
+        1e-14,
+        np.zeros(1),
+        sp.csr_matrix([[1.0]]),
+    )
+    with pytest.raises(ValueError, match='contradicts'):
+        owner._validate_joint_correction(*arguments)
+    owner._validate_joint_correction(*arguments, admitted=np.array([1e-12, 0.0]))
