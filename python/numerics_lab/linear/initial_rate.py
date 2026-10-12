@@ -133,6 +133,35 @@ def _refined_rate_values(factor, reduced, rows, forcing):
     return values
 
 
+def _least_squares_rate_values(reduced, forcing):
+    """Every row at once: the refined augmented system ``[I R; R' 0][r; x] = [f; 0]``.
+
+    A square row choice can be singular while the whole overdetermined system
+    has full column rank and one consistent answer (a dependent net-current
+    row per solid body). This system is nonsingular exactly when ``R`` has
+    full column rank; a rank-deficient one refuses. The answer is still judged
+    by every original row at the caller's unchanged bar.
+    """
+    rows, size = reduced.shape
+    kkt = sp.bmat([[sp.identity(rows), reduced], [reduced.T, None]], format='csc')
+    try:
+        factor = splu(kkt)
+    except RuntimeError as error:
+        msg = 'actual field-size rate equations lack full column rank'
+        raise ValueError(msg) from error
+    target = np.concatenate((forcing, np.zeros(size)))
+    solution = factor.solve(target)
+    for _ in range(4):
+        if not np.isfinite(solution).all():
+            msg = 'actual rate equations require a finite representable solution'
+            raise ValueError(msg)
+        solution += factor.solve(target - kkt @ solution)
+    if not np.isfinite(solution).all():
+        msg = 'actual rate refinement requires a finite representable solution'
+        raise ValueError(msg)
+    return solution[rows:]
+
+
 def _exact_rate_values(matrix, rhs):
     """Reconstruct a bounded original subsystem when floating refinement loses its witnesses."""
     size = matrix.shape[1]
@@ -209,6 +238,7 @@ def sparse_initial_rate(matrix, rhs, *, tolerance=1e-10, residual_allowance=None
     selected, affected = _independent_exact_columns(matrix, np.flatnonzero(nonzero), dependent_start=0, general=False)
     normalized, forcing = normalize_sparse_rows(matrix, rhs)
     answer = np.zeros(matrix.shape[1])
+    factor = None
     if len(selected):
         reduced = normalized[:, selected].tocsr()
         # Row order expresses the caller's numerical pivot priority, never
@@ -222,16 +252,14 @@ def sparse_initial_rate(matrix, rhs, *, tolerance=1e-10, residual_allowance=None
             _columns, rows = min_weight_full_bipartite_matching(priority.T)
         except ValueError:
             rows = np.full(len(selected), -1, dtype=int)
-        factor = None
         if np.all(rows >= 0):
             try:
                 factor = splu(reduced[rows].tocsc())
             except RuntimeError:
                 factor = None
-        if factor is None:
-            if matrix.shape[1] > 512:
-                msg = 'singular field-size rate equations require an owned sparse subsystem, not unbounded exact elimination'
-                raise ValueError(msg)
+        if factor is None and matrix.shape[1] > 512:
+            answer[selected] = _least_squares_rate_values(reduced, forcing)
+        elif factor is None:
             selected, affected = _independent_exact_columns(matrix, np.flatnonzero(nonzero), dependent_start=0)
             reduced = normalized[:, selected].tocsr()
             rows = _independent_exact_rows(matrix[:, selected], np.array([], dtype=int))
@@ -240,12 +268,22 @@ def sparse_initial_rate(matrix, rhs, *, tolerance=1e-10, residual_allowance=None
             except RuntimeError as error:
                 msg = 'actual rate equations lack a nonsingular sparse physical subsystem'
                 raise ValueError(msg) from error
-        answer[selected] = _refined_rate_values(factor, reduced, rows, forcing)
+        if factor is not None:
+            answer[selected] = _refined_rate_values(factor, reduced, rows, forcing)
     defect = matrix @ answer - rhs
     bar = tolerance * (abs(matrix) @ abs(answer) + abs(rhs)) + allowance
     if not np.isfinite(defect).all() or not np.isfinite(bar).all():
         msg_0 = 'actual rate physical validation requires finite defects and bounds'
         raise ValueError(msg_0)
+    # A field-size square choice that factored but leaves witnesses violated is
+    # retried over every row at once; the bar below is unchanged.
+    if np.any(abs(defect) > bar) and factor is not None and matrix.shape[1] > 512:
+        answer[selected] = _least_squares_rate_values(reduced, forcing)
+        defect = matrix @ answer - rhs
+        bar = tolerance * (abs(matrix) @ abs(answer) + abs(rhs)) + allowance
+        if not np.isfinite(defect).all() or not np.isfinite(bar).all():
+            msg_0 = 'actual rate physical validation requires finite defects and bounds'
+            raise ValueError(msg_0)
     # Row scaling can make an exactly singular subsystem appear to factor.
     # Retry its original dependency witnesses, never a numerical rank cutoff.
     if np.any(abs(defect) > bar) and len(selected) and matrix.shape[1] <= 512:
