@@ -389,21 +389,35 @@ def test_first_order_initialization_refuses_second_order_before_firing_tasks(kin
     assert fired == []
 
 
-def test_consistent_sample_restart_cannot_move_a_pinned_algebraic_state() -> None:
-    class Constraint:
+def test_a_consistent_sample_restart_re_solves_the_algebraic_state_a_held_input_moves() -> None:
+    """A held input that moves an ALGEBRAIC unknown is re-solved at the hit; the differential one holds.
+
+    ``u1 = held`` is algebraic and ``u0' = u1 - u0`` differential: each hit's restart places
+    ``u1`` on the new hold and leaves ``u0`` where the last segment ended, and the caller's array
+    is never written.
+    """
+    held = [0.0]
+
+    class Plant:
         def residual(self, u, u_dot, u_ddot, t):
-            return u - 1.0
+            return np.array([u_dot[0] + u[0] - u[1], u[1] - held[0]])
 
         def jacobian(self, u, u_dot, u_ddot, t, weights):
-            return np.atleast_2d(weights.alpha0)
+            return np.array([[weights.alpha1 + weights.alpha0, -weights.alpha0], [0.0, weights.alpha0]])
 
-    state = np.zeros(1)
-    with pytest.raises(ValueError, match='pinned'):
-        integrate_sampled(
-            Constraint(),
-            TransientStudy(t0=0.0, t1=0.1, dt=0.01),
-            state,
-            [],
-            consistent_start=True,
-        )
-    np.testing.assert_array_equal(state, np.zeros(1))
+    state = np.zeros(2)
+    sol = integrate_sampled(
+        Plant(),
+        TransientStudy(t0=0.0, t1=0.2, dt=0.01, integrator=IntegratorKind.TR_BDF2),
+        state,
+        [ScheduledTask([0.0, 0.1], lambda t, _u: held.__setitem__(0, 1.0 + 10.0 * t))],
+        consistent_start=True,
+    )
+    np.testing.assert_array_equal(state, np.zeros(2))
+    times = np.asarray(sol.times)
+    states = np.asarray(sol.states)
+    first, second = (times > 0.0) & (times <= 0.1 + 1e-12), times > 0.1 + 1e-12
+    np.testing.assert_allclose(states[first, 1], 1.0, rtol=0, atol=1e-12)
+    np.testing.assert_allclose(states[second, 1], 2.0, rtol=0, atol=1e-12)
+    end_of_first = 1.0 - math.exp(-0.1)
+    np.testing.assert_allclose(states[-1, 0], 2.0 - (2.0 - end_of_first) * math.exp(-0.1), rtol=1e-4)
