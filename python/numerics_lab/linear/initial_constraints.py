@@ -79,6 +79,16 @@ def linear_dae_initial_state(
         # exact value (a REST winding current of 0.0) would refuse the projection's own output.
         # Whether the snapped state is still consistent is judged below, on the snapped state.
         state[fixed] = initial[fixed]
+        # Refine against the snapped anchors: the coordinates they DETERMINE (a series current
+        # equal to a declared stored one) inherit the lstsq rounding otherwise, and a downstream
+        # exact-anchor elimination reads that ulp as a contradicted declaration.
+        for _ in range(3):
+            defect = b - a @ state
+            if not np.any(defect):
+                break
+            correction, *_ = np.linalg.lstsq(a, defect, rcond=None)
+            state += correction
+            state[fixed] = initial[fixed]
         bar = tolerance * (np.linalg.norm(a) * np.linalg.norm(state) + np.linalg.norm(b))
         return state, np.linalg.norm(a @ state - b) <= bar, a
 

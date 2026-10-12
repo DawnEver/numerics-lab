@@ -139,17 +139,35 @@ def _sparse_joint_border(
         return solve(forcing) if entries.nnz else forcing
 
     response = np.column_stack([column_response(column) for column in range(len(remaining_columns))])
-    base = solve(rhs[selected_rows])
     left = matrix[remaining_rows][:, selected_columns]
     schur = matrix[remaining_rows][:, remaining_columns] - sp.csr_matrix(left @ response)
     schur.eliminate_zeros()
-    forcing = rhs[remaining_rows] - left @ base
+    # An eliminated row's ADMITTED slack (its forcing within its own allowance -- the remainder a
+    # converged field seed hands over) does not vanish with the row: elimination carries it into
+    # the Schur forcing. So the forcing is formed as two images, driven and slack, and a retained
+    # row inherits the slack image in full plus the rounding of forming and adding the two
+    # (gamma_k over the |terms| summed, k the row's term count) -- otherwise a homogeneous anchor
+    # downstream reads a converged seed's remainder as a contradicted declaration.
+    selected_rhs = rhs[selected_rows]
+    slack = np.where(abs(selected_rhs) <= allowance[selected_rows], selected_rhs, 0.0)
+    driven_base = solve(selected_rhs - slack)
+    slack_base = solve(slack) if np.any(slack) else np.zeros_like(driven_base)
+    driven = rhs[remaining_rows] - left @ driven_base
+    carried = -(left @ slack_base)
+    forcing = driven + carried
+    terms = np.asarray(sp.csr_matrix(left).getnnz(axis=1)).ravel() + 2
+    gamma = terms * np.finfo(float).eps / (1.0 - terms * np.finfo(float).eps)
+    inherited = (
+        allowance[remaining_rows]
+        + abs(carried)
+        + gamma * (abs(rhs[remaining_rows]) + abs(left) @ (abs(driven_base) + abs(slack_base)) + abs(carried))
+    )
     supported = np.asarray(schur.getnnz(axis=1)).ravel() != 0
-    if np.any(abs(forcing[~supported]) > allowance[remaining_rows][~supported]):
+    if np.any(abs(forcing[~supported]) > inherited[~supported]):
         msg = 'joint stored state contradicts actual eliminated original rows'
         raise ValueError(msg)
     answer, directions = border_affine_space(
-        schur[supported].toarray(), forcing[supported], inherited_allowance=allowance[remaining_rows][supported]
+        schur[supported].toarray(), forcing[supported], inherited_allowance=inherited[supported]
     )
     correction = np.zeros(matrix.shape[1])
     correction[remaining_columns] = answer
