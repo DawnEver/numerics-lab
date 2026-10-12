@@ -89,6 +89,7 @@ from motronics.gauss.linear.refinement import (
     refinement_residual,
     reject_unsolved_direct_system,
     repair_direct_solution,
+    settle_direct_solution,
 )
 from motronics.gauss.linear.ssor import ssor_preconditioner
 
@@ -128,6 +129,7 @@ __all__ = [
     'reject_unsolved_direct_system',
     'repair_direct_solution',
     'requires_symmetric',
+    'settle_direct_solution',
     'solve_equilibrated',
     'solve_linear_system',
     'ssor_preconditioner',
@@ -480,8 +482,7 @@ def solve_linear_system(
         # `x` untouched unless the residual trigger fires, so this is free for every solve that
         # passes today; when it does fire, the steps it takes are the ones the verdict below was
         # going to measure anyway.
-        x, moves = repair_direct_solution(matrix, rhs, x)
-        reject_unsolved_direct_system(matrix, rhs, x, name, refinement=moves[-1] if moves else None)
+        x = settle_direct_solution(matrix, rhs, x, name)
     return x
 
 

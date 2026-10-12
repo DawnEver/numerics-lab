@@ -49,6 +49,7 @@ __all__ = [
     'refinement_residual',
     'reject_unsolved_direct_system',
     'repair_direct_solution',
+    'settle_direct_solution',
 ]
 
 
@@ -666,6 +667,22 @@ def describe_refinement_trajectory(moves: tuple[float, ...], cond: float | None 
             'a genuine rank deficiency and the gauge/reference advice above applies'
         )
     return f'diagnostic refinement trajectory [{shown}]: {verdict}'
+
+
+def settle_direct_solution(matrix, rhs, x, backend: str) -> np.ndarray:
+    """REPAIR, THEN JUDGE a direct answer -- the one spelling of the pair every direct site runs.
+
+    A healthy answer takes ONE residual: below :data:`_DIRECT_RESIDUAL_RTOL` neither
+    :func:`repair_direct_solution` nor :func:`reject_unsolved_direct_system` does anything else,
+    so taking it twice bought nothing (measured 2026-10-12: 186,014 residuals for 93,007 solves on
+    a 0.02 s PMSM position march). Past the trigger the pair runs exactly as before.
+    """
+    residual = direct_relative_residual(matrix, rhs, x)
+    if residual is None or residual <= _DIRECT_RESIDUAL_RTOL:
+        return np.asarray(x)
+    x, moves = repair_direct_solution(matrix, rhs, x)
+    reject_unsolved_direct_system(matrix, rhs, x, backend, refinement=moves[-1] if moves else None)
+    return x
 
 
 def reject_unsolved_direct_system(matrix, rhs, x, backend: str, *, refinement: float | None = None) -> None:
