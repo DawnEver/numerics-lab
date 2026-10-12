@@ -4,7 +4,7 @@ A staggered couple exchanges a whole WINDOW between two marchers: march one side
 against the other's last waveform, hand the result back, repeat until the exchanged waveform stops
 moving. The loop is the same whatever the two sides are, so it lives here once:
 
-    x_{k+1} = x_k + omega * (G(x_k) - x_k),   stop when  max|G(x_k) - x_k| < tol
+    x_{k+1} = x_k + omega * (G(x_k) - x_k),   stop when  max|G(x_k) - x_k| < tol + tol_rel * max|G(x_k)|
 
 ``G`` is the caller's sweep (march both sides once and return the proposal), ``x`` the exchanged
 quantity -- a scalar operating-point parameter or a sampled waveform. THE STOPPING TEST IS THE
@@ -54,17 +54,20 @@ def waveform_relaxation[P](
     seed: object,
     *,
     relaxation: float = 1.0,
-    tol: float,
+    tol: float = 0.0,
+    tol_rel: float = 0.0,
     max_iter: int,
 ) -> RelaxedFixedPoint[P]:
     """Iterate ``sweep`` to its fixed point under relaxation ``0 < relaxation <= 1``.
 
     ``sweep(x) -> (proposal, payload)``: the proposal is what the sweep says ``x`` should be; the
     payload is whatever the caller needs back from the last sweep (the marched trajectories). ``tol``
-    is in the unit of ``x``; the gap is the max-norm over every component.
+    is in the unit of ``x``; ``tol_rel`` is dimensionless, against the proposal's own peak
+    ``max|G(x)|`` -- the bar a waveform whose scale is not known before the first sweep can declare.
+    The gap is the max-norm over every component.
 
     Raises:
-        ValueError: ``relaxation`` outside ``(0, 1]`` or ``max_iter < 1``.
+        ValueError: ``relaxation`` outside ``(0, 1]``, ``max_iter < 1``, or no positive bar.
 
     """
     if not 0.0 < relaxation <= 1.0:
@@ -72,6 +75,9 @@ def waveform_relaxation[P](
         raise ValueError(msg)
     if max_iter < 1:
         msg = f'max_iter must be at least 1; got {max_iter}'
+        raise ValueError(msg)
+    if not (tol > 0.0 or tol_rel > 0.0) or tol < 0.0 or tol_rel < 0.0:
+        msg = f'a fixed point needs a positive bar: tol={tol}, tol_rel={tol_rel}'
         raise ValueError(msg)
     state = seed
     residuals: list[float] = []
@@ -82,6 +88,6 @@ def waveform_relaxation[P](
         residual = float(np.max(np.abs(proposal - base)))
         residuals.append(residual)
         state = base + relaxation * (proposal - base)
-        if residual < tol:
+        if residual < tol + tol_rel * float(np.max(np.abs(proposal))):
             return RelaxedFixedPoint(state, payload, residuals, True, iteration)
     return RelaxedFixedPoint(state, payload, residuals, False, max_iter)
