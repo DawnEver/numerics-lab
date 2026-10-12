@@ -74,6 +74,11 @@ def linear_dae_initial_state(
         a, b = np.vstack((matrix, anchors)), np.concatenate((rhs, initial[fixed]))
         delta, *_ = np.linalg.lstsq(a, b - a @ initial, rcond=None)
         state = initial + delta
+        # AN ANCHOR IS AN EXACT CONSTRAINT, so its coordinate is handed back exactly: the lstsq
+        # solve returns it within an ulp, and a caller re-admitting this state against the same
+        # exact value (a REST winding current of 0.0) would refuse the projection's own output.
+        # Whether the snapped state is still consistent is judged below, on the snapped state.
+        state[fixed] = initial[fixed]
         bar = tolerance * (np.linalg.norm(a) * np.linalg.norm(state) + np.linalg.norm(b))
         return state, np.linalg.norm(a @ state - b) <= bar, a
 
