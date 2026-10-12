@@ -1146,8 +1146,10 @@ def integrate_transient(
     # A clipped cell RE-ANCHORS the nominal grid at the breakpoint (resume_from keeps the uniform dt
     # grid going from there); without the re-anchor the nominal targets drift ahead of the physics
     # (SR-022). A while loop because clipping inserts grid points: the march ends at t1, not at a
-    # fixed step count. Only roundoff at the declared end may terminate it.
-    end_tol = 1e-12 * max(abs(study.t0), abs(study.t1), study.t1 - study.t0)
+    # fixed step count. Only roundoff at the declared end may terminate it -- the SPAN's roundoff and
+    # the end clock's own ulps, never a fraction of the clock's MAGNITUDE: `1e-12 * |t0|` is 1 s at a
+    # 1e12 s origin, which ended a 4 ms march before its first step (`test_axisymmetric_checkpoint`).
+    end_tol = max(1e-12 * (study.t1 - study.t0), 4.0 * float(np.spacing(abs(study.t1))))
     events_this_cell = 0
     try:
         while not stop and (state.t < study.t1 - end_tol or (len(observations) > 0 and state.t < observations[-1])):
