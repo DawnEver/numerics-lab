@@ -555,13 +555,19 @@ def finite_storage_actual_rate_initial_pair(
         partial = np.asarray(partial_time_at(state, rate))
         rate_tangent = sp.csr_matrix(rate_constraint_jacobian_at(state, rate))
         storage = storage_rows_at(state, rate)
+        evaluation = None if residual_evaluation_at is None else residual_evaluation_at(state, rate)
+        residual = np.asarray(residual_at(state, rate) if evaluation is None else evaluation.residual)
         # Quasi-Newton search: freeze the state dependence of the projected
         # derivative equation, but use its EXACT rate tangent. Acceptance
         # below never substitutes this search linearization for physics.
+        # The residual's certified rounding travels with it into the joint
+        # elimination: a solid body's dependent net-current row receives the
+        # image of its conducting field rows' rounding, which grows with the
+        # excitation (Cummins dual_star_pwm: 4.5e-8 against a 8.6e-9 bar).
         try:
             pair = sparse_initial_pair(
                 jacobian,
-                np.asarray(residual_at(state, rate)) - mass @ rate,
+                residual - mass @ rate,
                 mass,
                 state,
                 algebraic_rows=storage.algebraic_rows,
@@ -572,6 +578,7 @@ def finite_storage_actual_rate_initial_pair(
                 sparse_state_indices=sparse_state_indices,
                 rate_jacobian=rate_tangent,
                 tolerance=tolerance,
+                residual_allowance=construction_allowance(rate, mass, residual, evaluation),
             )
         except ValueError as error:
             msg = 'actual-rate finite storage equations lack a compatible physical initial pair'

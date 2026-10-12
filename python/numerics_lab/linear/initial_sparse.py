@@ -79,6 +79,7 @@ def sparse_initial_pair(
     rate_jacobian=None,
     sparse_state_indices=None,
     tolerance=1e-10,
+    residual_allowance=None,
 ):
     """Solve actual index-two equations without dense field-sized nullspaces.
 
@@ -146,6 +147,7 @@ def sparse_initial_pair(
             state=initial,
             rate_tangent=rate_tangent,
             sparse_state_indices=sparse_state_indices,
+            residual_allowance=residual_allowance,
         )
         return SparseInitialPair(initial + correction[:n], correction[n:], unique)
     matrix = sp.bmat(
