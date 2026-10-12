@@ -164,6 +164,10 @@ def _sparse_joint_border(
         + abs(carried)
         + gamma * (abs(rhs[remaining_rows]) + abs(left) @ (abs(driven_base) + abs(slack_base)) + abs(carried))
     )
+    driven_rows = abs(selected_rhs) > allowance[selected_rows]
+    inherited += _driven_allowance_image(
+        block, left, np.where(driven_rows, allowance[selected_rows], 0.0), abs(forcing) > inherited
+    )
     supported = np.asarray(schur.getnnz(axis=1)).ravel() != 0
     if np.any(abs(forcing[~supported]) > inherited[~supported]):
         msg = 'joint stored state contradicts actual eliminated original rows'
@@ -189,6 +193,54 @@ def _sparse_joint_border(
         msg = 'joint stored-coordinate equations require additional physical state authority'
         raise ValueError(msg)
     return correction, full_directions[n : 2 * n]
+
+
+def _driven_allowance_image(block, left, bound, needed):
+    """``|left B^-1| bound`` on the rows that need it: a DRIVEN row's certified rounding, eliminated.
+
+    A driven eliminated row (its forcing outside its own allowance) still carries its residual's
+    rounding ``|delta_j| <= bound_j``, and elimination maps it into a retained row as
+    ``left B^-1 delta`` -- signed, so no forward solve bounds it. The row's adjoint ``y`` (``B^T y
+    = left^T``) does: ``|y| . bound``. Formed only for rows whose forcing exceeds the allowance
+    they already inherit, and granted only when the refined adjoint is NORMWISE backward stable
+    (``max|B^T y - left^T| <= gamma_k max(|B^T||y| + |left|)``); otherwise the row inherits
+    nothing more and its refusal stands. ``y`` is the computed elimination's adjoint -- the same
+    computed elimination whose forward image the inherited term already reads -- and its residual
+    forward error is estimated by the next refinement correction, whose image is added; that one
+    term is an estimate, not a certificate, and is stated as such. Componentwise stability is not
+    asked: measured on Cummins, rows of the mixed-unit block with a two-entry support keep their
+    whole (1e-14..1e-8) defect while the normwise ratio is 0.006..0.013.
+    """
+    image = np.zeros(left.shape[0])
+    rows = np.flatnonzero(needed & (np.asarray(sp.csr_matrix(left).getnnz(axis=1)).ravel() != 0))
+    if not np.any(bound) or not rows.size:
+        return image
+    transposed = sp.csr_matrix(block.T)
+    try:
+        normalized, _ = normalize_sparse_rows(transposed, np.zeros(transposed.shape[0]))
+        factor = splu(normalized.tocsc())
+    except (RuntimeError, ValueError):
+        return image
+
+    def correction(defect):
+        return factor.solve(normalize_sparse_rows(transposed, defect)[1])
+
+    count = float(np.max(transposed.getnnz(axis=1))) + 1.0
+    gamma = count * np.finfo(float).eps / (1 - count * np.finfo(float).eps)
+    for row in rows:
+        target = np.asarray(left[row].toarray()).ravel()
+        # Refined here rather than through `refine_factored_solution`, whose magnitude gate
+        # refuses this mixed-unit adjoint (cond_1 ~ 1e25 on Cummins) although its refinement
+        # trajectory collapses; the normwise check below is the acceptance.
+        adjoint = correction(target)
+        for _ in range(4):
+            adjoint = adjoint + correction(target - transposed @ adjoint)
+        defect = target - transposed @ adjoint
+        scale = np.max(abs(transposed) @ abs(adjoint) + abs(target))
+        if np.all(np.isfinite(adjoint)) and np.max(abs(defect)) <= gamma * scale:
+            # The remaining forward error of ``y`` is the next correction; its image is added.
+            image[row] = (abs(adjoint) + abs(correction(defect))) @ bound
+    return image
 
 
 def _triangular_joint_solver(matrix, mass, stored_rows, stored_positions, indices, differential):
