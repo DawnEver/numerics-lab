@@ -55,8 +55,12 @@ def certified_sparse_product(left, right):
     gamma = counts.multiply(np.finfo(float).eps).tocsr()
     gamma.data = gamma.data / (1 - gamma.data)
     bound = csr_matrix(magnitude.multiply(gamma))
-    uncertified = csr_matrix(abs(product) <= bound).multiply(product != 0)
-    product = product - product.multiply(uncertified)
+    # JUDGED ON THE PRODUCT'S OWN ENTRIES: a sparse `<=` is True at every implicit zero, and
+    # materialised n^2 of them on a field-sized product (76 GiB, ipm_uv_cummins, 2026-10-12).
+    product.eliminate_zeros()
+    rows = np.repeat(np.arange(product.shape[0]), np.diff(product.indptr))
+    limit = np.asarray(bound[rows, product.indices]).ravel()
+    product.data[np.abs(product.data) <= limit] = 0.0
     product.eliminate_zeros()
     return csr_matrix(product)
 
