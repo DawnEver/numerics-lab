@@ -94,7 +94,7 @@ def factor_matrix(matrix: object) -> object:
 
     THE ONE HOME for "factor this operator however it is stored", shared by :class:`FactorCache`
     and by the bordered field<->circuit tangent
-    (:meth:`~motronics.hamilton.coupling.monolithic.BlockCoupledProblem.solve_tangent`), which
+    (:meth:`~motronics.hamilton.field_port.stacked.StackedFieldCircuitProblem.bordered_solve`), which
     factors its sparse field block ONCE and back-substitutes it for several right-hand sides. A
     second spelling of this dispatch is a second answer to "is a scalar jacobian a matrix", which
     is exactly the branch below.
