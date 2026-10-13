@@ -135,6 +135,7 @@ __all__ = [
     'StepNotConverged',
     'StepTolerance',
     'integrate_transient',
+    'march_log_record',
 ]
 
 #: Events tolerated inside ONE nominal cell before the function is declared chattering. A genuine
@@ -234,8 +235,18 @@ def _rss_bytes() -> int:
     return int(psutil.Process().memory_info().rss)
 
 
+def march_log_record(body: str, **attributes) -> dict:
+    """THE one march log line: OpenTelemetry log-record field names, attributes namespaced ``march.``."""
+    return {
+        'timestamp': datetime.now(UTC).isoformat(),
+        'severity_text': 'WARN' if body in {'reject', 'nonconverged'} else 'INFO',
+        'body': body,
+        'attributes': {f'march.{k}': v for k, v in attributes.items()},
+    }
+
+
 class _StepLog:
-    """One JSON object per line, OpenTelemetry log-record field names, to a caller-owned text stream."""
+    """One JSON object per line (:func:`march_log_record`), to a caller-owned text stream."""
 
     def __init__(self, stream) -> None:
         self.stream = stream
@@ -243,13 +254,7 @@ class _StepLog:
     def __call__(self, body: str, **attributes) -> None:
         if self.stream is None:
             return
-        record = {
-            'timestamp': datetime.now(UTC).isoformat(),
-            'severity_text': 'WARN' if body in {'reject', 'nonconverged'} else 'INFO',
-            'body': body,
-            'attributes': {f'march.{k}': v for k, v in attributes.items()},
-        }
-        print(json.dumps(record), file=self.stream)
+        print(json.dumps(march_log_record(body, **attributes)), file=self.stream)
 
 
 @dataclass(frozen=True)
