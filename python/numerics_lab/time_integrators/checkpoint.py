@@ -1,6 +1,7 @@
 """Portable numerical history for restarting a native transient, without pickle execution."""
 
 import hashlib
+import itertools
 import json
 import math
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ __all__ = [
     'EECCheckpointState',
     'HistoryPresence',
     'ScheduleCheckpointState',
+    'StepControlCheckpointState',
     'TransientCheckpoint',
     'capture_history',
     'model_digest',
@@ -126,6 +128,87 @@ class ScheduleCheckpointState:
         return cls(_number(data['segment_start']), data['tasks'])
 
 
+def _plain_tolerance(value) -> float | list[float]:
+    array = np.asarray(value, dtype=float)
+    if not np.all(np.isfinite(array)):
+        msg = 'checkpoint step-control tolerance must be finite'
+        raise ValueError(msg)
+    return array.tolist()
+
+
+@dataclass(frozen=True)
+class StepControlCheckpointState:
+    """The local-error controller's history: what an adaptive march decides its next step FROM.
+
+    ``points`` are the last accepted ``(t, u)`` the predictor extrapolates through (at most ``order + 1``,
+    the newest at the record's time; ONE after a start, a restart or an event, which is the controller's
+    own bootstrap), ``next_step`` the step it proposed after the record's accepted step. ``tolerance`` is
+    the ``{rtol, atol, h_min}`` it was taken under: a resume under another tolerance would be another march,
+    so it refuses rather than reusing a history sized for different bars.
+    """
+
+    points: tuple[tuple[float, tuple[float, ...]], ...]
+    next_step: float
+    tolerance: dict
+
+    def __post_init__(self) -> None:
+        _number(self.next_step)
+        if self.next_step <= 0.0 or not self.points:
+            msg = 'checkpoint step-control state needs accepted points and a positive next step'
+            raise ValueError(msg)
+        times = [_number(t) for t, _u in self.points]
+        if any(b <= a for a, b in itertools.pairwise(times)) or len({len(u) for _t, u in self.points}) != 1:
+            msg = 'checkpoint step-control points must increase in time and share one state size'
+            raise ValueError(msg)
+        for _t, u in self.points:
+            for value in u:
+                _number(value)
+        if set(self.tolerance) != {'rtol', 'atol', 'h_min'}:
+            msg = 'checkpoint step-control tolerance must carry exactly rtol, atol and h_min'
+            raise ValueError(msg)
+        validate_history_json(self.tolerance)
+
+    @classmethod
+    def of(cls, points, next_step: float, tolerance) -> 'StepControlCheckpointState':
+        return cls(
+            tuple((float(t), tuple(float(x) for x in np.asarray(u, dtype=float))) for t, u in points),
+            float(next_step),
+            cls.tolerance_of(tolerance),
+        )
+
+    @staticmethod
+    def tolerance_of(tolerance) -> dict:
+        """The canonical plain form of a ``StepTolerance`` -- the one the record and a resume compare."""
+        return {
+            'rtol': _plain_tolerance(tolerance.rtol),
+            'atol': _plain_tolerance(tolerance.atol),
+            'h_min': None if tolerance.h_min is None else float(tolerance.h_min),
+        }
+
+    def to_mapping(self) -> dict:
+        return {
+            'points': [[t, list(u)] for t, u in self.points],
+            'next_step': self.next_step,
+            'tolerance': self.tolerance,
+        }
+
+    @classmethod
+    def from_mapping(cls, data) -> 'StepControlCheckpointState':
+        if (
+            not isinstance(data, dict)
+            or set(data) != {'points', 'next_step', 'tolerance'}
+            or not isinstance(data['points'], list)
+            or any(not isinstance(p, list) or len(p) != 2 or not isinstance(p[1], list) for p in data['points'])
+        ):
+            msg = 'checkpoint step_control_state must carry exactly points, next_step and tolerance'
+            raise ValueError(msg)
+        return cls(
+            tuple((_number(t), tuple(_number(x) for x in u)) for t, u in data['points']),
+            _number(data['next_step']),
+            data['tolerance'],
+        )
+
+
 @dataclass(frozen=True)
 class TransientCheckpoint:
     """Integrator history plus caller-owned problem identity and last accepted step size.
@@ -154,6 +237,7 @@ class TransientCheckpoint:
     step_origin: float | None = None
     event_state: EventCheckpointState | None = None
     schedule_state: ScheduleCheckpointState | None = None
+    step_control_state: StepControlCheckpointState | None = None
 
     def __post_init__(self) -> None:
         if self.problem_context is not None:
@@ -241,6 +325,13 @@ class TransientCheckpoint:
         ):
             msg = 'checkpoint schedule_state must be a ScheduleCheckpointState whose segment starts by its time'
             raise ValueError(msg)
+        if self.step_control_state is not None and (
+            type(self.step_control_state) is not StepControlCheckpointState
+            or self.step_control_state.points[-1][0] != self.time
+            or len(self.step_control_state.points[-1][1]) != history.shape[1]
+        ):
+            msg = 'checkpoint step-control points must end at the record time with its state size'
+            raise ValueError(msg)
 
     def validate_restart(self, problem_key, integrator, time, size):
         if (problem_key, integrator, time, size) != (
@@ -274,6 +365,8 @@ class TransientCheckpoint:
             mapping['event_state'] = self.event_state.to_mapping()
         if self.schedule_state is not None:
             mapping['schedule_state'] = self.schedule_state.to_mapping()
+        if self.step_control_state is not None:
+            mapping['step_control_state'] = self.step_control_state.to_mapping()
         return mapping
 
     @classmethod
@@ -294,7 +387,9 @@ class TransientCheckpoint:
         if (
             not isinstance(data, dict)
             or not expected <= set(data)
-            or set(data) - expected - {'eec_state', 'step_origin', 'event_state', 'schedule_state'}
+            or set(data)
+            - expected
+            - {'eec_state', 'step_origin', 'event_state', 'schedule_state', 'step_control_state'}
             or type(data['schema_version']) is not int
             or data['schema_version'] != 3
         ):
@@ -316,6 +411,11 @@ class TransientCheckpoint:
             event_state=None if 'event_state' not in data else EventCheckpointState.from_mapping(data['event_state']),
             schedule_state=(
                 None if 'schedule_state' not in data else ScheduleCheckpointState.from_mapping(data['schedule_state'])
+            ),
+            step_control_state=(
+                None
+                if 'step_control_state' not in data
+                else StepControlCheckpointState.from_mapping(data['step_control_state'])
             ),
             states=tuple(tuple(_number(value) for value in state) for state in data['states']),
             velocity=None if data['velocity'] is None else tuple(_number(value) for value in data['velocity']),
@@ -468,7 +568,17 @@ def owns_history(problem) -> bool:
 
 
 def _checkpoint_of(
-    problem, state, dt, key, name, *, previous_time=None, eec_state=None, step_origin=None, event_state=None
+    problem,
+    state,
+    dt,
+    key,
+    name,
+    *,
+    previous_time=None,
+    eec_state=None,
+    step_origin=None,
+    event_state=None,
+    step_control_state=None,
 ):
     if state.stage != 0:
         msg = 'portable checkpoint requires an accepted macrostep, not an intermediate stage'
@@ -487,4 +597,5 @@ def _checkpoint_of(
         eec_state=eec_state,
         step_origin=step_origin,
         event_state=event_state,
+        step_control_state=step_control_state,
     )

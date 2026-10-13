@@ -108,6 +108,7 @@ from motronics.gauss.time_integrators._step import HeldFactor, ProblemCapabiliti
 from motronics.gauss.time_integrators._time_lattice import adaptive_lattice
 from motronics.gauss.time_integrators.checkpoint import (
     EECCheckpointState,
+    StepControlCheckpointState,
     _checkpoint_of,
     owns_history,
     restore_history_checkpoint,
@@ -721,9 +722,6 @@ def integrate_transient(
         if integrator.name not in _CHECKPOINT_INTEGRATORS:
             msg = f'a portable checkpoint carries {_CHECKPOINT_INTEGRATORS} history, not {integrator.name}'
             raise ValueError(msg)
-        if step_control is not None:
-            msg = 'a checkpoint does not carry the local-error controller history; declare one or the other'
-            raise ValueError(msg)
         validate_history_owner(problem)
     if step_times is not None:
         grid = np.asarray(step_times, dtype=float)
@@ -837,6 +835,17 @@ def integrate_transient(
     lte_history: list[tuple[float, NDArray]] = [(state.t, u0)]
     h_floor = dt * 1e-6 if step_control is None or step_control.h_min is None else step_control.h_min
     h_ctrl = dt  # the local-error controller's next step size (only consulted with step_control)
+    if restart is not None and (restart.step_control_state is None) != (step_control is None):
+        msg = 'checkpoint step control does not match the march: a record and its resume declare it both or neither'
+        raise ValueError(msg)
+    if restart is not None and step_control is not None:
+        saved_control = restart.step_control_state
+        if saved_control.tolerance != StepControlCheckpointState.tolerance_of(step_control):
+            msg = 'checkpoint step control was taken under another tolerance; that resume would be another march'
+            raise ValueError(msg)
+        # The controller resumes where it stood: its predictor points and the step it proposed.
+        lte_history = [(t, np.array(u, dtype=float)) for t, u in saved_control.points]
+        h_ctrl = saved_control.next_step
     g_prev = [float(g(u0, state.t)) for g in event_fns]
     breakpoints = tuple(time_breakpoints)
     observations = tuple(observation_times)
@@ -1036,6 +1045,9 @@ def integrate_transient(
             eec_state=eec_state,
             step_origin=lattice_origin,
             event_state=event_state,
+            step_control_state=None
+            if step_control is None
+            else StepControlCheckpointState.of(lte_history, h_ctrl, step_control),
         )
 
     def emit_checkpoint(target: float | None, event_count: int) -> None:
