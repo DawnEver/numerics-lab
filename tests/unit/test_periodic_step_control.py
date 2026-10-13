@@ -3,9 +3,8 @@
 import numpy as np
 import pytest
 
-import motronics.gauss.time_integrators as runtime
 from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.time_integrators import integrate_transient
+from motronics.gauss.time_integrators import _step, integrate_transient
 from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint
 from motronics.gauss.time_integrators.periodic import periodic_converged
 
@@ -53,14 +52,14 @@ def test_matching_endpoints_do_not_hide_changing_period_shape():
 
 
 def test_adaptive_line_search_is_forwarded(monkeypatch):
-    original = runtime._solve_step
+    original = _step._solve_step
     modes = []
 
     def record(*args, **kwargs):
         modes.append(kwargs.get('line_search'))
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(runtime, '_solve_step', record)
+    monkeypatch.setattr(_step, '_solve_step', record)
     integrate_transient(Constant(), TransientStudy(0, 0.2, 0.1), np.ones(1), adaptive=True, line_search='energy')
     assert modes and set(modes) == {'energy'}
 
@@ -106,4 +105,31 @@ def test_eec_restart_refuses_missing_cycle_origin_history():
             checkpoint_key='decay',
             eec_period=1.0,
             eec_affine_first_order=True,
+        )
+
+
+def test_an_explicit_table_records_the_parent_lattice_it_was_cut_from():
+    """ONE MEANING (2026-10-10): `step_times` is the grid; `step_origin` is only its PROVENANCE --
+    the parent lattice ``origin + k dt`` the table was derived from -- carried on the checkpoint so a
+    restart can re-derive the same table. It never moves a step.
+    """
+    times = (0.0, 0.1, 0.25, 0.4, 0.6)
+    captured = []
+    solution = integrate_transient(
+        Ramp(),
+        TransientStudy(0, 0.6, 0.1),
+        np.array([0.0]),
+        step_times=times,
+        step_origin=-0.2,
+        checkpoint_key='table-provenance',
+        on_checkpoint=captured.append,
+    )
+    assert solution.times == list(times)
+    assert captured and all(checkpoint.step_origin == -0.2 for checkpoint in captured)
+
+
+def test_a_table_provenance_after_t0_is_refused():
+    with pytest.raises(ValueError, match='step_origin'):
+        integrate_transient(
+            Ramp(), TransientStudy(0, 0.6, 0.1), np.zeros(1), step_times=(0.0, 0.3, 0.6), step_origin=0.1
         )

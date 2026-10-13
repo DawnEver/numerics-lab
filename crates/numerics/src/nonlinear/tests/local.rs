@@ -61,3 +61,10 @@ fn budgeted_newton_obeys_small_element_convergence_and_forwards_tolerances() {
     assert!(recorded.windows(2).all(|pair| pair[1] <= pair[0]));
     assert!(recorded.iter().all(|&x| x >= reference * 1e-10));
 }
+
+#[test]
+fn a_converged_fields_roundoff_is_not_a_change() {
+    let old = vec![vec![vec![1.82], vec![1.084_202_172_485_502_9e-15]]];
+    let new = vec![vec![vec![1.82], vec![-1.084_202_172_485_502_9e-15]]];
+    assert!(local_change(&old, &new).unwrap() < 1e-6);
+}

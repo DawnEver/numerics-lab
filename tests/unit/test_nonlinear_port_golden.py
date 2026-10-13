@@ -33,23 +33,17 @@ Two floors are asserted rather than assumed: every registered strategy must appe
 fixtures must include one that DAMPS (alpha leaves 1.0) and one that does not. Without the second,
 the whole alpha-ratchet half of the port would be untested by a golden that still looked full.
 
-Regenerate deliberately, never as a side effect of a run::
-
-    MOTRONICS_REGEN_PORT_GOLDENS=1 .venv/Scripts/python.exe -m pytest \
-        tests/unit/gauss/test_nonlinear_port_golden.py
-
-A golden that rewrites itself when it disagrees is not a golden.
+Regenerate deliberately with `.venv/Scripts/python.exe -m tests.port_goldens`.
 """
 
 from __future__ import annotations
 
 import math
-import os
 import re
 
 import numpy as np
 import pytest
-from tests.port_goldens import dump_golden, load_golden
+from tests.port_goldens import load_golden, register
 
 from motronics.core.utils.config import repo_root
 from motronics.gauss.nonlinear import ITERATION_REGISTRY, AssembledState, get_strategy
@@ -293,15 +287,10 @@ def _build() -> dict:
 
 
 def _load() -> dict:
-    # Under regeneration the golden is being REWRITTEN by a sibling test, and xdist runs the two
-    # in different workers -- a reader that raced the writer read a truncated file. A regeneration
-    # run is not a verdict about anything, so every reader stands down for it.
-    if os.environ.get('MOTRONICS_REGEN_PORT_GOLDENS'):
-        pytest.skip('regenerating: the golden is being rewritten by a sibling test')
     if not _GOLDEN.is_file():
         pytest.fail(
             f'{_GOLDEN} is missing. It is a committed artifact, not a cache -- regenerate it '
-            f'deliberately with MOTRONICS_REGEN_PORT_GOLDENS=1 and commit the result.'
+            f'deliberately with `python -m tests.port_goldens` and commit the result.'
         )
     return load_golden(_GOLDEN)
 
@@ -357,10 +346,6 @@ def test_the_live_python_still_produces_the_frozen_trajectories() -> None:
     constrain intermediate linear-algebra rounding. Neither the golden nor a physical
     acceptance threshold is regenerated here; planted behavior defects still fail.
     """
-    if os.environ.get('MOTRONICS_REGEN_PORT_GOLDENS'):
-        dump_golden(_GOLDEN, _build())
-        pytest.skip(f'regenerated {_GOLDEN} -- commit it, then run again without the env var')
-
     golden = _load()
     live = _build()
     assert sorted(golden['fixtures']) == sorted(live['fixtures']), 'the fixture set moved'
@@ -440,3 +425,6 @@ def test_the_nu_damped_mix_is_the_hand_computed_one() -> None:
     folded = _load()['nu_damped']['folded']
     assert folded[:3] == [[1.0, 2.0], [3.0, 6.0], [2.0, 4.0]]
     assert folded[3] == pytest.approx([3.8, 7.6])
+
+
+register(_GOLDEN, _build)

@@ -44,11 +44,70 @@ __all__ = [
     'direct_refinement_correction',
     'direct_relative_residual',
     'move_is_this_systems_conditioning',
+    'refine_factored_solution',
     'refinement_move_trajectory',
     'refinement_residual',
     'reject_unsolved_direct_system',
     'repair_direct_solution',
 ]
+
+
+def refine_factored_solution(matrix, rhs, initial, solve_correction):
+    """Refine original rows with an owned factor; retain the best backward error."""
+    matrix = sp.csr_matrix(matrix)
+    rhs, best = np.asarray(rhs, dtype=float), np.array(initial, dtype=float, copy=True)
+    if (
+        matrix.shape != (best.size, best.size)
+        or best.ndim != 1
+        or rhs.shape != best.shape
+        or not np.isfinite(matrix.data).all()
+    ):
+        msg = 'factored refinement requires finite square operators and aligned vectors'
+        raise LinearSolveError(msg)
+
+    def measured(value):
+        defect = rhs - matrix @ value
+        magnitude = abs(matrix) @ abs(value) + abs(rhs)
+        if not all(np.isfinite(item).all() for item in (value, defect, magnitude)):
+            msg = 'factored refinement requires finite original row operands'
+            raise LinearSolveError(msg)
+        ratio = np.divide(abs(defect), magnitude, out=np.zeros_like(defect), where=magnitude != 0)
+        ratio[(magnitude == 0) & (defect != 0)] = np.inf
+        return defect, float(np.max(ratio, initial=0))
+
+    defect, score = measured(best)
+    for _ in range(3):
+        if not np.any(defect):
+            break
+        correction = np.asarray(solve_correction(defect), dtype=float)
+        if correction.shape != best.shape:
+            msg = 'factored refinement correction must retain actual coordinate shape'
+            raise LinearSolveError(msg)
+        candidate = best + correction
+        next_defect, next_score = measured(candidate)
+        if next_score >= score:
+            break
+        best, defect, score = candidate, next_defect, next_score
+    move = None
+    relative = direct_relative_residual(matrix, rhs, best)
+    if relative is not None and relative > _DIRECT_RESIDUAL_RTOL:
+        # The owned factor may use actual mixed-unit minors or row normalization.
+        # Refactoring the unscaled operator would judge a different numerical solve.
+        compensated = refinement_residual(matrix, rhs, best)
+        forcing = defect if compensated is None else compensated
+        correction = np.asarray(solve_correction(forcing), dtype=float)
+        if correction.shape != best.shape or not np.isfinite(correction).all():
+            msg = 'factored refinement correction must retain finite actual coordinate shape'
+            raise LinearSolveError(msg)
+        # A callback cannot certify itself by returning a small or zero vector.
+        # First retain the original equation guard for A*correction = forcing.
+        reject_unsolved_direct_system(matrix, forcing, correction, 'factored_refinement_correction')
+        correction_norm, solution_norm = float(np.linalg.norm(correction)), float(np.linalg.norm(best))
+        move = (
+            correction_norm / solution_norm if solution_norm != 0 else (0.0 if correction_norm == 0 else float('inf'))
+        )
+    reject_unsolved_direct_system(matrix, rhs, best, 'factored_refinement', refinement=move)
+    return best
 
 
 # Direct-solve singular guard, in TWO stages. The residual is the TRIGGER, never the verdict.
@@ -149,8 +208,8 @@ _DIRECT_REFINEMENT_MAX_STEPS = 4
 #
 # Neither point carries n, and the first refinement move goes as cond*eps -- so a PHYSICALLY SOUND
 # solve crosses the ceiling simply by getting bigger, and the larger the problem the more certain
-# the false refusal. Measured 2026-09-17 on `spm_ferrari_luce_rear --scope full --chart
-# cartesian_3d --select fea,tet --mesh-size "5 mm"`: n = 123,233, a move of 1.434e-03 that is
+# the false refusal. Measured 2026-09-17 on `spm_ferrari_luce_rear --scope full --set
+# solve.chart=cartesian_3d --select fea,tet --set mesh.mesh_size="5 mm"`: n = 123,233, a move of 1.434e-03 that is
 # 1.43x past the old ceiling, and a trajectory [1.434e-03, 2.062e-06, 2.961e-09, 4.252e-12] that
 # collapses nine decades to three orders INSIDE `_DIRECT_REFINEMENT_RTOL`. The solve was always
 # solvable; the instrument said otherwise, and it said so more confidently the bigger n grew.
@@ -233,8 +292,8 @@ _DEKKER_SPLIT = 134217729.0
 def refinement_residual(matrix, rhs, x) -> np.ndarray | None:
     """``b - A x`` computed to DOUBLE the working precision, or ``None`` when it cannot be.
 
-    WHY THIS EXISTS, measured 2026-09-16 on `spm_ferrari_luce_rear --scope full --chart
-    cartesian_3d --select fea,tet` at 3.0 mm: an n=207104 H(curl) solve was refused as "singular /
+    WHY THIS EXISTS, measured 2026-09-16 on `spm_ferrari_luce_rear --scope full --set
+    solve.chart=cartesian_3d --select fea,tet` at 3.0 mm: an n=207104 H(curl) solve was refused as "singular /
     rank-deficient" on a refinement move of **1.635e-06** -- 1.6x the bar, against the committed
     singular plant's 4.7 and the well-posed sweep's 1e-13 (see :data:`_DIRECT_REFINEMENT_RTOL`).
     A system that is genuinely rank-deficient does not land at 1.6x the bar. What it had was a
@@ -616,7 +675,7 @@ def reject_unsolved_direct_system(matrix, rhs, x, backend: str, *, refinement: f
     :class:`MatrixRankWarning` on a zero pivot and then returns either NaNs (the belt and
     :func:`~motronics.gauss.linear.reject_nonfinite_solution` catch those) or a finite vector that
     does not satisfy ``A x = b``.
-    Measured on the production CLI at ``lipo_inductor --mesh-size 6mm``: order 157, condition
+    Measured on the production CLI at ``lipo_inductor --set mesh.mesh_size="6mm"``: order 157, condition
     estimate 1.5e17, relative residual **1.6e+01**.
 
     TWO STAGES, because the residual alone cannot tell a failed solve from a merely ill-CONDITIONED

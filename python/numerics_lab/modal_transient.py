@@ -10,6 +10,8 @@ from scipy.sparse.linalg import eigsh
 from motronics.gauss.modal_basis import semidefinite_modes
 from motronics.gauss.time_integrators import TransientSolution, get_integrator, integrate_transient
 
+__all__ = ['ModalTransientResult', 'integrate_modal_transient']
+
 
 @dataclass(frozen=True)
 class ModalTransientResult:
@@ -133,7 +135,7 @@ def integrate_modal_transient(
         if a0 is None
         else shapes.T @ (m @ np.asarray(a0, dtype=float))
     )
-    projected = integrate_transient(reduced, study, q0, v0=qv, a0=qa)
+    projected = integrate_transient(reduced, study, q0, v0=qv, a0=qa, on_nonconverged='label')
     physical = TransientSolution(
         times=projected.times,
         states=[shapes @ q for q in projected.states],

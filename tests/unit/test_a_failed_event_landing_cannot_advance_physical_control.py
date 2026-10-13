@@ -7,12 +7,13 @@ import pytest
 from tests.unit.gauss._helpers import _RampWithToggle
 
 from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
+from motronics.gauss.time_integrators import _step as _step_mod
 
 
 @pytest.mark.parametrize('adaptive', [False, True])
 def test_failed_landing_cannot_call_the_physical_handler(monkeypatch, adaptive):
-    events = import_module('motronics.gauss.time_integrators.events')
-    original = events._solve_step
+    events = import_module('motronics.gauss.time_integrators.march')
+    original = _step_mod._solve_step
     calls = []
 
     def solve_step(*args, **kwargs):
@@ -25,13 +26,13 @@ def test_failed_landing_cannot_call_the_physical_handler(monkeypatch, adaptive):
             return u, False, iterations, residual, floor
         return result
 
-    monkeypatch.setattr(events, '_solve_step', solve_step)
+    monkeypatch.setattr(_step_mod, '_solve_step', solve_step)
     monkeypatch.setattr(events, '_locate_bracket', lambda *_args, **_kwargs: (0.5, 0.5))
     physical_samples = []
     problem = _RampWithToggle(0.5)
     study = TransientStudy(t0=0.0, t1=1.0, dt=1.0, integrator=IntegratorKind.BDF1)
     with pytest.raises(RuntimeError, match='event landing.*did not converge'):
-        events.integrate_transient_with_events(
+        events.integrate_transient(
             problem,
             study,
             np.array([0.0]),

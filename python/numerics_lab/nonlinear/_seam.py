@@ -400,8 +400,8 @@ class _TimeBudgetedSystem:
 DEFAULT_SOLVE_BUDGET_S = 500.0
 
 #: The run-scoped override of :data:`DEFAULT_SOLVE_BUDGET_S`, or ``None`` for the default. A
-#: PROCESS property, like the FEMM COM ceiling: the CLI boundary resolves ``--solve-budget`` over the
-#: case's ``[solve] budget`` once per run (`motronics.cli.target._resolve_solve_budget`), and every
+#: PROCESS property, like the FEMM COM ceiling: the CLI boundary applies ``[solve] budget`` (``--set`` over the
+#: case's table) once per run (`motronics.cli.target._resolve_target`), and every
 #: driver not handed its own ``seconds`` reads :func:`run_solve_budget_s`.
 #:
 #: DECLARED, NOT DERIVED FROM MESH SIZE. The default above is priced by the TIER's arithmetic, not
@@ -606,7 +606,7 @@ class _IncrementTrend:
     read the SAME deaf channel and drew the opposite conclusion from the same silence, so on an
     energy plateau alpha grew every ``_ALPHA_CALM_STEPS`` with nothing able to object.
 
-    MEASURED 2026-09-06 through ``python -m motronics run cases/field/pm/ipm_uv_cummins --select
+    MEASURED 2026-09-06 through ``python -m motronics case run cases/field/pm/ipm_uv_cummins --select
     mec,quad --max-num-iter 600``, the `[sparse]` leg on `picard-damped`. At iteration 119 the
     increment was falling steadily toward the 1e-4 bar (2.03e-4 -> 1.95e-4 -> 1.89e-4) at alpha
     0.137. Recovery raised alpha to 0.205 then 0.308 and the increment blew out ~20x (3.70e-4 ->

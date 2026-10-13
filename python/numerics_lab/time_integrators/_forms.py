@@ -7,15 +7,28 @@ consume this leaf, so importing a concrete scheme never creates a cycle.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 import numpy as np
 import scipy.sparse as sp
 from numpy.typing import NDArray
 
-from motronics.contracts.spec.analysis_formulation import DerivativeWeights, ResidualFloorProblem
+from motronics.contracts.spec.analysis_formulation import DerivativeWeights
 from motronics.gauss.linear import solve_linear_system
 from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint
+
+__all__ = [
+    'ITimeIntegrator',
+    'IntegratorState',
+    'ProjectedRestartIntegrator',
+    'StepForm',
+    'TransientSolution',
+    'residual_floor',
+    'residual_floor_of_magnitude',
+    'same_instant',
+    'seeded_bdf2_state',
+]
+
 
 #: Safety factor on the estimated roundoff floor, DELIBERATELY the same 64 as the DC operating
 #: point's ``laplace.circuit.core.mna_solves._FLOOR_SAFETY``, and for the same stated reason: the
@@ -27,6 +40,11 @@ _FLOOR_SAFETY = 64.0
 
 #: The machine epsilon the floor is written in (double precision -- the marcher is ``float64``).
 _EPS = float(np.finfo(float).eps)
+
+
+def same_instant(a: float, b: float) -> bool:
+    """Join only arithmetic roundoff, not physically distinct clock instants."""
+    return abs(a - b) <= 4 * max(abs(np.spacing(a)), abs(np.spacing(b)))
 
 
 def residual_floor(tangent, u: NDArray[np.floating]) -> float:
@@ -88,13 +106,36 @@ class IntegratorState:
 
     ``us`` holds past state vectors most-recent-LAST (BDF2 reads the last two); ``v`` / ``a`` are
     the velocity ``u_dot`` and acceleration ``u_ddot`` at the last step (the second-order schemes
-    propagate them, the first-order schemes leave them ``None``). ``t`` is the last step's time.
+    and the trapezoid propagate them, BDF leaves them ``None``). ``t`` is the last step's time.
+
+    ``h`` is the spacing of the last step (``None`` right after a start/restart): it IS history,
+    because a multistep form differentiates against it, so it lives here and is checkpointed and
+    rolled back with the vectors rather than tracked by each marcher. ``stage`` is the next stage
+    of a multi-stage scheme (TR-BDF2); single-stage schemes keep it 0.
+    ``prepared_candidate`` is an immutable handle to an owner's speculative hidden-history
+    snapshot. Copies retain this explicit authority; portable checkpoints restore the owner's
+    actual history instead of serializing process-local handles.
     """
 
     us: list[NDArray[np.floating]]
     t: float
     v: NDArray[np.floating] | None = None
     a: NDArray[np.floating] | None = None
+    h: float | None = None
+    stage: int = 0
+    prepared_candidate: object | None = None
+
+    def copy(self) -> IntegratorState:
+        """A deep copy -- a checkpoint must never alias the arrays a probe step goes on to touch."""
+        return IntegratorState(
+            us=[np.array(u, dtype=float, copy=True) for u in self.us],
+            t=self.t,
+            v=None if self.v is None else np.array(self.v, dtype=float, copy=True),
+            a=None if self.a is None else np.array(self.a, dtype=float, copy=True),
+            h=self.h,
+            stage=self.stage,
+            prepared_candidate=self.prepared_candidate,
+        )
 
     @property
     def last_u(self) -> NDArray[np.floating]:
@@ -107,7 +148,8 @@ class StepForm:
 
     Every implicit derivative is affine in the unknown: ``u_arg = alpha0*u + h_u`` (the state the
     residual is evaluated at -- the identity ``u`` for BDF/Newmark, an intermediate point for
-    generalized-alpha), ``u_dot = alpha1*u + h_dot``, ``u_ddot = alpha2*u + h_ddot``. The slopes
+    generalized-alpha), ``u_dot = alpha1*(u-rate_origin) + h_dot`` (zero origin when absent),
+    ``u_ddot = alpha2*u + h_ddot``. The slopes
     are exactly the :class:`DerivativeWeights` the jacobian consumes; the offsets are the history.
     ``t_eval`` is the time the residual/source is sampled at (shifted by ``alpha_f*dt`` for
     generalized-alpha).
@@ -118,12 +160,15 @@ class StepForm:
     h_dot: NDArray[np.floating]
     h_ddot: NDArray[np.floating]
     t_eval: float
+    #: Rate history is centered here to avoid subtracting large weighted states.
+    rate_origin: NDArray[np.floating] | None = None
 
     def u_arg(self, u: NDArray[np.floating]) -> NDArray[np.floating]:
         return self.weights.alpha0.real * u + self.h_u
 
     def u_dot(self, u: NDArray[np.floating]) -> NDArray[np.floating]:
-        return self.weights.alpha1.real * u + self.h_dot
+        delta = u if self.rate_origin is None else u - self.rate_origin
+        return self.weights.alpha1.real * delta + self.h_dot
 
     def u_ddot(self, u: NDArray[np.floating]) -> NDArray[np.floating]:
         return self.weights.alpha2.real * u + self.h_ddot
@@ -140,6 +185,12 @@ class ITimeIntegrator(Protocol):
 
     name: str
     order: int
+    #: Implicit solves per step (TR-BDF2: 2). The marcher runs ``prepare``/solve/``advance`` this
+    #: many times per step; the intermediate stage states never join the trajectory.
+    stages: int
+    #: The local-truncation-error constant ``C`` in ``LTE = C h^(order+1) u^(order+1)``: what the
+    #: step-size controller scales its predictor-corrector difference by.
+    error_constant: float
 
     def weights(self, dt: float) -> DerivativeWeights: ...
 
@@ -154,8 +205,19 @@ class ITimeIntegrator(Protocol):
     def prepare(self, state: IntegratorState, dt: float, t_new: float) -> StepForm: ...
 
     def advance(
-        self, state: IntegratorState, u_new: NDArray[np.floating], dt: float, t_new: float
+        self, state: IntegratorState, u_new: NDArray[np.floating], dt: float, t_new: float, form: StepForm
     ) -> IntegratorState: ...
+
+    def restart(self, state: IntegratorState, u: NDArray[np.floating], t: float) -> IntegratorState:
+        """Drop the derivative history at a discontinuity (an event), keeping what stays continuous."""
+        ...
+
+
+@runtime_checkable
+class ProjectedRestartIntegrator(Protocol):
+    """Optional actual scheme-owned seed of an explicit outgoing derivative pair."""
+
+    def restart_at_pair(self, state, u, t, rate, acceleration) -> IntegratorState: ...
 
 
 #: THE CONCRETE INTEGRATORS AND THEIR REGISTRY live in `_integrators.py`, split 2026-08-22
@@ -186,6 +248,9 @@ class TransientSolution:
     #: Actual residual-evaluation rates at committed times[1:], with no invented t0 rate.
     #: None means a producer did not record them; it is NOT an all-zero derivative.
     state_rates: list[NDArray[np.floating]] | None = None
+    #: Actual final-stage residual times at times[1:], including left limits at edges.
+    #: None means unrecorded; consumers must not infer them by tolerant matching.
+    residual_times: list[float] | None = None
     #: Sparse pre-handler residual states keyed by accepted rate index. None is unrecorded;
     #: an empty dict verifies that every published state retains its residual-side value.
     rate_state_overrides: dict[int, NDArray[np.floating]] | None = None
@@ -206,6 +271,11 @@ class TransientSolution:
     #: ``nonconverged_times``, this includes the eventful march's DISCARDED bisection probes:
     #: it is a diagnostic about the SOLVES, not a property of the trajectory.
     floor_converged_times: list[float] = field(default_factory=list)
+    #: The located state events as ``(function index, time)`` pairs (empty without ``event_fns``).
+    events: list[tuple[int, float]] = field(default_factory=list)
+    #: Owned final integration state: segmented marches preserve continuous velocity/acceleration
+    #: while restarting derivative history at a sampled-input discontinuity.
+    final_integrator_state: IntegratorState | None = None
     checkpoint: TransientCheckpoint | None = None
     corrected_times: list[float] = field(default_factory=list)
     #: Actual runtime coarse correction model; absent when correction is not enabled.
@@ -213,6 +283,21 @@ class TransientSolution:
     #: Accepted steps whose predictor-curvature indicator exceeded its requested bar.
     #: Independent of Newton convergence; a minimum step can force their acceptance.
     indicator_unmet_times: list[float] = field(default_factory=list)
+    #: Discontinuities dispatched only at accepted fixed-lattice states, not located probes.
+    landed_events: list[tuple[int, float]] = field(default_factory=list)
+    #: Genuine accepted observer law changes that restarted derivative history, not located event IDs.
+    accepted_discontinuities: list[float] = field(default_factory=list)
+
+    @property
+    def history_restarts(self) -> tuple[float, ...]:
+        """Actual derivative-history restart times: accepted law changes, landed and located events."""
+        return tuple(
+            sorted(
+                set(self.accepted_discontinuities)
+                | {time for _index, time in self.landed_events}
+                | {time for _index, time in self.events}
+            )
+        )
 
     @property
     def indicator_satisfied(self) -> bool:
@@ -233,53 +318,6 @@ class TransientSolution:
         the tag to read when deciding whether ``max_newton`` is set high enough.
         """
         return self.converged and not self.floor_converged_times
-
-
-def _roundoff_floor(problem, tangent, u: NDArray[np.floating], form) -> float | None:
-    """The residual scale below which a converged solve cannot go, or ``None`` if unknowable.
-
-    The problem's own `residual_roundoff_floor` is preferred: it is a statement about that
-    system's cancellation, which no generic derivation can see. :func:`residual_floor` is the
-    fallback and needs only the tangent. A non-finite reading from either is discarded rather
-    than compared -- a floor that is not a number cannot bound anything.
-    """
-    if isinstance(problem, ResidualFloorProblem):
-        # `None` IS AN ANSWER HERE -- "this problem cannot bound its own cancellation" -- and it
-        # must fall through to the generic fallback rather than be accepted. It was not expressible
-        # before: `float(...)` would have raised on it, so `mna_solves.transient_residual_floor`
-        # said "no floor" by returning `0.0`, which is finite, was accepted, and suppressed the
-        # fallback entirely while comparing every real residual against zero.
-        declared = problem.residual_roundoff_floor(u, form)
-        if declared is not None:
-            floor = float(declared)
-            if np.isfinite(floor):
-                return floor
-    if tangent is None:
-        return None
-    floor = float(residual_floor(tangent, u))
-    return floor if np.isfinite(floor) else None
-
-
-def _bdf2_variable_form(state: IntegratorState, dt: float, h: float, t_new: float) -> StepForm:
-    """The variable-spacing BDF2 step form; ``h`` is the previous step's size.
-
-    Fixed-weight BDF2 assumes uniform history spacing; a step whose size differs from its
-    history's spacing needs the derivative of the quadratic through the unevenly spaced
-    points (the events module docstring names the O(1) wrong-equation trap this closes).
-    """
-    u_n, u_nm1 = state.us[-1], state.us[-2]
-    return StepForm(
-        weights=DerivativeWeights(alpha0=1.0, alpha1=(2.0 * dt + h) / (dt * (dt + h))),
-        h_u=np.zeros_like(u_n),
-        h_dot=-(dt + h) / (dt * h) * u_n + dt / (h * (dt + h)) * u_nm1,
-        h_ddot=np.zeros_like(u_n),
-        t_eval=t_new,
-    )
-
-
-#: The public spelling of the variable-step BDF2 form, for a CHECK that must replay the march's own
-#: weights (`hamilton.coupling.terminal_balance`). One function, two names, never two formulas.
-bdf2_variable_form = _bdf2_variable_form
 
 
 def _default_solve(matrix: object, rhs: NDArray[np.floating]) -> NDArray[np.floating]:
@@ -307,4 +345,4 @@ def seeded_bdf2_state(state, history, integrator, restart, dt):
     ):
         msg = 'initial_history requires exactly two finite BDF2 states ending at u0 without restart'
         raise ValueError(msg)
-    return IntegratorState(us=[value.copy() for value in arrays], t=state.t)
+    return IntegratorState(us=[value.copy() for value in arrays], t=state.t, h=float(dt))

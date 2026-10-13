@@ -24,7 +24,10 @@ def _run(start, end, restart=None):
     )
 
 
-@pytest.mark.parametrize('split', [0.35, 1.0])
+# THE SPLIT IS A LATTICE TICK (`7 * 0.05`, not the literal 0.35): the uninterrupted march lands
+# `origin + k dt`, and a first run stopped at a nearby declared float takes a last step one ULP short,
+# so a bit-for-bit resume claim is only meaningful at the tick the whole run actually visits.
+@pytest.mark.parametrize('split', [7 * 0.05, 20 * 0.05])
 def test_nonlinear_eec_json_restart_preserves_the_real_cycle_tangent_and_future_states(split):
     whole = _run(0.0, 2.1)
     first = _run(0.0, split)
@@ -89,17 +92,31 @@ def test_restart_keeps_a_failed_cycle_flag_and_does_not_correct_its_converged_en
                 return np.ones_like(u)
             return super().residual(u, v, a, t)
 
-    options = {'max_newton': 30, 'eec_period': 1.0, 'eec_nonlinear_first_order': True, 'checkpoint_key': 'failed-cycle'}
+    options = {
+        'max_newton': 30,
+        'eec_period': 1.0,
+        'eec_nonlinear_first_order': True,
+        'checkpoint_key': 'failed-cycle',
+        'on_nonconverged': 'label',
+    }
     first = integrate_transient(
-        FailingStep(), TransientStudy(0.0, 0.35, 0.05, IntegratorKind.BDF1), np.array([0.7]), **options
+        FailingStep(), TransientStudy(0.0, 7 * 0.05, 0.05, IntegratorKind.BDF1), np.array([0.7]), **options
     )
     saved = TransientCheckpoint.from_mapping(json.loads(json.dumps(first.checkpoint.to_mapping(), allow_nan=False)))
     assert not saved.eec_state.cycle_converged
     resumed = integrate_transient(
-        FailingStep(), TransientStudy(0.35, 1.05, 0.05, IntegratorKind.BDF1), np.array([0.7]), restart=saved, **options
+        FailingStep(),
+        TransientStudy(7 * 0.05, 1.05, 0.05, IntegratorKind.BDF1),
+        np.array([0.7]),
+        restart=saved,
+        **options,
     )
     plain = integrate_transient(
-        FailingStep(), TransientStudy(0.0, 1.05, 0.05, IntegratorKind.BDF1), np.array([0.7]), max_newton=30
+        FailingStep(),
+        TransientStudy(0.0, 1.05, 0.05, IntegratorKind.BDF1),
+        np.array([0.7]),
+        max_newton=30,
+        on_nonconverged='label',
     )
     assert resumed.converged
     assert resumed.corrected_times == []

@@ -8,6 +8,8 @@ import numpy as np
 from motronics.gauss.nonlinear.local import local_change
 from motronics.gauss.time_integrators._forms import _FLOOR_SAFETY
 
+__all__ = ['LocalIterationCheck', 'validate_local_atols']
+
 
 @runtime_checkable
 class _LocalFieldsOwner(Protocol):

@@ -10,6 +10,8 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.optimize import NoConvergence, newton_krylov
 
+__all__ = ['ShootingResult', 'periodic_shooting']
+
 
 @dataclass(frozen=True)
 class ShootingResult:

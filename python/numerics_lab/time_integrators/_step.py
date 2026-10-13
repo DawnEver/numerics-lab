@@ -3,21 +3,115 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass, replace
 
 import numpy as np
 import scipy.sparse as sp
 from numpy.typing import NDArray
 
 from motronics.contracts.spec.analysis_formulation import (
+    AffineConstraintProjectionProblem,
     AlternativeJacobianProblem,
     DerivativeWeights,
     FactorReusableProblem,
+    HistoryProblem,
+    ResidualFloorProblem,
     SemiDiscreteProblem,
+    StepEvaluationProblem,
 )
 from motronics.gauss.linear import reject_nonfinite_solution
-from motronics.gauss.time_integrators._forms import StepForm, _roundoff_floor, residual_floor
+from motronics.gauss.time_integrators._forms import IntegratorState, StepForm, residual_floor
 from motronics.gauss.time_integrators.factor_reuse import FactorCache, apply_factor, factor_matrix
 from motronics.gauss.time_integrators.local_convergence import LocalIterationCheck
+from motronics.gauss.time_integrators.prepared import (
+    PreparedCandidates,
+    PreparedStageContext,
+    PreparedStepAttempt,
+    PreparedStepContext,
+    PreparedStepProblem,
+    finished_candidate,
+    prepared_stage,
+)
+
+__all__ = [
+    'HELD_STALL_RATIO',
+    'HeldFactor',
+    'ProblemCapabilities',
+    'StepOutcome',
+    'TrialNotEvaluable',
+    'directional_line_search',
+    'take_step',
+]
+
+
+class TrialNotEvaluable(RuntimeError):
+    """Raised by a problem's ``residual`` when a line-search TRIAL point has no value to give.
+
+    The condensed field-circuit residual is an inner field root; far from the outer root that inner
+    Newton can have none. The backtracking search treats the trial as rejected and halves, exactly as
+    for a residual above its band -- the march fails only if the step itself cannot converge.
+    """
+
+
+@dataclass(frozen=True)
+class ProblemCapabilities:
+    """Structural optional protocols, resolved once per run, never physical values.
+
+    A direct step resolves its own scope. A march supplies one resolution to every
+    stage, retry and probe; the problem's protocol structure stays fixed in that run.
+    """
+
+    factor_reusable: bool
+    alternative_jacobian: bool
+    residual_floor: bool
+    history: bool
+    prepared: bool = False
+    step_evaluation: bool = False
+    affine_projection: bool = False
+
+    @classmethod
+    def resolve(cls, problem: SemiDiscreteProblem) -> ProblemCapabilities:
+        return cls(
+            isinstance(problem, FactorReusableProblem),
+            isinstance(problem, AlternativeJacobianProblem),
+            isinstance(problem, ResidualFloorProblem),
+            isinstance(problem, HistoryProblem),
+            isinstance(problem, PreparedStepProblem),
+            isinstance(problem, StepEvaluationProblem),
+            isinstance(problem, AffineConstraintProjectionProblem),
+        )
+
+
+def _at_roundoff_floor(problem, tangent, u: NDArray[np.floating], form, capabilities, r) -> bool:
+    """Whether the residual ``r`` is already at the arithmetic floor; ``False`` if unknowable.
+
+    The problem's own `residual_roundoff_floor` is preferred: it is a statement about that
+    system's cancellation, which no generic derivation can see. :func:`residual_floor` is the
+    fallback and needs only the tangent. A non-finite reading from either is discarded rather
+    than compared -- a floor that is not a number cannot bound anything.
+
+    A declared floor may be a scalar (compared with ``||r||_2``) or a PER-ROW vector, compared
+    row by row: rows of different units cannot share one bound, and pooling them let a volt-scale
+    branch row hide an ampere-scale KCL defect (`laplace.circuit.core.mna_solves.transient_residual_floor`).
+    """
+    if capabilities.residual_floor:
+        # `None` IS AN ANSWER HERE -- "this problem cannot bound its own cancellation" -- and it
+        # must fall through to the generic fallback rather than be accepted. It was not expressible
+        # before: `float(...)` would have raised on it, so `mna_solves.transient_residual_floor`
+        # said "no floor" by returning `0.0`, which is finite, was accepted, and suppressed the
+        # fallback entirely while comparing every real residual against zero.
+        declared = problem.residual_roundoff_floor(u, form)
+        if declared is not None:
+            floor = np.asarray(declared, dtype=float)
+            if np.isfinite(floor).all():
+                if floor.ndim == 0:
+                    return float(np.linalg.norm(r)) <= float(floor)
+                return bool(np.all(np.abs(np.asarray(r, dtype=float).reshape(floor.shape)) <= floor))
+    if tangent is None:
+        return False
+    floor = float(residual_floor(tangent, u))
+    return bool(np.isfinite(floor)) and float(np.linalg.norm(r)) <= floor
+
 
 #: The stall-polish's ratio threshold (MANUAL-627 (i)): a per-iteration residual ratio
 #: above this marks the direction stalled. Calibrated on the GaN bridge's toggle steps:
@@ -97,7 +191,7 @@ def _gmin_continue(
 ) -> tuple[NDArray[np.floating], bool, float, bool]:
     """The gmin continuation for an exhausted step: solve ``(J + gmin I) delta = -R`` for
     each stage, the residual always the TRUE one (the same contract the DC-op's
-    :func:`~motronics.laplace.circuit.core.mna_solves._gmin_stepped` follows). Each stage is
+    :func:`~motronics.laplace.circuit.core.transient.mna_solves._gmin_stepped` follows). Each stage is
     seeded by the previous stage's iterate; the bar is the caller's own (``tol`` or
     ``tol_rel * residual_0`` -- the plain Newton's first-iteration residual, the same bar the
     step already failed) PLUS, once the continuation is spent, :func:`residual_floor` -- the damped
@@ -201,6 +295,7 @@ def _solve_step(
     jacobian_tangent: Callable | None = None,
     gmin_stages: tuple[float, ...] | None = None,
     held: HeldFactor | None = None,
+    capabilities: ProblemCapabilities | None = None,
 ) -> NDArray[np.floating]:
     """Advance one step by a Newton loop on ``residual(u_arg, u_dot, u_ddot, t)`` for ``u_{n+1}``.
 
@@ -243,7 +338,19 @@ def _solve_step(
     arithmetic with nothing for a caller to read -- the shape ``taste.md`` forbids. The flag
     rides out to :attr:`TransientSolution.floor_converged_times`.
     """
-    reusable = factor_cache is not None and isinstance(problem, FactorReusableProblem)
+    if capabilities is None:
+        capabilities = ProblemCapabilities.resolve(problem)
+    if capabilities.step_evaluation:
+        # An endpoint owner's DIFFERENT problem has protocols of its own; the owner itself
+        # (no endpoint at this instant) keeps the march's resolution -- re-resolving it cost
+        # seven runtime protocol checks per stage (measured 2026-10-12, ~11% of a dq march).
+        stepped = problem.step_problem(form.t_eval)
+        if stepped is not problem:
+            if not isinstance(stepped, SemiDiscreteProblem):
+                msg = 'step endpoint owner must return a semi-discrete problem'
+                raise TypeError(msg)
+            problem, capabilities = stepped, ProblemCapabilities.resolve(stepped)
+    reusable = factor_cache is not None and capabilities.factor_reusable
     # The stall-polish's phase-2 source (MANUAL-627 (i)): the problem's local-derivative
     # jacobian, engaged when the default jacobian's per-iteration creep marks a stalled
     # direction. The default ``None`` reads the problem's optional ``jacobian_tangent``
@@ -253,15 +360,38 @@ def _solve_step(
     # switches, the diodes -- their stamps already ARE the local derivative) would pay
     # the tangent phase's factor-cache bypass for nothing (measured: the buck's reuse
     # counts broke without the gate).
-    alternative = problem if isinstance(problem, AlternativeJacobianProblem) else None
+    alternative = problem if capabilities.alternative_jacobian else None
     tangent_source = (
         jacobian_tangent
         if jacobian_tangent is not None
         else (alternative.jacobian_tangent if alternative is not None else None)
     )
     tangent_helpful = jacobian_tangent is not None or (alternative is not None and alternative.has_tangent_jacobian)
-    u = np.asarray(guess, dtype=float).copy()
+
+    def project_trial(value):
+        value = np.asarray(value, dtype=float)
+        if not capabilities.affine_projection:
+            return value
+        alpha = form.weights.alpha0
+        if alpha.imag != 0 or alpha.real == 0:
+            msg = 'affine state constraint projection requires a nonzero real state weight'
+            raise ValueError(msg)
+        argument = form.u_arg(value)
+        projected = np.asarray(problem.project_affine_state(argument.copy(), form.t_eval))
+        if projected.shape != argument.shape or not np.isrealobj(projected) or not np.isfinite(projected).all():
+            msg = 'affine constraint owner must return a same-shape finite real trial state'
+            raise ValueError(msg)
+        return value + (projected - argument) / alpha.real
+
     t = form.t_eval
+    # THE GUESS IS NOT PROJECTED. A full Newton step lands every affine row exactly, so projecting
+    # the caller's guess buys nothing there -- and it costs: it moves the constrained rows ALONE,
+    # so the first tangent is taken where every other unknown is stale. Behind a steep clamp that
+    # is a worse linearisation, the absolute ``tol`` then passed a nanosiemens node millivolts off,
+    # and `test_varistor`'s divider read 2.6e-5 off an identity exact to 2.4e-16 (MEASURED
+    # 2026-10-09; introduced by 2bbcffe10e). Only a DAMPED trial can leave the plane, so only the
+    # backtracking trials below are projected.
+    u = np.asarray(guess, dtype=float).copy()
     converged = False
     on_floor = False
     iterations = 0
@@ -316,7 +446,7 @@ def _solve_step(
             # monotonically, so no stall ratio can be relied on to see it). It is the same floor
             # verdict the exhaustion branch below gives, reached before the ceiling instead of at
             # it (measured on ipm_uv's chopper: 50 iterations, ~30 s a step, at |r| ~ 4e-9).
-            if local_ok and (floor := _roundoff_floor(problem, tangent, u, form)) is not None and residual <= floor:
+            if local_ok and _at_roundoff_floor(problem, tangent, u, form, capabilities, r):
                 converged = True
                 on_floor = True
                 break
@@ -358,10 +488,19 @@ def _solve_step(
             )
         elif max_newton > 1 and backtrack_cap > 0:
             raised = False
+            evaluable = True
             for _ in range(backtrack_cap):
-                u_try = u + step
+                u_try = project_trial(u + step)
                 u_arg, u_dot, u_ddot = form.u_arg(u_try), form.u_dot(u_try), form.u_ddot(u_try)
-                r_try = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
+                try:
+                    r_try = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
+                except TrialNotEvaluable:
+                    # The problem cannot evaluate this trial (an inner solve without a root): the
+                    # trial is REJECTED exactly like one whose residual is too large -- halve.
+                    evaluable = False
+                    step = 0.5 * step
+                    continue
+                evaluable = True
                 limit = residual if backtrack_band is None else backtrack_band * residual
                 trial = float(np.linalg.norm(r_try))
                 if trial < limit:
@@ -370,7 +509,9 @@ def _solve_step(
                     break
                 step = 0.5 * step
             else:
-                u = u + step
+                # Exhausted: take the last trial only if it could be evaluated at all.
+                if evaluable:
+                    u = project_trial(u + step)
                 capped = True
             if tangent_active and (capped or raised):
                 # THE POLISH IS A TRIAL, NOT A ONE-WAY SWITCH: an alternative operator whose step
@@ -383,7 +524,7 @@ def _solve_step(
                 # t = 4.44 ms step 158 -> 445 over 100 iterations; withheld, it converged in 12.
                 tangent_active, polish_spent, slow = False, True, 0
         else:
-            u = u + step
+            u = project_trial(u + step)
     else:
         # The ceiling exhausted: re-evaluate the residual at the FINAL u (the last solve's
         # result). The loop's last check read the PRE-solve guess -- reporting that would
@@ -394,7 +535,7 @@ def _solve_step(
         local_ok = local.observe(u, t)
         if local_ok and (residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0)):
             converged = True
-        elif local_ok and (floor := _roundoff_floor(problem, tangent, u, form)) is not None and residual <= floor:
+        elif local_ok and _at_roundoff_floor(problem, tangent, u, form, capabilities, r):
             on_floor = True
             # THE ARITHMETIC FLOOR, and the reason an exactly-solved LINEAR step no longer lies.
             # ``tol`` is ABSOLUTE on a residual whose scale is the supply, so the same one-Newton
@@ -439,3 +580,87 @@ def _solve_step(
             residual = residual_g
         iterations += max(2, max_newton) * len(gmin_stages)
     return u, converged, iterations, residual, on_floor
+
+
+@dataclass(frozen=True)
+class StepOutcome:
+    """One whole step of a scheme, every stage solved: the new history and the step's verdict.
+
+    ``converged`` holds only if EVERY stage converged; ``residual`` is the worst stage's, and
+    ``rate`` is the final stage's ``u_dot`` -- the rate the trajectory point was solved with.
+    """
+
+    state: IntegratorState
+    u: NDArray[np.floating]
+    converged: bool
+    iterations: int
+    residual: float
+    on_floor: bool
+    rate: NDArray[np.floating]
+    residual_time: float
+    candidate: object | None = None
+
+
+def take_step(
+    problem,
+    integrator,
+    state: IntegratorState,
+    dt: float,
+    t_new: float,
+    *,
+    endpoint_left: bool = False,
+    capabilities: ProblemCapabilities | None = None,
+    candidate_registry: PreparedCandidates | None = None,
+    **solve_kw,
+) -> StepOutcome:
+    """Advance ``state`` by ``dt`` to ``t_new`` through every stage of ``integrator``.
+
+    The ONE place a marcher turns a scheme into solves: ``prepare`` -> :func:`_solve_step` ->
+    ``advance``, ``integrator.stages`` times. A multi-stage scheme's intermediate state never leaves
+    this function, so every marcher, probe and landing treats a step as one opaque move.
+    ``endpoint_left`` lands a declared discontinuity using its left limit; the clock still lands
+    exactly at ``t_new`` and the next restarted step evaluates the post-edge system.
+    """
+    if capabilities is None:
+        capabilities = ProblemCapabilities.resolve(problem)
+    converged, on_floor, iterations, worst = True, False, 0, 0.0
+    u = state.last_u
+    form = None
+    attempt = None
+    parent_candidate = state.prepared_candidate
+    if capabilities.prepared:
+        attempt = problem.begin_step(PreparedStepContext(integrator, state.copy(), dt, t_new, parent_candidate))
+        if not isinstance(attempt, PreparedStepAttempt):
+            msg = 'prepared step owner must return a prepared step attempt'
+            raise TypeError(msg)
+    candidate = None
+    try:
+        for index in range(integrator.stages):
+            form = integrator.prepare(state, dt, t_new)
+            stage_endpoint_left = endpoint_left and form.t_eval == t_new
+            if stage_endpoint_left and attempt is None:
+                form = replace(form, t_eval=float(np.nextafter(t_new, -np.inf)))
+            stage_problem = problem
+            stage_capabilities = capabilities
+            if attempt is not None:
+                stage_problem = prepared_stage(
+                    attempt, PreparedStageContext(form, state.copy(), index, stage_endpoint_left)
+                )
+                stage_capabilities = None
+            u, ok, its, residual, floor = _solve_step(
+                stage_problem, form, state.last_u, capabilities=stage_capabilities, **solve_kw
+            )
+            converged, on_floor = converged and ok, on_floor or floor
+            iterations, worst = iterations + its, max(worst, residual)
+            if attempt is not None:
+                attempt.stage_solved(u.copy())
+            state = integrator.advance(state, u, dt, t_new, form)
+        if attempt is not None:
+            candidate = finished_candidate(attempt, parent_candidate, candidate_registry)
+    except BaseException:
+        if attempt is not None:
+            attempt.abort()
+        raise
+    state.prepared_candidate = candidate
+    assert form is not None
+    return StepOutcome(state, u, converged, iterations, worst, on_floor, form.u_dot(u), form.t_eval, candidate)

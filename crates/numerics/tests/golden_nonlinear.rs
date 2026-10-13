@@ -42,7 +42,7 @@ fn golden() -> Value {
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
         panic!(
             "{} is a committed artifact, not a cache. Regenerate it deliberately with \
-             MOTRONICS_REGEN_PORT_GOLDENS=1 on the Python side and commit it. ({e})",
+             `python -m tests.port_goldens` on the Python side and commit it. ({e})",
             path.display()
         )
     });

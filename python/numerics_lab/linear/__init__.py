@@ -62,7 +62,7 @@ from motronics.gauss.linear.gauge import (
     gauge_pin_orphan_rows,
     orphan_rows,
 )
-from motronics.gauss.linear.ic0 import ic0_preconditioner, iccg_system
+from motronics.gauss.linear.ic0 import IC0Operator, ic0_preconditioner, iccg_system
 from motronics.gauss.linear.native_direct import native_solve
 from motronics.gauss.linear.pin_rows import pin_rows
 
@@ -102,6 +102,7 @@ except ImportError:
 __all__ = [
     'LINEAR_SOLVER_REGISTRY',
     'PRECONDITIONER_REGISTRY',
+    'IC0Operator',
     'LinearSolveError',
     'LinearSolver',
     'apply_dirichlet_csr',
@@ -116,6 +117,7 @@ __all__ = [
     'gauge_pin_orphan_rows',
     'get_linear_solver',
     'ic0_preconditioner',
+    'iccg_system',
     'make_preconditioner',
     'move_is_this_systems_conditioning',
     'orphan_rows',
@@ -434,6 +436,8 @@ def solve_linear_system(
         if name not in ('cg', 'bicgstab', 'gmres', 'minres', 'qmr', 'iccg'):
             msg = 'linear iteration budget requires an explicit iterative backend'
             raise ValueError(msg)
+    # A built IC0 operator (one per J11, shared by its columns) -- built on the LIFTED operator.
+    prebuilt = preconditioner if isinstance(preconditioner, IC0Operator) else None
     if name in ('auto', 'iccg'):
         matrix, rhs, x0 = iccg_system(matrix, rhs, x0)
     M = None
@@ -442,16 +446,20 @@ def solve_linear_system(
         # IC0 breakdown or iterative failure falls back to the guarded direct solve.
         name = 'direct'
         try:
-            M = make_preconditioner('ic0', matrix)
+            M = prebuilt if prebuilt is not None else make_preconditioner('ic0', matrix)
             name = 'iccg'
         except ValueError:
             pass
-    if name == 'iccg' and preconditioner not in (None, 'ic0'):
+    if name == 'iccg' and prebuilt is None and preconditioner not in (None, 'ic0'):
         msg = 'ICCG requires the IC0 preconditioner'
         raise ValueError(msg)
     backend = get_linear_solver(name)
     if M is None and name not in ('direct', 'direct-symmetric', 'pardiso'):
-        M = make_preconditioner('ic0' if name == 'iccg' else preconditioner, matrix)
+        M = (
+            prebuilt
+            if prebuilt is not None
+            else make_preconditioner('ic0' if name == 'iccg' else preconditioner, matrix)
+        )
     try:
         tolerances = {} if name in ('direct', 'direct-symmetric', 'pardiso') else {'rtol': rtol, 'atol': atol}
         if max_iterations is not None:

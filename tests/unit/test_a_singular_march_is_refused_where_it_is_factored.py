@@ -1,58 +1,10 @@
-"""A singular MNA is refused BY NAME through `motronics run`, at the seam that factored it.
+"""A singular MNA is refused by its actual physical or numerical authority.
 
-# The gap this pins, and why nothing was red while it was open
-
-`gauss.linear.solve_linear_system` is the guarded seam: it computes a relative residual, and above
-the trigger it takes one step of iterative refinement and RAISES with the order, both statistics
-and a remedy. :class:`~motronics.gauss.time_integrators.factor_reuse.FactorCache` is the march's
-OTHER entry point, taken whenever the problem exposes ``factor_reuse_key`` -- and it returned
-``self._apply(self._factor, b)`` unexamined. One march, two entry points, one of them guarded, and
-which one a case gets turns on a capability the case never declares.
-
-MEASURED 2026-09-06 on this tree, through `motronics.__main__.main`, over seven
-`cases/network/circuit` nodes: **595,898 FactorCache solves and ZERO reaching `gauss.linear`**.
-The two numbers are quoted together deliberately -- a zero beside a zero is a broken probe, a zero
-beside 595,898 is a finding. So every shipped circuit march is on the unguarded side.
-
-No shipped node trips the criterion (worst relative residual measured over a full
-a `boost`'s `closed_pi` march: 5.8e-11 over 532,365 judged solves, nothing over the 1e-6 trigger). A
-SINGULAR one does, and before this file the user saw:
-
-    LinAlgWarning: Diagonal number 4 is exactly zero. Singular matrix.
-    motronics: two_ideal_sources: the circuit chain cannot march this node -- array must not
-    contain infs or NaNs
-
--- no order, no statistic, no remedy, and nothing naming the singularity. That text is quoted from
-this exact fixture with the guard reverted, which is also this file's revert check. Worse, the
-``ValueError`` behind it is raised on the SECOND solve, by `scipy`'s ``check_finite`` on a
-right-hand side the FIRST solve had already poisoned: the failure was reported one step
-downstream of its cause, which is why reading the message sent nobody to the singularity.
-
-REVERTED-AND-RUN, 2026-09-06: with the guard removed the first two tests below go red (the second
-on `2 FactorCache solves` instead of 1 -- the second solve being the poisoned one) and the third,
-the FLOOR, stays green. That split is the point: a floor that went red with the guard would be
-testing the guard twice.
-
-# Where the guard went, and what it deliberately does NOT cover
-
-The MISS path only -- the branch that calls ``build_matrix()``. That is the one place the matrix is
-already in hand, so judging costs one matvec against a factorization the branch just paid
-O(n^3) for.
-
-A HIT is left unjudged ON PURPOSE, and the price of the alternative is measured rather than
-guessed. Over the same seven nodes, 211,388 of the 595,898 solves (35%) were hits, and for
-`class_e` 123,208 of 129,749 (95%) were. A hit does not have the matrix -- `FactorCache` exists
-precisely so it never builds one -- so guarding it means calling ``build_matrix()`` on every hit,
-i.e. reinstating exactly the work the cache removes, on a third of every circuit march in the
-library and on 95% of one. That is not a guard, it is a deletion of the feature, and it is not
-taken here. What makes the omission safe rather than convenient is the failure's own shape,
-which this file asserts: the singular system is refused on solve #1, which is always a MISS.
-
-# The floors
-
-A guard that refuses everything would satisfy the refusal assertion. So the well-posed sibling --
-the SAME netlist with one source instead of two -- is run in the same fixture and must still
-march, and its FactorCache count is reconciled against the sample count the CLI itself prints.
+The CLI rejects underdetermined initial source currents before marching, so
+that refusal must precede every FactorCache solve. An independent guard test
+passes the same real four-unknown MNA weighted tangent directly to the cache: its
+first miss must refuse a singular factor with order/residual/backend evidence.
+The one-source sibling remains the well-posed floor through the real CLI.
 """
 
 from __future__ import annotations
@@ -62,12 +14,16 @@ import textwrap
 import types
 from pathlib import Path
 
+import numpy as np
 import pytest
 from tests.bound_names import binds, bound
 
 import motronics.__main__ as cli
 import motronics.gauss.linear as gauss_linear
+from motronics.contracts.spec.analysis_formulation import DerivativeWeights
+from motronics.gauss.linear import LinearSolveError
 from motronics.gauss.time_integrators.factor_reuse import FactorCache
+from motronics.laplace.circuit.cases.case_library import load_circuit_case
 
 #: The one line the CLI prints that a user can act on. Read off stdout, because that is the surface.
 _REPORT_PREFIX = 'report:'
@@ -223,10 +179,10 @@ def _samples_from(out: str) -> int:
 
 
 @pytest.mark.unit
-def test_a_singular_mna_is_refused_naming_its_order_statistic_and_seam(planted, capsys) -> None:
-    """The failing half. The refusal must be about SINGULARITY, at the seam that actually factored."""
+def test_a_singular_mna_is_refused_naming_its_initial_physical_authority(planted, capsys) -> None:
+    """The real node lacks unique initial ideal-source current authority."""
     with pytest.raises(SystemExit) as excinfo:
-        cli.main(['run', str(planted['singular'])])
+        cli.main(['case', 'run', str(planted['singular'])])
     assert excinfo.value.code == 2, 'a node that cannot be marched must exit non-zero'
 
     # BOTH streams: the refusal goes to stderr and the success line to stdout, and a test that
@@ -234,14 +190,7 @@ def test_a_singular_mna_is_refused_naming_its_order_statistic_and_seam(planted, 
     captured = capsys.readouterr()
     message = captured.out + captured.err
     assert 'two_ideal_sources' in message, 'the refusal must name the node the user asked for'
-    assert 'singular' in message, f'the refusal never says the system is singular:\n{message}'
-    assert 'n=4' in message, f'the refusal names no ORDER, so the reader cannot locate the system:\n{message}'
-    assert 'residual =' in message, f'the refusal quotes no STATISTIC, so it cannot be checked:\n{message}'
-    assert 'factor_reuse' in message, (
-        'the refusal must name the seam that FACTORED this system. `factor_reuse` is the entry '
-        "point the march took; naming gauss.linear's `direct` would send the reader to code that "
-        f'never ran:\n{message}'
-    )
+    assert 'initial state/rate equations require additional physical authority' in message, message
     assert 'array must not contain infs or NaNs' not in message, (
         "that is scipy's `check_finite` firing one solve DOWNSTREAM of the cause, on a right-hand "
         'side the previous solve poisoned. It names no order, no statistic and no remedy.'
@@ -249,20 +198,33 @@ def test_a_singular_mna_is_refused_naming_its_order_statistic_and_seam(planted, 
 
 
 @pytest.mark.unit
-def test_the_refusal_lands_on_the_first_solve_which_is_a_factorisation(planted, solve_counts) -> None:
-    """WHY THE HIT PATH NEED NOT BE GUARDED, asserted rather than asserted-in-prose.
-
-    The guard sits on the MISS branch only, because that is the one holding the matrix. That is
-    sound only if a singular system is caught before any hit can consume its output -- i.e. on the
-    very first solve, which is always a miss (the cache starts empty). This pins that.
-    """
+def test_initial_physical_refusal_precedes_every_march_linear_solve(planted, solve_counts) -> None:
+    """Physical initial admission refuses before any numerical march factorization."""
     with pytest.raises(SystemExit):
-        cli.main(['run', str(planted['singular'])])
-    assert solve_counts['factor_cache'] == 1, (
-        f'the singular march took {solve_counts["factor_cache"]} FactorCache solves. It must be '
-        'refused on the FIRST one -- a later refusal means a hit already back-substituted against '
-        'a singular factor, and the miss-only guard would then be leaving a real window open.'
-    )
+        cli.main(['case', 'run', str(planted['singular'])])
+    assert solve_counts['factor_cache'] == 0, 'an unadmitted physical initial pair must not reach the march cache'
+    assert solve_counts['seam'] == 0, 'an unadmitted physical initial pair must not reach the march linear seam'
+
+
+@pytest.mark.unit
+def test_actual_singular_mna_tangent_is_refused_on_the_first_factor_cache_miss(planted):
+    """Judge the cache independently of the earlier physical initial refusal."""
+    dae = load_circuit_case(planted['singular'], point='nominal').assemble()
+    zero = np.zeros(4)
+    weights = DerivativeWeights(1, 1.0e5, 0)
+    tangent = dae.jacobian(zero, zero, zero, 0.0, weights)
+    matrix = tangent.toarray() if hasattr(tangent, 'toarray') else np.asarray(tangent)
+    assert matrix.shape == (4, 4)
+    rhs = -dae.residual(zero, zero, zero, 0.0)
+    cache = FactorCache()
+    key = dae.factor_reuse_key(zero, zero, zero, 0.0, weights)
+    with pytest.raises(LinearSolveError) as refusal:
+        cache.solve(key, lambda: matrix, rhs)
+    message = str(refusal.value)
+    assert 'n=4' in message
+    assert 'residual =' in message
+    assert 'factor_reuse' in message
+    assert cache.solves == 1
 
 
 @pytest.mark.unit
@@ -276,7 +238,7 @@ def test_the_well_posed_sibling_still_marches_and_stays_on_the_unguarded_entry(p
       advance N steps with fewer than N linear solves, so a probe that silently patched nothing
       (count 0) is refused by arithmetic rather than by a threshold somebody chose.
     """
-    assert cli.main(['run', str(planted['well_posed'])]) == 0, 'the well-posed sibling must still solve'
+    assert cli.main(['case', 'run', str(planted['well_posed'])]) == 0, 'the well-posed sibling must still solve'
     captured = capsys.readouterr()
     out = captured.out + captured.err
     assert _REPORT_PREFIX in out, 'a successful run must announce a report the user can open'

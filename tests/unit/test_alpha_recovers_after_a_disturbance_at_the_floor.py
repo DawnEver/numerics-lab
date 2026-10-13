@@ -9,7 +9,7 @@ runs on EVERY disturbance -- including one that arrives when alpha is already at
 where the shrink `max(_ALPHA_MIN, alpha * 0.6)` is a NO-OP. The cap collapses onto the floor, and
 the recovery gate `alpha < alpha_cap` becomes `0.1 < 0.1`, false for the rest of the solve.
 
-MEASURED on `dcm_fdm_rect` (`motronics sweep`, 2026-08-27): 557 of 605 Picard iterations pinned at
+MEASURED on `dcm_fdm_rect` (`motronics case sweep`, 2026-08-27): 557 of 605 Picard iterations pinned at
 `alpha: 0.100` with the energy error already reading 0.00%, every solve running to its
 100-iteration cap. The iterate crawls a tenth of a step at a time, so the increment half of the
 convergence test cannot be reached inside the cap -- the solve does not converge because it is

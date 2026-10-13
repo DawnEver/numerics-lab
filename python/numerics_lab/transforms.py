@@ -18,12 +18,57 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
-__all__ = ['clarke_forward', 'park_forward', 'park_inverse']
+__all__ = ['clarke_forward', 'park_forward', 'park_inverse', 'phase_L_to_dq_L', 'vsd_matrix', 'winding_axes']
 
 
-def _phase_axes(n_phase: int) -> NDArray[np.float64]:
-    """Electrical axis angle of each of ``n_phase`` symmetric phases: ``2*pi*k/n_phase``."""
-    return 2.0 * np.pi * np.arange(n_phase, dtype=float) / n_phase
+def winding_axes(n_phase: int, *, star_sets: int = 1) -> NDArray[np.float64]:
+    """Electrical axis angle of each phase of ``star_sets`` isolated wye sets, set-major.
+
+    Each set holds ``m = n_phase / star_sets`` phases at ``2*pi*j/m``, and set ``s`` is shifted by
+    ``pi*s/n_phase``: one set is the symmetric ``2*pi*k/n``; two three-phase sets are the
+    asymmetric six-phase (dual three-phase) layout, 30 degrees apart. The per-set phase count must
+    be ODD -- an even ``m`` puts phases ``j`` and ``j + m/2`` antiphase, which is fewer
+    independent axes than phases, not a richer machine.
+    """
+    if star_sets < 1 or n_phase % star_sets:
+        msg = f'{n_phase} phases do not split into {star_sets} equal star sets'
+        raise ValueError(msg)
+    m = n_phase // star_sets
+    j = np.tile(np.arange(m, dtype=float), star_sets)
+    s = np.repeat(np.arange(star_sets, dtype=float), m)
+    return 2.0 * np.pi * j / m + np.pi * s / n_phase
+
+
+def vsd_matrix(axes: NDArray[np.float64], *, star_sets: int = 1) -> NDArray[np.float64]:
+    """Orthonormal vector-space decomposition of an ``n``-phase winding on ``axes`` (set-major).
+
+    Rows, in order: the fundamental ``(alpha, beta)`` plane, the harmonic planes ``(z1, z2, ...)``
+    in ascending odd order, then one zero-sequence row per star ``(o1, o2, ...)``. Built by
+    Gram-Schmidt over ``cos(h a), sin(h a)`` for ``h = 1, 3, 5, ...`` after the stars' common
+    modes are removed, so a harmonic that IS a common mode (``h = 3`` for dual three-phase) lands
+    in the o-rows rather than being counted twice. ``T`` is orthogonal: ``T T^T = I``, and a
+    sinusoidally distributed winding's inductance matrix becomes block diagonal -- the plane the
+    papers control in, with ``l_d``/``l_q`` on alpha-beta and only the leakage on the rest.
+    """
+    a = np.asarray(axes, dtype=float)
+    n = a.size
+    m = n // star_sets
+    zero = np.zeros((star_sets, n))
+    for s in range(star_sets):
+        zero[s, s * m : (s + 1) * m] = 1.0 / np.sqrt(m)
+    basis = list(zero)
+    planes: list[NDArray[np.float64]] = []
+    h = 1
+    while len(basis) < n:
+        for row in (np.cos(h * a), np.sin(h * a)):
+            residual = row - sum(float(b @ row) * b for b in basis)
+            norm = float(np.linalg.norm(residual))
+            if norm > 1.0e-9 * np.sqrt(n):
+                unit = residual / norm
+                basis.append(unit)
+                planes.append(unit)
+        h += 2
+    return np.vstack([*planes, *zero])
 
 
 def park_forward(
@@ -49,7 +94,7 @@ def park_forward(
     x = np.asarray(x_phase, dtype=float)
     n_phase = x.shape[0]
     theta_e = np.asarray(theta_e, dtype=float)
-    axes = _phase_axes(n_phase)[:, None] if x.ndim == 2 else _phase_axes(n_phase)
+    axes = winding_axes(n_phase)[:, None] if x.ndim == 2 else winding_axes(n_phase)
     angle = theta_e - axes  # (n_phase, n_theta) or (n_phase,)
     d = (2.0 / n_phase) * np.sum(x * np.cos(angle), axis=0)
     q = -(2.0 / n_phase) * np.sum(x * np.sin(angle), axis=0)
@@ -107,7 +152,7 @@ def park_inverse(
     # theta_e.ndim conflated the two and returned a (3,) result (SR-024). The phase axis is
     # prepended AFTER the broadcast, so the sample axis can never collide with it.
     d, q, zero, theta_e = np.broadcast_arrays(d, q, zero, theta_e)
-    axes = _phase_axes(n_phase)[:, None] if d.ndim else _phase_axes(n_phase)
+    axes = winding_axes(n_phase)[:, None] if d.ndim else winding_axes(n_phase)
     angle = theta_e - axes
     return d * np.cos(angle) - q * np.sin(angle) + zero
 
@@ -150,7 +195,7 @@ def phase_L_to_dq_L(
     """
     L = np.asarray(L_phase, dtype=float)
     n_phase = L.shape[0]
-    axes = _phase_axes(n_phase)
+    axes = winding_axes(n_phase)
     theta_e = np.asarray(theta_e, dtype=float)
 
     def _bridge(angle: float) -> NDArray[np.float64]:
