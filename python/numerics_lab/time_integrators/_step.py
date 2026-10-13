@@ -68,6 +68,8 @@ class ProblemCapabilities:
     prepared: bool = False
     step_evaluation: bool = False
     affine_projection: bool = False
+    #: The problem solves this step itself (a native kernel); ``None`` from it declines.
+    native_step: bool = False
 
     @classmethod
     def resolve(cls, problem: SemiDiscreteProblem) -> ProblemCapabilities:
@@ -79,6 +81,7 @@ class ProblemCapabilities:
             isinstance(problem, PreparedStepProblem),
             isinstance(problem, StepEvaluationProblem),
             isinstance(problem, AffineConstraintProjectionProblem),
+            getattr(problem, 'native_step', None) is not None,
         )
 
 
@@ -350,6 +353,21 @@ def _solve_step(
                 msg = 'step endpoint owner must return a semi-discrete problem'
                 raise TypeError(msg)
             problem, capabilities = stepped, ProblemCapabilities.resolve(stepped)
+    if (
+        capabilities.native_step
+        and tol_rel is None
+        and line_search == 'backtrack'
+        and jacobian_tangent is None
+        and gmin_stages is None
+        and held is None
+    ):
+        # THE PROBLEM'S OWN KERNEL, on the default Newton options only: it is golden-equivalent to
+        # this loop on that path and nowhere else, so every other option keeps the loop below.
+        outcome = problem.native_step(
+            form, guess, tol=tol, max_newton=max_newton, backtrack_cap=backtrack_cap, backtrack_band=backtrack_band
+        )
+        if outcome is not None:
+            return outcome
     reusable = factor_cache is not None and capabilities.factor_reusable
     # The stall-polish's phase-2 source (MANUAL-627 (i)): the problem's local-derivative
     # jacobian, engaged when the default jacobian's per-iteration creep marks a stalled

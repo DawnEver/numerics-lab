@@ -146,3 +146,40 @@ def test_prepared_form_history_is_bit_identical_to_reprepared_form(integrator):
                 reconstructed.stage,
             )
             state = supplied
+
+
+class NativeProblem(LinearProblem):
+    """A problem with its own step kernel; ``answer`` is what the kernel returns."""
+
+    def __init__(self, answer) -> None:
+        self.answer = answer
+        self.calls = []
+
+    def native_step(self, form, guess, **options):
+        self.calls.append(options)
+        return self.answer
+
+
+def _native_take(problem, **extra):
+    integrator = TrapezoidIntegrator()
+    state = integrator.start(np.ones(1), 0.0, v0=-np.ones(1))
+    options = {'solve': np.linalg.solve, 'max_newton': 1, 'tol': 1e-14, **extra}
+    return take_step(problem, integrator, state, 0.1, 0.1, **options)
+
+
+def test_a_problem_that_steps_itself_answers_the_default_newton():
+    planted = (np.array([0.5]), True, 1, 0.0, False)
+    problem = NativeProblem(planted)
+    assert ProblemCapabilities.resolve(problem).native_step
+    outcome = _native_take(problem)
+    np.testing.assert_array_equal(outcome.u, [0.5])
+    assert problem.calls == [{'tol': 1e-14, 'max_newton': 1, 'backtrack_cap': 8, 'backtrack_band': None}]
+
+
+def test_a_declining_kernel_and_a_non_default_option_both_keep_the_python_loop():
+    declined = NativeProblem(None)
+    np.testing.assert_allclose(_native_take(declined).u, [19 / 21], rtol=1e-14, atol=1e-14)
+    assert len(declined.calls) == 1
+    bypassed = NativeProblem((np.array([0.5]), True, 1, 0.0, False))
+    np.testing.assert_allclose(_native_take(bypassed, tol_rel=1e-3).u, [19 / 21], rtol=1e-14, atol=1e-14)
+    assert bypassed.calls == []
