@@ -83,7 +83,7 @@ def test_capabilities_record_structure_not_mutable_physical_flags():
         def factor_reuse_key(self, *args):
             return args[-1]
 
-        def residual_roundoff_floor(self, u, form):
+        def residual_roundoff_floor(self, u, form, residual=None):
             return None
 
         def commit_history(self, u, t):

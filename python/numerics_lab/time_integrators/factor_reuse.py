@@ -64,19 +64,17 @@ This module imports only contracts + numpy/scipy and touches no physics, like th
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable, Hashable
 
 import numpy as np
 import scipy.sparse as sp
 from numpy.typing import NDArray
-from scipy.linalg import lu_factor, lu_solve
+from scipy.linalg import LinAlgWarning, lu_factor, lu_solve
+from scipy.linalg.lapack import dgetrf, dgetrs
 from scipy.sparse.linalg import splu
 
-from motronics.gauss.linear import (
-    reject_nonfinite_solution,
-    reject_unsolved_direct_system,
-    repair_direct_solution,
-)
+from motronics.gauss.linear import reject_nonfinite_solution, settle_direct_solution
 from motronics.gauss.linear.native_direct import native_factor
 
 __all__ = ['FactorCache', 'apply_factor', 'factor_matrix']
@@ -107,7 +105,15 @@ def factor_matrix(matrix: object) -> object:
     m = np.asarray(matrix, dtype=float)
     if m.ndim == 0:  # scalar jacobian (1-DOF problem written as a plain number)
         return float(m)
-    return lu_factor(m)
+    if m.ndim != 2 or m.shape[0] != m.shape[1] or not np.isfinite(m).all():
+        return lu_factor(m)  # its own refusal names the defect
+    # THE SAME `getrf` `lu_factor` calls, minus its per-call batching/dispatch wrapper: on a march
+    # of tiny dense systems that wrapper cost more than the factorization (measured 2026-10-12,
+    # 93,007 misses of an n=12 tangent: 2.5 s of wrapper around LAPACK).
+    lu, piv, info = dgetrf(m)
+    if info > 0:
+        warnings.warn(f'Diagonal number {info} is exactly zero. Singular matrix.', LinAlgWarning, stacklevel=2)
+    return lu, piv
 
 
 def apply_factor(factor: object, b: NDArray[np.floating]) -> NDArray[np.floating]:
@@ -119,7 +125,15 @@ def apply_factor(factor: object, b: NDArray[np.floating]) -> NDArray[np.floating
     if isinstance(factor, float):
         return b / factor
     if isinstance(factor, tuple):  # dense (lu, piv)
-        return lu_solve(factor, b)
+        lu, piv = factor
+        rhs = np.asarray(b, dtype=float)
+        if not np.isfinite(rhs).all() or rhs.shape[0] != lu.shape[0]:
+            return lu_solve(factor, b)  # its own refusal names the defect
+        x, info = dgetrs(lu, piv, rhs)
+        if info != 0:
+            msg = f'illegal value in {-info}-th argument of internal getrs (lapack)'
+            raise ValueError(msg)
+        return x
     return factor.solve(b)  # sparse factor: native (faer) or SuperLU, both `solve(b)`-shaped
 
 
@@ -183,8 +197,7 @@ class FactorCache:
             if self._repair_hits:
                 # This factor's first answer needed refinement. Every RHS through the
                 # same held factor needs that protection; the matrix is already held.
-                x, moves = repair_direct_solution(self.matrix, b, x)
-                reject_unsolved_direct_system(self.matrix, b, x, _BACKEND, refinement=moves[-1] if moves else None)
+                x = settle_direct_solution(self.matrix, b, x, _BACKEND)
             return x
         matrix = build_matrix()
         self.matrix = matrix
@@ -213,7 +226,6 @@ class FactorCache:
             # refusing its first back-substitution without that repair is a different
             # numerical policy solely because the marcher requested reuse.
             original = x
-            x, moves = repair_direct_solution(matrix, b, x)
-            self._repair_hits = not np.array_equal(x, original)
-            reject_unsolved_direct_system(matrix, b, x, _BACKEND, refinement=moves[-1] if moves else None)
+            x = settle_direct_solution(matrix, b, x, _BACKEND)
+            self._repair_hits = x is not original and not np.array_equal(x, original)
         return x

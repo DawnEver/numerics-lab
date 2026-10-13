@@ -1,9 +1,14 @@
 """Portable numerical history for restarting a native transient, without pickle execution."""
 
+import dataclasses
 import hashlib
+import itertools
 import json
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import Enum
+from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 import numpy as np
@@ -14,17 +19,25 @@ from motronics.gauss.time_integrators.eec_checkpoint import EECCheckpointState
 from motronics.gauss.time_integrators.event_checkpoint import EventCheckpointState
 
 __all__ = [
+    'CHECKPOINTED_MARCHES',
+    'CHECKPOINT_FILE_SCHEMA',
+    'FIXED_POINTS_OVER_A_MARCH',
     'CheckpointContext',
     'CheckpointHistory',
     'EECCheckpointState',
     'HistoryPresence',
+    'ScheduleCheckpointState',
+    'StepControlCheckpointState',
     'TransientCheckpoint',
     'capture_history',
+    'declared_identity',
     'model_digest',
+    'read_checkpoint_file',
     'restore_history_checkpoint',
     'validate_context_json',
     'validate_history_json',
     'validate_history_owner',
+    'write_checkpoint_file',
 ]
 
 
@@ -33,6 +46,26 @@ def _number(value):
         msg = 'checkpoint numeric values must be finite JSON numbers, not booleans or strings'
         raise ValueError(msg)
     return float(value)
+
+
+def declared_identity(value):
+    """A declared model object as plain values for :func:`model_digest`; nothing is copied.
+
+    Dataclasses by field, mappings (a frozen ``mappingproxy`` included) by item, enums by value, a
+    non-finite float spelled as data (JSON cannot). Anything else is handed on as it is, so
+    :func:`model_digest` refuses what it cannot read -- an opaque callable never becomes an identity.
+    """
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return {f.name: declared_identity(getattr(value, f.name)) for f in dataclasses.fields(value)}
+    if isinstance(value, Mapping):
+        return {str(k): declared_identity(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [declared_identity(v) for v in value]
+    if isinstance(value, Enum):
+        return declared_identity(value.value)
+    if isinstance(value, float) and not math.isfinite(value):
+        return {'nonfinite': repr(value)}
+    return value
 
 
 def model_digest(parts):
@@ -85,6 +118,122 @@ class CheckpointContext(Protocol):
 
 
 @dataclass(frozen=True)
+class ScheduleCheckpointState:
+    """The sampled-schedule cursor: where the segment holding ``time`` started, and the tasks' history.
+
+    A sampled march (``integrate_sampled``, ``integrate_explicit_sampled``) fires its due tasks at a
+    segment's START, before any step in it, so a record taken inside or at the end of a segment has
+    already fired that segment's tasks and not yet the next one's. ``segment_start`` is that segment's
+    first bound: the resume re-derives the SAME schedule from it (the steps inside a segment are
+    measured from its start, so a resume anchored elsewhere would land other instants). ``tasks`` is
+    the plain-JSON history of the caller's task owner (held outputs, integrators, latches) through
+    the :class:`CheckpointHistory` protocol, ``None`` when the march has no task.
+    """
+
+    segment_start: float
+    tasks: dict | None = None
+
+    def __post_init__(self) -> None:
+        _number(self.segment_start)
+        if self.tasks is not None:
+            if not isinstance(self.tasks, dict):
+                msg = 'checkpoint schedule tasks history must be a JSON object'
+                raise ValueError(msg)
+            validate_history_json(self.tasks)
+
+    def to_mapping(self) -> dict:
+        return {'segment_start': self.segment_start, 'tasks': self.tasks}
+
+    @classmethod
+    def from_mapping(cls, data) -> 'ScheduleCheckpointState':
+        if not isinstance(data, dict) or set(data) != {'segment_start', 'tasks'}:
+            msg = 'checkpoint schedule_state must carry exactly segment_start and tasks'
+            raise ValueError(msg)
+        return cls(_number(data['segment_start']), data['tasks'])
+
+
+def _plain_tolerance(value) -> float | list[float]:
+    array = np.asarray(value, dtype=float)
+    if not np.all(np.isfinite(array)):
+        msg = 'checkpoint step-control tolerance must be finite'
+        raise ValueError(msg)
+    return array.tolist()
+
+
+@dataclass(frozen=True)
+class StepControlCheckpointState:
+    """The local-error controller's history: what an adaptive march decides its next step FROM.
+
+    ``points`` are the last accepted ``(t, u)`` the predictor extrapolates through (at most ``order + 1``,
+    the newest at the record's time; ONE after a start, a restart or an event, which is the controller's
+    own bootstrap), ``next_step`` the step it proposed after the record's accepted step. ``tolerance`` is
+    the ``{rtol, atol, h_min}`` it was taken under: a resume under another tolerance would be another march,
+    so it refuses rather than reusing a history sized for different bars.
+    """
+
+    points: tuple[tuple[float, tuple[float, ...]], ...]
+    next_step: float
+    tolerance: dict
+
+    def __post_init__(self) -> None:
+        _number(self.next_step)
+        if self.next_step <= 0.0 or not self.points:
+            msg = 'checkpoint step-control state needs accepted points and a positive next step'
+            raise ValueError(msg)
+        times = [_number(t) for t, _u in self.points]
+        if any(b <= a for a, b in itertools.pairwise(times)) or len({len(u) for _t, u in self.points}) != 1:
+            msg = 'checkpoint step-control points must increase in time and share one state size'
+            raise ValueError(msg)
+        for _t, u in self.points:
+            for value in u:
+                _number(value)
+        if set(self.tolerance) != {'rtol', 'atol', 'h_min'}:
+            msg = 'checkpoint step-control tolerance must carry exactly rtol, atol and h_min'
+            raise ValueError(msg)
+        validate_history_json(self.tolerance)
+
+    @classmethod
+    def of(cls, points, next_step: float, tolerance) -> 'StepControlCheckpointState':
+        return cls(
+            tuple((float(t), tuple(float(x) for x in np.asarray(u, dtype=float))) for t, u in points),
+            float(next_step),
+            cls.tolerance_of(tolerance),
+        )
+
+    @staticmethod
+    def tolerance_of(tolerance) -> dict:
+        """The canonical plain form of a ``StepTolerance`` -- the one the record and a resume compare."""
+        return {
+            'rtol': _plain_tolerance(tolerance.rtol),
+            'atol': _plain_tolerance(tolerance.atol),
+            'h_min': None if tolerance.h_min is None else float(tolerance.h_min),
+        }
+
+    def to_mapping(self) -> dict:
+        return {
+            'points': [[t, list(u)] for t, u in self.points],
+            'next_step': self.next_step,
+            'tolerance': self.tolerance,
+        }
+
+    @classmethod
+    def from_mapping(cls, data) -> 'StepControlCheckpointState':
+        if (
+            not isinstance(data, dict)
+            or set(data) != {'points', 'next_step', 'tolerance'}
+            or not isinstance(data['points'], list)
+            or any(not isinstance(p, list) or len(p) != 2 or not isinstance(p[1], list) for p in data['points'])
+        ):
+            msg = 'checkpoint step_control_state must carry exactly points, next_step and tolerance'
+            raise ValueError(msg)
+        return cls(
+            tuple((_number(t), tuple(_number(x) for x in u)) for t, u in data['points']),
+            _number(data['next_step']),
+            data['tolerance'],
+        )
+
+
+@dataclass(frozen=True)
 class TransientCheckpoint:
     """Integrator history plus caller-owned problem identity and last accepted step size.
 
@@ -111,6 +260,8 @@ class TransientCheckpoint:
     eec_state: EECCheckpointState | None = None
     step_origin: float | None = None
     event_state: EventCheckpointState | None = None
+    schedule_state: ScheduleCheckpointState | None = None
+    step_control_state: StepControlCheckpointState | None = None
 
     def __post_init__(self) -> None:
         if self.problem_context is not None:
@@ -131,8 +282,11 @@ class TransientCheckpoint:
                 'bdf1',
                 'bdf2',
                 'tr_bdf2',
+                'trapezoid',
                 'newmark',
                 'generalized_alpha',
+                'rk4',
+                'zoh',
             )
         ):
             msg = 'checkpoint requires problem identity and integrator'
@@ -150,7 +304,8 @@ class TransientCheckpoint:
             for value in state:
                 _number(value)
         second_order = self.integrator in ('newmark', 'generalized_alpha')
-        carried_rate = self.integrator == 'tr_bdf2'
+        # A one-state scheme whose history is the state AND the rate it carries (trapezoid, TR-BDF2's stage).
+        carried_rate = self.integrator in ('tr_bdf2', 'trapezoid')
         if (
             (second_order and (self.velocity is None or self.acceleration is None))
             or (carried_rate and (self.velocity is None or self.acceleration is not None))
@@ -191,6 +346,18 @@ class TransientCheckpoint:
                 msg_0 = 'event checkpoint requires its actual locator state without EEC'
                 raise ValueError(msg_0)
             self.event_state.validate_clock(self.time, self.step_origin)
+        if self.schedule_state is not None and (
+            type(self.schedule_state) is not ScheduleCheckpointState or self.schedule_state.segment_start > self.time
+        ):
+            msg = 'checkpoint schedule_state must be a ScheduleCheckpointState whose segment starts by its time'
+            raise ValueError(msg)
+        if self.step_control_state is not None and (
+            type(self.step_control_state) is not StepControlCheckpointState
+            or self.step_control_state.points[-1][0] != self.time
+            or len(self.step_control_state.points[-1][1]) != history.shape[1]
+        ):
+            msg = 'checkpoint step-control points must end at the record time with its state size'
+            raise ValueError(msg)
 
     def validate_restart(self, problem_key, integrator, time, size):
         if (problem_key, integrator, time, size) != (
@@ -222,6 +389,10 @@ class TransientCheckpoint:
             mapping['step_origin'] = self.step_origin
         if self.event_state is not None:
             mapping['event_state'] = self.event_state.to_mapping()
+        if self.schedule_state is not None:
+            mapping['schedule_state'] = self.schedule_state.to_mapping()
+        if self.step_control_state is not None:
+            mapping['step_control_state'] = self.step_control_state.to_mapping()
         return mapping
 
     @classmethod
@@ -242,7 +413,9 @@ class TransientCheckpoint:
         if (
             not isinstance(data, dict)
             or not expected <= set(data)
-            or set(data) - expected - {'eec_state', 'step_origin', 'event_state'}
+            or set(data)
+            - expected
+            - {'eec_state', 'step_origin', 'event_state', 'schedule_state', 'step_control_state'}
             or type(data['schema_version']) is not int
             or data['schema_version'] != 3
         ):
@@ -262,12 +435,85 @@ class TransientCheckpoint:
             eec_state=None if 'eec_state' not in data else EECCheckpointState.from_mapping(data['eec_state']),
             step_origin=None if 'step_origin' not in data else _number(data['step_origin']),
             event_state=None if 'event_state' not in data else EventCheckpointState.from_mapping(data['event_state']),
+            schedule_state=(
+                None if 'schedule_state' not in data else ScheduleCheckpointState.from_mapping(data['schedule_state'])
+            ),
+            step_control_state=(
+                None
+                if 'step_control_state' not in data
+                else StepControlCheckpointState.from_mapping(data['step_control_state'])
+            ),
             states=tuple(tuple(_number(value) for value in state) for state in data['states']),
             velocity=None if data['velocity'] is None else tuple(_number(value) for value in data['velocity']),
             acceleration=(
                 None if data['acceleration'] is None else tuple(_number(value) for value in data['acceleration'])
             ),
         )
+
+
+#: EVERY TIME MARCH, ``module:function``, and each takes ``checkpoint_key`` / ``on_checkpoint`` / ``restart``
+#: and streams and resumes this module's :class:`TransientCheckpoint` (user ruling 2026-10-13: checkpoint and
+#: resume are a general capability of every march). Every layer above marches THROUGH these (plan R2); the
+#: one private march left outside gauss is the layering test's named ``_DEBT``, and it is not on the contract.``tests/architecture/layering/test_every_march_is_on_the_checkpoint_contract.py``
+#: derives the march set from source and holds it equal to this one, both sides.
+CHECKPOINTED_MARCHES: frozenset[str] = frozenset({
+    'motronics.gauss.time_integrators.march:integrate_transient',
+    'motronics.gauss.time_integrators.multirate:integrate_sampled',
+    'motronics.gauss.time_integrators.explicit:integrate_explicit_sampled',
+    'motronics.gauss.time_integrators.zoh:march_zoh',
+})
+
+#: FIXED POINTS OVER A MARCH, not marches: each iterates WHOLE windows or periods of a checkpointed march,
+#: so there is no instant inside one to resume at. Its resumable state is its own iterate, which it already
+#: takes back as its seed (a periodic state, a relaxed waveform).
+FIXED_POINTS_OVER_A_MARCH: frozenset[str] = frozenset({
+    'motronics.gauss.time_integrators.waveform_relaxation:waveform_relaxation',
+    'motronics.gauss.time_integrators.shooting:periodic_shooting',
+    'motronics.gauss.time_integrators.periodic:periodic_fixed_point',
+    'motronics.gauss.time_integrators.periodic:periodic_steady_state',
+    'motronics.gauss.time_integrators.periodic_march:shoot_transient_cycle',
+})
+
+#: The sealed file envelope: the ONE on-disk form of a :class:`TransientCheckpoint`.
+CHECKPOINT_FILE_SCHEMA = 'motronics-transient-checkpoint/v1'
+
+
+def _seal(mapping) -> str:
+    canonical = json.dumps(mapping, sort_keys=True, separators=(',', ':'), allow_nan=False)
+    return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+
+
+def write_checkpoint_file(path, checkpoint: TransientCheckpoint) -> Path:
+    """Write ``checkpoint`` sealed by its sha256, atomically: a kill mid-write leaves the previous file whole.
+
+    JSON's shortest float repr round-trips every finite double exactly, so a resume from this file is
+    bit-identical to the uninterrupted march.
+    """
+    path = Path(path)
+    mapping = checkpoint.to_mapping()
+    payload = json.dumps(
+        {'schema': CHECKPOINT_FILE_SCHEMA, 'sha256': _seal(mapping), 'checkpoint': mapping}, allow_nan=False
+    )
+    staging = path.with_name(f'{path.name}.tmp')
+    staging.write_text(payload, encoding='utf-8')
+    staging.replace(path)
+    return path
+
+
+def read_checkpoint_file(path) -> TransientCheckpoint:
+    """Read a sealed checkpoint; an edited, truncated or unsealed file is REFUSED, never resumed from."""
+    data = json.loads(Path(path).read_text(encoding='utf-8'))
+    if (
+        not isinstance(data, dict)
+        or set(data) != {'schema', 'sha256', 'checkpoint'}
+        or data['schema'] != CHECKPOINT_FILE_SCHEMA
+    ):
+        msg = f'{path}: not a sealed {CHECKPOINT_FILE_SCHEMA} checkpoint file'
+        raise ValueError(msg)
+    if _seal(data['checkpoint']) != data['sha256']:
+        msg = f'{path}: checkpoint content does not match its sha256 seal; the file was edited or corrupted'
+        raise ValueError(msg)
+    return TransientCheckpoint.from_mapping(data['checkpoint'])
 
 
 def validate_history_json(value):
@@ -348,7 +594,17 @@ def owns_history(problem) -> bool:
 
 
 def _checkpoint_of(
-    problem, state, dt, key, name, *, previous_time=None, eec_state=None, step_origin=None, event_state=None
+    problem,
+    state,
+    dt,
+    key,
+    name,
+    *,
+    previous_time=None,
+    eec_state=None,
+    step_origin=None,
+    event_state=None,
+    step_control_state=None,
 ):
     if state.stage != 0:
         msg = 'portable checkpoint requires an accepted macrostep, not an intermediate stage'
@@ -367,4 +623,5 @@ def _checkpoint_of(
         eec_state=eec_state,
         step_origin=step_origin,
         event_state=event_state,
+        step_control_state=step_control_state,
     )

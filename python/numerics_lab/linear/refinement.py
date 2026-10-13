@@ -49,6 +49,7 @@ __all__ = [
     'refinement_residual',
     'reject_unsolved_direct_system',
     'repair_direct_solution',
+    'settle_direct_solution',
 ]
 
 
@@ -77,7 +78,9 @@ def refine_factored_solution(matrix, rhs, initial, solve_correction):
 
     defect, score = measured(best)
     for _ in range(3):
-        if not np.any(defect):
+        # A defect below the smallest NORMAL float has no representable correction: a row-scaled
+        # solve underflows it to zero and refuses. The refined value is final there.
+        if not np.any(abs(defect) >= np.finfo(float).tiny):
             break
         correction = np.asarray(solve_correction(defect), dtype=float)
         if correction.shape != best.shape:
@@ -274,6 +277,21 @@ def direct_relative_residual(matrix, rhs, x) -> float | None:
     NOT cast to ``float``: the time-harmonic operator is COMPLEX, and casting its residual to a
     real dtype is what kept the harmonic call sites from being able to consult this guard at all.
     """
+    # THE DENSE REAL VECTOR CASE, spelled without the storage dispatch: `np.linalg.norm` of a real
+    # 1-D array IS `sqrt(v.dot(v))`, so this is the same statistic to the bit, at a fraction of
+    # the call overhead the general path pays on the tiny systems a circuit march solves.
+    if (
+        type(matrix) is np.ndarray
+        and type(rhs) is np.ndarray
+        and type(x) is np.ndarray
+        and rhs.ndim == 1
+        and rhs.dtype.kind == x.dtype.kind == matrix.dtype.kind == 'f'
+    ):
+        b_square = float(rhs.dot(rhs))
+        if b_square == 0.0:
+            return None
+        defect = matrix @ x.reshape(rhs.shape) - rhs
+        return math.sqrt(float(defect.dot(defect))) / math.sqrt(b_square)
     b = np.asarray(rhs.todense() if sp.issparse(rhs) else rhs)
     b_norm = float(np.linalg.norm(b.ravel()))
     if b_norm == 0.0:
@@ -666,6 +684,22 @@ def describe_refinement_trajectory(moves: tuple[float, ...], cond: float | None 
             'a genuine rank deficiency and the gauge/reference advice above applies'
         )
     return f'diagnostic refinement trajectory [{shown}]: {verdict}'
+
+
+def settle_direct_solution(matrix, rhs, x, backend: str) -> np.ndarray:
+    """REPAIR, THEN JUDGE a direct answer -- the one spelling of the pair every direct site runs.
+
+    A healthy answer takes ONE residual: below :data:`_DIRECT_RESIDUAL_RTOL` neither
+    :func:`repair_direct_solution` nor :func:`reject_unsolved_direct_system` does anything else,
+    so taking it twice bought nothing (measured 2026-10-12: 186,014 residuals for 93,007 solves on
+    a 0.02 s PMSM position march). Past the trigger the pair runs exactly as before.
+    """
+    residual = direct_relative_residual(matrix, rhs, x)
+    if residual is None or residual <= _DIRECT_RESIDUAL_RTOL:
+        return np.asarray(x)
+    x, moves = repair_direct_solution(matrix, rhs, x)
+    reject_unsolved_direct_system(matrix, rhs, x, backend, refinement=moves[-1] if moves else None)
+    return x
 
 
 def reject_unsolved_direct_system(matrix, rhs, x, backend: str, *, refinement: float | None = None) -> None:

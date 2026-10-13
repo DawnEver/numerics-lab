@@ -25,7 +25,13 @@ import numpy as np
 from numpy.typing import NDArray
 
 from motronics.gauss.time_integrators._forms import TransientSolution
-from motronics.gauss.time_integrators.multirate import SampledTask, ScheduledTask, schedule
+from motronics.gauss.time_integrators.checkpoint import CheckpointHistory, TransientCheckpoint
+from motronics.gauss.time_integrators.multirate import (
+    SampledTask,
+    ScheduledTask,
+    checkpointed_schedule,
+    schedule_cursor,
+)
 
 __all__ = ['integrate_explicit_sampled']
 
@@ -42,6 +48,10 @@ def integrate_explicit_sampled(
     tasks: Sequence[SampledTask | ScheduledTask] = (),
     *,
     project: Projection | None = None,
+    task_history: CheckpointHistory | None = None,
+    restart: TransientCheckpoint | None = None,
+    checkpoint_key: str | None = None,
+    on_checkpoint: Callable[[TransientCheckpoint], None] | None = None,
 ) -> TransientSolution:
     """March ``u' = derivative(u, t)`` from ``u0`` over ``[t0, t1]`` with classic RK4.
 
@@ -49,6 +59,9 @@ def integrate_explicit_sampled(
     ``project`` (optional) maps every accepted step onto the set the state is declared to live in
     (a one-sided winding current, say); it is part of the model, applied after the step and never
     inside a stage.
+    ``checkpoint_key`` / ``on_checkpoint`` / ``restart`` are the ONE transient checkpoint contract
+    (integrator ``rk4``, one state, the schedule cursor and ``task_history``'s state): a resume at
+    ``t0 == restart.time`` re-derives its segment's step from the segment start and is bit-identical.
     """
     if not (math.isfinite(dt) and dt > 0.0):
         msg = f'dt must be finite and positive, got {dt!r}'
@@ -56,10 +69,36 @@ def integrate_explicit_sampled(
     if not (math.isfinite(t0) and math.isfinite(t1) and t1 > t0):
         msg = f'need a finite window t0 < t1, got {t0!r}/{t1!r}'
         raise ValueError(msg)
-    order, bounds, due = schedule(tasks, t0, t1)
-    u = np.asarray(u0, dtype=float).copy()
+    order, bounds, due = checkpointed_schedule(
+        tasks,
+        t0,
+        t1,
+        restart=restart,
+        checkpoint_key=checkpoint_key,
+        on_checkpoint=on_checkpoint,
+        task_history=task_history,
+    )
+    if restart is not None and (restart.integrator != 'rk4' or len(restart.states[-1]) != np.size(u0)):
+        msg = 'checkpoint does not match the rk4 integrator or the state dimension'
+        raise ValueError(msg)
+    u = np.asarray(u0 if restart is None else restart.states[-1], dtype=float).copy()
     out = TransientSolution(times=[t0], states=[u.copy()])
-    for (t_a, t_b), firing in zip(itertools.pairwise(bounds), due, strict=True):
+
+    def record(t_a: float, h: float) -> TransientCheckpoint:
+        previous = out.times[-2] if len(out.times) > 1 else restart.previous_time
+        return TransientCheckpoint(
+            checkpoint_key,
+            'rk4',
+            out.times[-1],
+            h,
+            (tuple(float(x) for x in u),),
+            previous_time=previous,
+            schedule_state=schedule_cursor(t_a, task_history),
+        )
+
+    if restart is not None:
+        out.checkpoint = restart
+    for segment, ((t_a, t_b), firing) in enumerate(zip(itertools.pairwise(bounds), due, strict=True)):
         for index in sorted(firing):
             order[index].update(t_a, u)
         if t_b <= t_a:
@@ -73,7 +112,14 @@ def integrate_explicit_sampled(
         else:
             steps = math.ceil(span / dt)
             h = span / steps
-        for k in range(steps):
+        first = 0
+        if restart is not None and segment == 0:
+            # The resumed segment's lattice is the straight march's: same span, same h, same instants.
+            first = steps if restart.time == t_b else round((restart.time - t_a) / h)
+            if not 0 <= first <= steps or (first < steps and t_a + first * h != restart.time):
+                msg = 'checkpoint time is not an instant of its segment lattice'
+                raise ValueError(msg)
+        for k in range(first, steps):
             t = t_a + k * h
             k1 = derivative(u, t)
             k2 = derivative(u + 0.5 * h * k1, t + 0.5 * h)
@@ -84,4 +130,8 @@ def integrate_explicit_sampled(
                 u = project(u)
             out.times.append(t_b if k == steps - 1 else t_a + (k + 1) * h)
             out.states.append(u.copy())
+            if checkpoint_key is not None:
+                out.checkpoint = record(t_a, h)
+                if on_checkpoint is not None:
+                    on_checkpoint(out.checkpoint)
     return out

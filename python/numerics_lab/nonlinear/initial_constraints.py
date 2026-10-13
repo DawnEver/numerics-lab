@@ -58,7 +58,8 @@ def nonlinear_dae_initial_state(
         free = null_space(matrix)
         rank_bar = np.finfo(float).eps * max(matrix.shape) * 16
         indices = indices[np.linalg.norm(free[indices], axis=1) > rank_bar]
-    anchors = np.eye(initial.size)[indices]
+    anchored = indices
+    anchors = np.eye(initial.size)[anchored]
     system = _InitialConstraints(
         residual, jacobian, mass, initial, algebraic, stored, anchors, extra_rate_columns, stored_state
     )
@@ -68,6 +69,11 @@ def nonlinear_dae_initial_state(
         msg = 'nonlinear stored initial state did not close its actual algebraic DAE constraints'
         raise ValueError(msg)
     value = result.x if affine_constraints is None else reduced.full_state(result.x)
+    # AN ANCHOR IS AN EXACT CONSTRAINT, so its coordinate is handed back exactly, as the linear
+    # projection does: Newton closes it within an ulp (a REST wye current came back 1e-35), and a
+    # caller re-checking the same exact value refuses the projection's own output. The snapped
+    # state is what the residual and uniqueness checks below judge.
+    value[anchored] = initial[anchored]
     state = system.assemble(value)
     reference = np.linalg.norm(state.system_matrix) * np.linalg.norm(value) + np.linalg.norm(stored @ initial)
     if system.residual_norm(value, state) > tolerance * reference:
@@ -205,6 +211,17 @@ class _InitialConstraints:
 
     def residual_norm(self, x, state):
         return float(np.linalg.norm(state.payload))
+
+    def rhs_norm(self, state):
+        """The scale the Newton stop is judged on: the one the final acceptance check uses.
+
+        Without it the stop was relative to the SEED residual, so a seed near the root (a cold
+        Shockley bridge whose currents are already ~0) demanded an answer tighter than roundoff
+        and never converged -- the `_FiniteRightSystem` sibling owns the same source norm.
+        """
+        return float(np.linalg.norm(state.system_matrix) * np.linalg.norm(self.initial)) + float(
+            np.linalg.norm(self.stored @ self.initial)
+        )
 
     def tangent(self, x, state):
         return state.system_matrix

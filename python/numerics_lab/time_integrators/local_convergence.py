@@ -1,7 +1,6 @@
 """Optional independent-field Newton changes, never a mixed-unit state norm."""
 
 from numbers import Real
-from typing import Protocol, runtime_checkable
 
 import numpy as np
 
@@ -9,21 +8,6 @@ from motronics.gauss.nonlinear.local import local_change
 from motronics.gauss.time_integrators._forms import _FLOOR_SAFETY
 
 __all__ = ['LocalIterationCheck', 'validate_local_atols']
-
-
-@runtime_checkable
-class _LocalFieldsOwner(Protocol):
-    """A problem that names its independently converging fields."""
-
-    def local_convergence_fields(self, u, t): ...
-
-
-@runtime_checkable
-class _LocalAtolsOwner(Protocol):
-    """A problem that declares per-field absolute physical thresholds."""
-
-    @property
-    def local_convergence_atols(self): ...
 
 
 def validate_local_atols(values):
@@ -47,11 +31,14 @@ class LocalIterationCheck:
     """
 
     def __init__(self, problem, tolerance) -> None:
-        self.fields = problem.local_convergence_fields if isinstance(problem, _LocalFieldsOwner) else None
+        # Both seams are OPTIONAL attributes, read once per Newton solve. A runtime-checkable
+        # Protocol answered the same presence question through `typing`'s isinstance machinery,
+        # 1.9 s of a 40 s march of tiny systems (measured 2026-10-12).
+        self.fields = getattr(problem, 'local_convergence_fields', None)
         self.previous = None
         self.finite = True
         self.tolerance = tolerance
-        self.atols = problem.local_convergence_atols if isinstance(problem, _LocalAtolsOwner) else None
+        self.atols = getattr(problem, 'local_convergence_atols', None)
         if self.atols is not None:
             validate_local_atols(self.atols)
         if self.fields is not None and (tolerance is None or not np.isfinite(tolerance) or tolerance <= 0):

@@ -116,3 +116,22 @@ def test_mandatory_independent_anchor_rows_retain_their_original_authority():
     )
     assert np.array_equal(answer, np.zeros(3))
     assert np.array_equal(directions[:, 0], [0.0, 0.0, 1.0])
+
+
+def test_a_computed_entry_inside_its_supplied_error_bound_is_never_a_pivot():
+    # A Schur border is COMPUTED: an entry no larger than its own formation error is noise
+    # left by a cancellation (an exactly dependent row), and pivoting on it invents authority.
+    matrix = np.array([[1.0, 0.0], [0.0, 1e-17]])
+    rhs = np.array([1.0, 1e-17])
+    answer, directions = border_affine_space(matrix, rhs)
+    assert answer[1] == 1.0
+    errors = np.array([[0.0, 0.0], [0.0, 1e-16]])
+    answer, directions = border_affine_space(matrix, rhs, entry_errors=errors)
+    assert np.array_equal(answer, [1.0, 0.0])
+    assert np.array_equal(directions[:, 0], [0.0, 1.0])
+
+
+@pytest.mark.parametrize('errors', [np.zeros((2, 3)), np.array([[0.0, -1.0], [0.0, 0.0]]), np.full((2, 2), np.nan)])
+def test_entry_errors_require_a_finite_nonnegative_aligned_bound(errors):
+    with pytest.raises(ValueError, match='entry error'):
+        border_affine_space(np.eye(2), np.zeros(2), entry_errors=errors)

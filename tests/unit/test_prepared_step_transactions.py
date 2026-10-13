@@ -571,8 +571,10 @@ def test_uniform_eec_owns_actual_canonical_endpoint_and_full_step_spacing(kind):
         checkpoint_key='uniform-eec',
     )
     assert result.times[-1] == endpoint and result.checkpoint.time == endpoint
-    assert result.checkpoint.previous_dt == endpoint - 6 * dt
-    assert result.final_integrator_state.h == dt
+    # The record carries the INTEGRATOR'S step (`state.h`, what BDF2 forms its ratio from), not the clock
+    # difference `endpoint - 6 dt`, which sits ulps off it and resumed other coefficients (2026-10-13).
+    assert result.checkpoint.previous_dt == result.final_integrator_state.h == dt
+    assert result.checkpoint.previous_dt == pytest.approx(endpoint - 6 * dt, rel=1e-12, abs=0.0)
     for t, slope in clock.slopes:
         assert t in [tick * dt for tick in range(1, 8)]
         expected = 1 / dt if kind is IntegratorKind.BDF1 or t == dt else 1.5 / dt

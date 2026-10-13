@@ -15,9 +15,23 @@ __all__ = ['joint_coordinate_sparse_correction', 'stored_initial_correction']
 
 
 def joint_coordinate_sparse_correction(
-    matrix, rhs, *, mass, algebraic_rows, stored_rows, indices, residual_allowance=None, state_directions=None
+    matrix,
+    rhs,
+    *,
+    mass,
+    algebraic_rows,
+    stored_rows,
+    indices,
+    residual_allowance=None,
+    state_directions=None,
+    row_scale=None,
+    tolerance=1e-10,
 ):
-    """Solve supplied joint columns through the actual sparse bulk/small border."""
+    """Solve supplied joint columns through the actual sparse bulk/small border.
+
+    ``row_scale`` is each original row's state operand scale; with it a dependent border row set
+    is weighted by the rows' own bars (see ``_weighted_by_row_bars``).
+    """
     n = mass.shape[0]
     if state_directions is not None:
         entries = state_directions.data if sp.issparse(state_directions) else np.asarray(state_directions, dtype=object)
@@ -44,7 +58,8 @@ def joint_coordinate_sparse_correction(
         )
         rhs = np.concatenate((rhs, np.zeros(n)))
         residual_allowance = None if residual_allowance is None else np.concatenate((residual_allowance, np.zeros(n)))
-    change, rate_directions = _sparse_joint_border(
+        row_scale = None if row_scale is None else np.concatenate((row_scale, np.zeros(n)))
+    change, rate_directions, _admitted = _sparse_joint_border(
         matrix,
         rhs,
         mass,
@@ -53,13 +68,25 @@ def joint_coordinate_sparse_correction(
         indices,
         residual_allowance=residual_allowance,
         state_directions=None if state_directions is None else directions,
+        row_scale=row_scale,
+        tolerance=tolerance,
     )
     unique = np.concatenate((np.ones(mass.shape[0], dtype=bool), np.all(rate_directions == 0, axis=1)))
     return change[: 2 * n], unique
 
 
 def _sparse_joint_border(
-    matrix, rhs, mass, algebraic, stored_rows, indices, *, residual_allowance=None, state_directions=None
+    matrix,
+    rhs,
+    mass,
+    algebraic,
+    stored_rows,
+    indices,
+    *,
+    residual_allowance=None,
+    state_directions=None,
+    row_scale=None,
+    tolerance=1e-10,
 ):
     """Eliminate an explicitly selected sparse state/rate block, not a dense field."""
     n = mass.shape[0]
@@ -130,20 +157,42 @@ def _sparse_joint_border(
         correction = np.zeros(matrix.shape[1])
         correction[selected_columns] = solve(rhs[selected_rows])
         correction[~unanchored] = 0
-        return correction, np.empty((n, 0))
+        return correction, np.empty((n, 0)), allowance
 
     coupling = matrix[selected_rows][:, remaining_columns]
 
-    def column_response(column):
+    def column_forcing(column):
         entries = coupling[:, column].tocoo()
         forcing = np.zeros(block.shape[0])
         np.add.at(forcing, entries.row, entries.data)
-        return solve(forcing) if entries.nnz else forcing
+        return forcing
+
+    def column_response(column):
+        forcing = column_forcing(column)
+        return solve(forcing) if np.any(forcing) else forcing
+
+    def response_error(column):
+        residual = column_forcing(column) - block @ response[:, column]
+        return abs(raw_solve(residual)) if np.any(residual) else residual
 
     response = np.column_stack([column_response(column) for column in range(len(remaining_columns))])
     left = matrix[remaining_rows][:, selected_columns]
-    schur = matrix[remaining_rows][:, remaining_columns] - sp.csr_matrix(left @ response)
+    direct = matrix[remaining_rows][:, remaining_columns]
+    schur = direct - sp.csr_matrix(left @ response)
     schur.eliminate_zeros()
+    # The Schur border is COMPUTED, and a solid body's net-current row is exactly
+    # dependent on its hidden row: in the border it is a cancellation of terms many
+    # orders larger than what is left. Its entries' own error seeds the eliminator, or
+    # it pivots on that remainder (Cummins step 1: body rows at 1e-15 of their 5.2
+    # operands, subsystem cond 1e18). Formation rounding is gamma_k over the summed
+    # |terms|; the responses' forward error is the image of their next refinement
+    # correction, an ESTIMATE as in `_driven_allowance_image`.
+    count = np.asarray(sp.csr_matrix(left).getnnz(axis=1)).ravel() + 1.0
+    unit = np.finfo(float).eps / 2
+    gamma = count * unit / (1 - count * unit)
+    errors = np.column_stack([response_error(column) for column in range(len(remaining_columns))])
+    abs_left = abs(sp.csr_matrix(left))
+    schur_errors = gamma[:, None] * np.asarray(abs(direct) + abs_left @ abs(response)) + abs_left @ errors
     # An eliminated row's ADMITTED slack (its forcing within its own allowance -- the remainder a
     # converged field seed hands over) does not vanish with the row: elimination carries it into
     # the Schur forcing. So the forcing is formed as two images, driven and slack, and a retained
@@ -156,7 +205,11 @@ def _sparse_joint_border(
     slack_base = solve(slack) if np.any(slack) else np.zeros_like(driven_base)
     driven = rhs[remaining_rows] - left @ driven_base
     carried = -(left @ slack_base)
-    forcing = driven + carried
+    # With row bars, an eliminated row's slack (inside its own certified bound) STAYS on it: it
+    # is not re-solved and not exported through elimination onto a retained row whose own bar
+    # is far smaller (Cummins: the field rows' remainders summed onto a body row at 1.3x).
+    kept = slack if row_scale is not None else np.zeros_like(slack)
+    forcing = driven if row_scale is not None else driven + carried
     terms = np.asarray(sp.csr_matrix(left).getnnz(axis=1)).ravel() + 2
     gamma = terms * np.finfo(float).eps / (1.0 - terms * np.finfo(float).eps)
     inherited = (
@@ -164,16 +217,62 @@ def _sparse_joint_border(
         + abs(carried)
         + gamma * (abs(rhs[remaining_rows]) + abs(left) @ (abs(driven_base) + abs(slack_base)) + abs(carried))
     )
+    driven_rows = abs(selected_rhs) > allowance[selected_rows]
+    inherited += _driven_allowance_image(
+        block, left, np.where(driven_rows, allowance[selected_rows], 0.0), abs(forcing) > inherited
+    )
     supported = np.asarray(schur.getnnz(axis=1)).ravel() != 0
     if np.any(abs(forcing[~supported]) > inherited[~supported]):
         msg = 'joint stored state contradicts actual eliminated original rows'
         raise ValueError(msg)
     answer, directions = border_affine_space(
-        schur[supported].toarray(), forcing[supported], inherited_allowance=inherited[supported]
+        schur[supported].toarray(),
+        forcing[supported],
+        inherited_allowance=inherited[supported],
+        entry_errors=schur_errors[supported],
     )
+    if row_scale is not None:
+        # A DEPENDENT border row set is consistent only to its data's rounding, and the
+        # elimination leaves that inconsistency on whichever row it did not pivot. Cummins
+        # admission 80: the integrator's stored target meets a solid body's algebraic
+        # net-current constraint to ~2e-15 of that constraint's operands, and the whole of it
+        # landed on the body row, whose own operands are 3e5x smaller -- 6e-10 of its scale,
+        # every iteration, beyond any refinement. Each row is weighted by its own bar.
+        trial = np.zeros(matrix.shape[1])
+        trial[remaining_columns] = answer
+        trial[selected_columns] = solve(rhs[selected_rows] - kept - coupling @ answer)
+        rows = remaining_rows[supported]
+        bars = tolerance * (np.asarray(abs(matrix[rows]) @ abs(trial)).ravel() + abs(rhs[rows]) + row_scale[rows])
+        dense = schur[supported].toarray()
+        answer = _weighted_by_row_bars(dense, forcing[supported], answer, bars)
+        # A retained row whose Schur row is too weak to share its residual with the other
+        # retained rows (Cummins admission 338: a body row at 2e-5 of its neighbours, 2.6x its
+        # bar) takes it from the ELIMINATED rows, through the elimination's adjoint, each in
+        # units of its own bar -- the same weighted least squares, one level down.
+        # Judged on the ACTUAL original rows, not the Schur model: the elimination's own
+        # error is what put the residual there.
+        selected_bars = tolerance * (
+            np.asarray(abs(matrix[selected_rows]) @ abs(trial)).ravel()
+            + abs(rhs[selected_rows])
+            + row_scale[selected_rows]
+        )
+        for _ in range(4):
+            trial[remaining_columns] = answer
+            trial[selected_columns] = solve(rhs[selected_rows] - kept - coupling @ answer)
+            defect = np.asarray(matrix[rows] @ trial).ravel() - rhs[rows]
+            over = np.flatnonzero(abs(defect) > bars)
+            # A dependent residual is a few weak rows; more rows than border columns is no such set.
+            if not over.size or over.size > len(remaining_columns):
+                break
+            shift = _eliminated_share(block, left[np.flatnonzero(supported)[over]], selected_bars, defect[over])
+            if shift is None:
+                break
+            kept = kept + shift
+            forcing = forcing + left @ solve(shift)
+            answer = _weighted_by_row_bars(dense, forcing[supported], answer, bars)
     correction = np.zeros(matrix.shape[1])
     correction[remaining_columns] = answer
-    correction[selected_columns] = solve(rhs[selected_rows] - coupling @ answer)
+    correction[selected_columns] = solve(rhs[selected_rows] - kept - coupling @ answer)
     full_directions = np.zeros((matrix.shape[1], directions.shape[1]))
     full_directions[remaining_columns] = directions
     full_directions[selected_columns] = -response @ directions
@@ -188,7 +287,128 @@ def _sparse_joint_border(
     if np.any(full_directions[:n] != 0):
         msg = 'joint stored-coordinate equations require additional physical state authority'
         raise ValueError(msg)
-    return correction, full_directions[n : 2 * n]
+    # What each original row may keep: its own certified bound, and on a retained row
+    # also what elimination carried into it (slack image plus driven rounding image).
+    admitted = allowance.copy()
+    admitted[remaining_rows] = inherited
+    return correction, full_directions[n : 2 * n], admitted
+
+
+def _weighted_by_row_bars(schur, forcing, answer, bars):
+    """Move ``answer`` to the least squares of the border rows, each in units of its own bar.
+
+    Independent rows are already met; only a dependent set's residual moves, onto the rows whose
+    bars can hold it. A row whose bar is zero (or below the normal range) is EXACT: it is kept as an
+    equality constraint, never divided by. Free columns (no entry) are not touched.
+    """
+    live = np.flatnonzero(np.any(schur != 0, axis=0))
+    if not live.size:
+        return answer
+    matrix = schur[:, live]
+    residual = forcing - schur @ answer
+    exact = ~(bars >= np.finfo(float).tiny)
+    step = np.zeros(len(live))
+    basis = np.eye(len(live))
+    if np.any(exact):
+        # Exact rows: the minimum-norm step that meets them, then move only in their null space.
+        u, sigma, vt = np.linalg.svd(matrix[exact], full_matrices=True)
+        rank = int(np.sum(sigma > sigma[0] * np.finfo(float).eps * max(matrix[exact].shape))) if sigma.size else 0
+        step = vt[:rank].T @ ((u[:, :rank].T @ residual[exact]) / sigma[:rank])
+        basis = vt[rank:].T
+    soft = ~exact
+    if np.any(soft) and basis.shape[1]:
+        weighted = (matrix[soft] @ basis) / bars[soft, None]
+        norm = np.linalg.norm(weighted, axis=0)
+        usable = norm > 0
+        if np.any(usable):
+            target = (residual[soft] - matrix[soft] @ step) / bars[soft]
+            reduced, *_ = np.linalg.lstsq(weighted[:, usable] / norm[usable], target, rcond=None)
+            step = step + basis[:, usable] @ (reduced / norm[usable])
+    moved = answer.copy()
+    moved[live] += step
+    return moved
+
+
+def _eliminated_share(block, left, bars, residual):
+    """Forcing shifts on the eliminated rows that carry ``residual`` off the given retained rows.
+
+    The retained rows' Schur forcing moves by ``-y_i . shift`` with ``B^T y_i = left_i^T``; the
+    shift is the minimum of ``sum (shift_j / bar_j)^2`` meeting ``Y shift = residual``. A row with
+    a zero bar is exact and takes nothing. ``None`` when the adjoint cannot be formed.
+    """
+    transposed = sp.csr_matrix(block.T)
+    try:
+        normalized, _ = normalize_sparse_rows(transposed, np.zeros(transposed.shape[0]))
+        factor = splu(normalized.tocsc())
+    except (RuntimeError, ValueError):
+        return None
+
+    def correction(defect):
+        return factor.solve(normalize_sparse_rows(transposed, defect)[1])
+
+    weights = np.where(bars >= np.finfo(float).tiny, bars, 0.0) ** 2
+    adjoints = []
+    for row in range(left.shape[0]):
+        target = np.asarray(left[row].toarray()).ravel()
+        adjoint = correction(target)
+        for _ in range(4):
+            adjoint = adjoint + correction(target - transposed @ adjoint)
+        if not np.all(np.isfinite(adjoint)):
+            return None
+        adjoints.append(adjoint)
+    adjoints = np.array(adjoints)
+    gram = (adjoints * weights) @ adjoints.T
+    multipliers, *_ = np.linalg.lstsq(gram, residual, rcond=None)
+    shift = weights * (adjoints.T @ multipliers)
+    return shift if np.all(np.isfinite(shift)) else None
+
+
+def _driven_allowance_image(block, left, bound, needed):
+    """``|left B^-1| bound`` on the rows that need it: a DRIVEN row's certified rounding, eliminated.
+
+    A driven eliminated row (its forcing outside its own allowance) still carries its residual's
+    rounding ``|delta_j| <= bound_j``, and elimination maps it into a retained row as
+    ``left B^-1 delta`` -- signed, so no forward solve bounds it. The row's adjoint ``y`` (``B^T y
+    = left^T``) does: ``|y| . bound``. Formed only for rows whose forcing exceeds the allowance
+    they already inherit, and granted only when the refined adjoint is NORMWISE backward stable
+    (``max|B^T y - left^T| <= gamma_k max(|B^T||y| + |left|)``); otherwise the row inherits
+    nothing more and its refusal stands. ``y`` is the computed elimination's adjoint -- the same
+    computed elimination whose forward image the inherited term already reads -- and its residual
+    forward error is estimated by the next refinement correction, whose image is added; that one
+    term is an estimate, not a certificate, and is stated as such. Componentwise stability is not
+    asked: measured on Cummins, rows of the mixed-unit block with a two-entry support keep their
+    whole (1e-14..1e-8) defect while the normwise ratio is 0.006..0.013.
+    """
+    image = np.zeros(left.shape[0])
+    rows = np.flatnonzero(needed & (np.asarray(sp.csr_matrix(left).getnnz(axis=1)).ravel() != 0))
+    if not np.any(bound) or not rows.size:
+        return image
+    transposed = sp.csr_matrix(block.T)
+    try:
+        normalized, _ = normalize_sparse_rows(transposed, np.zeros(transposed.shape[0]))
+        factor = splu(normalized.tocsc())
+    except (RuntimeError, ValueError):
+        return image
+
+    def correction(defect):
+        return factor.solve(normalize_sparse_rows(transposed, defect)[1])
+
+    count = float(np.max(transposed.getnnz(axis=1))) + 1.0
+    gamma = count * np.finfo(float).eps / (1 - count * np.finfo(float).eps)
+    for row in rows:
+        target = np.asarray(left[row].toarray()).ravel()
+        # Refined here rather than through `refine_factored_solution`, whose magnitude gate
+        # refuses this mixed-unit adjoint (cond_1 ~ 1e25 on Cummins) although its refinement
+        # trajectory collapses; the normwise check below is the acceptance.
+        adjoint = correction(target)
+        for _ in range(4):
+            adjoint = adjoint + correction(target - transposed @ adjoint)
+        defect = target - transposed @ adjoint
+        scale = np.max(abs(transposed) @ abs(adjoint) + abs(target))
+        if np.all(np.isfinite(adjoint)) and np.max(abs(defect)) <= gamma * scale:
+            # The remaining forward error of ``y`` is the next correction; its image is added.
+            image[row] = (abs(adjoint) + abs(correction(defect))) @ bound
+    return image
 
 
 def _triangular_joint_solver(matrix, mass, stored_rows, stored_positions, indices, differential):
@@ -317,8 +537,13 @@ def stored_initial_correction(
     state,
     rate_tangent,
     sparse_state_indices=None,
+    residual_allowance=None,
 ):
-    """Eliminate stored state then stored rate; reveal only the actual free border."""
+    """Eliminate stored state then stored rate; reveal only the actual free border.
+
+    ``residual_allowance`` is the certified rounding bound of ``residual`` per row; it
+    travels through the sparse elimination and every original row may keep its image.
+    """
     n = mass.shape[0]
     columns = np.asarray(stored_columns)
     if (
@@ -344,8 +569,24 @@ def stored_initial_correction(
             format='csr',
         )
         rhs = np.concatenate((-residual, stored_change, -algebraic @ partial))
-        correction, rate_directions = _sparse_joint_border(
-            matrix, rhs, mass, algebraic, stored_rows, sparse_state_indices
+        allowance = (
+            None if residual_allowance is None else np.concatenate((residual_allowance, np.zeros(matrix.shape[0] - n)))
+        )
+        row_scale = np.concatenate((
+            np.asarray(abs(jacobian) @ abs(state)).ravel(),
+            np.asarray(abs(stored) @ abs(state)).ravel(),
+            np.zeros(algebraic.shape[0]),
+        ))
+        correction, rate_directions, admitted = _sparse_joint_border(
+            matrix,
+            rhs,
+            mass,
+            algebraic,
+            stored_rows,
+            sparse_state_indices,
+            residual_allowance=allowance,
+            row_scale=row_scale,
+            tolerance=tolerance,
         )
         return _validate_joint_correction(
             correction,
@@ -360,6 +601,7 @@ def stored_initial_correction(
             tolerance,
             state,
             rate_tangent,
+            admitted=admitted,
         )
     if not 0 < width <= 512:
         msg = 'joint storage elimination requires a bounded actual free state/rate border'
@@ -454,8 +696,12 @@ def _validate_joint_correction(
     tolerance,
     state,
     rate_tangent,
+    *,
+    admitted=None,
 ):
     n = mass.shape[0]
+    # Each original row keeps the certified rounding image the elimination carried to it.
+    admitted = np.zeros(matrix.shape[0]) if admitted is None else admitted
     state_defect = jacobian @ correction[:n] + mass @ correction[n:] + residual
     state_scale = (
         np.asarray(abs(jacobian) @ abs(correction[:n]) + abs(mass) @ abs(correction[n:])).ravel()
@@ -465,14 +711,34 @@ def _validate_joint_correction(
     if (
         not np.isfinite(state_defect).all()
         or not np.isfinite(state_scale).all()
-        or np.any(abs(state_defect) > tolerance * state_scale)
+        or np.any(abs(state_defect) > tolerance * state_scale + admitted[:n])
     ):
         msg = 'joint stored state contradicts actual state/rate equations'
         raise ValueError(msg)
+
+    def _holds(candidate, bound):
+        defect = matrix @ candidate - rhs
+        equation_scale = np.asarray(abs(matrix) @ abs(candidate)).ravel() + abs(rhs)
+        # The residual was evaluated at the actual state: a row whose coordinates
+        # are all fixed by storage keeps that evaluation's size as its only scale,
+        # the same scale the nonlinear owner admits its algebraic state rows by.
+        equation_scale[:n] += np.asarray(abs(jacobian) @ abs(state)).ravel()
+        stored = matrix[n : 2 * n - algebraic.shape[0], :n]
+        equation_scale[n : 2 * n - algebraic.shape[0]] += np.asarray(abs(stored) @ abs(state)).ravel()
+        return bool(np.all(np.isfinite(defect)) and np.all(abs(defect) <= tolerance * equation_scale + bound))
+
+    unique = np.ones(n, dtype=bool)
+    unique[np.any(rate_directions != 0, axis=1)] = False
+    # A joint correction that already meets EVERY original row at the bare bar needs no rate
+    # repair: re-solving its rates re-makes the dependent body rows' rounding image (Cummins
+    # admission 338: the border met body 5 exactly, the re-solve put it at 2.1x its bar).
+    if _holds(correction, 0.0):
+        return correction, unique
     # Stored state is exact authority; stored rate is not reconstructed by a
     # subtraction of large dynamic operands. Solve every original frozen-state
     # rate equation, retaining the independently differentiated weak constraints.
     forcing, roundoff = _frozen_rate_forcing(jacobian, residual, correction[:n], mass, state, tolerance)
+    roundoff = roundoff + admitted[:n]
     # Give the independent differentiated equations first choice of numerical
     # pivots. All dynamic rows still remain original physical witnesses.
     try:
@@ -492,13 +758,7 @@ def _validate_joint_correction(
     except ValueError as error:
         msg = f'joint stored state contradicts actual state/rate equations: {error}'
         raise ValueError(msg) from error
-    defect = matrix @ correction - rhs
-    equation_scale = np.asarray(abs(matrix) @ abs(correction)).ravel() + abs(rhs)
-    # The residual was evaluated at the actual state: a row whose coordinates
-    # are all fixed by storage keeps that evaluation's size as its only scale,
-    # the same scale the nonlinear owner admits its algebraic state rows by.
-    equation_scale[:n] += np.asarray(abs(jacobian) @ abs(state)).ravel()
-    if np.any(abs(defect) > tolerance * equation_scale):
+    if not _holds(correction, admitted):
         msg = 'joint stored state contradicts actual state/rate equations'
         raise ValueError(msg)
     unique = np.ones(n, dtype=bool)
