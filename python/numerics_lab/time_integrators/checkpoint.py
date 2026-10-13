@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 import numpy as np
@@ -14,6 +15,7 @@ from motronics.gauss.time_integrators.eec_checkpoint import EECCheckpointState
 from motronics.gauss.time_integrators.event_checkpoint import EventCheckpointState
 
 __all__ = [
+    'CHECKPOINT_FILE_SCHEMA',
     'CheckpointContext',
     'CheckpointHistory',
     'EECCheckpointState',
@@ -21,10 +23,12 @@ __all__ = [
     'TransientCheckpoint',
     'capture_history',
     'model_digest',
+    'read_checkpoint_file',
     'restore_history_checkpoint',
     'validate_context_json',
     'validate_history_json',
     'validate_history_owner',
+    'write_checkpoint_file',
 ]
 
 
@@ -268,6 +272,48 @@ class TransientCheckpoint:
                 None if data['acceleration'] is None else tuple(_number(value) for value in data['acceleration'])
             ),
         )
+
+
+#: The sealed file envelope: the ONE on-disk form of a :class:`TransientCheckpoint`.
+CHECKPOINT_FILE_SCHEMA = 'motronics-transient-checkpoint/v1'
+
+
+def _seal(mapping) -> str:
+    canonical = json.dumps(mapping, sort_keys=True, separators=(',', ':'), allow_nan=False)
+    return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+
+
+def write_checkpoint_file(path, checkpoint: TransientCheckpoint) -> Path:
+    """Write ``checkpoint`` sealed by its sha256, atomically: a kill mid-write leaves the previous file whole.
+
+    JSON's shortest float repr round-trips every finite double exactly, so a resume from this file is
+    bit-identical to the uninterrupted march.
+    """
+    path = Path(path)
+    mapping = checkpoint.to_mapping()
+    payload = json.dumps(
+        {'schema': CHECKPOINT_FILE_SCHEMA, 'sha256': _seal(mapping), 'checkpoint': mapping}, allow_nan=False
+    )
+    staging = path.with_name(f'{path.name}.tmp')
+    staging.write_text(payload, encoding='utf-8')
+    staging.replace(path)
+    return path
+
+
+def read_checkpoint_file(path) -> TransientCheckpoint:
+    """Read a sealed checkpoint; an edited, truncated or unsealed file is REFUSED, never resumed from."""
+    data = json.loads(Path(path).read_text(encoding='utf-8'))
+    if (
+        not isinstance(data, dict)
+        or set(data) != {'schema', 'sha256', 'checkpoint'}
+        or data['schema'] != CHECKPOINT_FILE_SCHEMA
+    ):
+        msg = f'{path}: not a sealed {CHECKPOINT_FILE_SCHEMA} checkpoint file'
+        raise ValueError(msg)
+    if _seal(data['checkpoint']) != data['sha256']:
+        msg = f'{path}: checkpoint content does not match its sha256 seal; the file was edited or corrupted'
+        raise ValueError(msg)
+    return TransientCheckpoint.from_mapping(data['checkpoint'])
 
 
 def validate_history_json(value):
