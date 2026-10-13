@@ -55,8 +55,10 @@ def certified_sparse_product(left, right):
     gamma = counts.multiply(np.finfo(float).eps).tocsr()
     gamma.data = gamma.data / (1 - gamma.data)
     bound = csr_matrix(magnitude.multiply(gamma))
-    uncertified = csr_matrix(abs(product) <= bound).multiply(product != 0)
-    product = product - product.multiply(uncertified)
+    # Keep only entries strictly above their bound. Asked as ``difference > 0`` because a sparse
+    # ``<=`` is True where both operands are absent and so builds the product's DENSE pattern;
+    # IEEE subtraction is exactly zero only for equal operands, so the sign is the comparison.
+    product = csr_matrix(product.multiply((abs(product) - bound) > 0))
     product.eliminate_zeros()
     return csr_matrix(product)
 

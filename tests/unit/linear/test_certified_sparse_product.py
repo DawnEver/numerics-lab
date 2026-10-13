@@ -25,3 +25,18 @@ def test_a_small_coefficient_above_its_own_bound_survives():
     right = sp.csr_matrix(np.array([[1.0, 0.5], [1.0, 0.0]]))
     product = certified_sparse_product(left, right)
     assert product.toarray().tolist() == (left @ right).toarray().tolist()
+
+
+def test_certifying_a_large_sparse_product_never_forms_its_dense_pattern():
+    """MEASURED 2026-10-13: `abs(product) <= bound` between two sparse matrices is True where both
+    are absent, so scipy built an all-True dense matrix of the product's shape -- 140 GiB on the
+    transformer_3ph_concentric network march's accepted projection. Certification reads only the
+    entries the product has.
+    """
+    n = 10**6
+    left = sp.identity(n, format='csr')
+    right = sp.csr_matrix((np.array([0.1, 2.0]), (np.array([0, 5]), np.array([0, 7]))), shape=(n, n))
+    product = certified_sparse_product(left, right)
+    assert product.shape == (n, n)
+    assert product.nnz == 2
+    assert product[5, 7] == 2.0
