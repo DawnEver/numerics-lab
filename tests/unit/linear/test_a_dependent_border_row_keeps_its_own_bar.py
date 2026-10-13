@@ -18,7 +18,7 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear.initial_storage_border import _sparse_joint_border
+from motronics.gauss.linear.initial_storage_border import _sparse_joint_border, _weighted_by_row_bars
 
 pytestmark = pytest.mark.unit
 
@@ -95,3 +95,81 @@ def test_an_eliminated_rows_slack_stays_on_it_and_is_not_exported():
     defect = abs(matrix @ correction - rhs)
     assert defect[0] <= allowance[0], 'the slack stays on its own row, inside its own bound'
     assert np.all(defect[1:] <= _bars(matrix, rhs, correction)[1:])
+
+
+@pytest.mark.filterwarnings('error')
+def test_a_zero_bar_row_is_an_exact_constraint_never_a_division():
+    """A homogeneous witness has bar 0 (or a subnormal one); it is met exactly, not weighted by 1/0.
+
+    PLANTED after the switched-network checkpoint regression: dividing by a zero bar overflowed and
+    the weighted least squares raised ``SVD did not converge``.
+    """
+    schur = np.array([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [0.0, 0.0]])
+    forcing = np.array([0.0, 2.0, 2.5, 0.0])
+    bars = np.array([0.0, 1e-320, 1.0, 0.0])  # rows 0 and 1 exact, row 2 soft, row 3 empty
+    moved = _weighted_by_row_bars(schur, forcing, np.zeros(2), bars)
+    assert np.all(np.isfinite(moved))
+    assert moved[0] == 0.0 and moved[1] == 2.0, 'the exact rows hold exactly; the soft row keeps the 0.5'
+
+
+def test_a_joint_correction_that_already_holds_is_not_rate_re_solved(monkeypatch):
+    """Every original row at the bare bar: the rate re-solve is skipped, not re-run.
+
+    Cummins admission 338: the border met body 5's net-current row exactly, and the frozen-state
+    rate re-solve put it back at 2.1x its bar (the dependent row's rounding image), every iteration.
+    """
+    from motronics.gauss.linear import initial_storage_border as owner  # noqa: PLC0415
+
+    def planted_re_solve(*_args, **_kwargs):
+        msg = 'PLANTED: the rate re-solve must not run'
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(owner, 'index_two_frozen_rate', planted_re_solve)
+    count = 3
+    n = count + 2
+    jacobian = sp.lil_matrix((n, n))
+    jacobian[:count, :count] = sp.eye(count)
+    jacobian[0, count] = -1
+    jacobian[count, count] = 5
+    jacobian[count + 1, 0] = 1
+    jacobian[count + 1, count + 1] = -1
+    mass = sp.lil_matrix((n, n))
+    mass[0, 0] = 2
+    mass[count, count + 1] = 1
+    jacobian, mass = jacobian.tocsr(), mass.tocsr()
+    algebraic = sp.eye(n, format='csr')[np.r_[np.arange(1, count), count + 1]]
+    residual = np.zeros(n)
+    residual[count] = -7
+    correction, _unique = owner.stored_initial_correction(
+        jacobian,
+        residual,
+        mass,
+        algebraic,
+        np.array([0, count]),
+        np.array([0, count + 1]),
+        np.zeros(2),
+        np.zeros(n),
+        tolerance=1e-10,
+        state=np.zeros(n),
+        rate_tangent=jacobian,
+        sparse_state_indices=np.arange(count),
+    )
+    assert correction[count] == pytest.approx(7 / 5.5, abs=1e-14)
+
+
+def test_a_weak_retained_row_takes_its_residual_from_the_eliminated_rows_by_their_bars():
+    """The adjoint share: ``y . shift = residual`` at least weighted size; a zero-bar row takes nothing.
+
+    Cummins admission 338: body 5's Schur row is 2e-5 of its neighbours, so no retained row can
+    hold its 2.6x-bar residual; the eliminated rows (bars far larger) can.
+    """
+    from motronics.gauss.linear.initial_storage_border import _eliminated_share  # noqa: PLC0415
+
+    block = sp.csr_matrix(np.array([[2.0, 0.0, 0.0], [0.0, 4.0, 0.0], [0.0, 0.0, 1.0]]))
+    left = sp.csr_matrix(np.array([[1.0, 1.0, 1.0]]))
+    bars = np.array([1.0, 3.0, 0.0])  # row 2 exact
+    shift = _eliminated_share(block, left, bars, np.array([5e-9]))
+    adjoint = np.array([0.5, 0.25, 1.0])  # B^T y = left^T
+    assert adjoint @ shift == pytest.approx(5e-9, rel=1e-12)
+    assert shift[2] == 0.0
+    assert shift[1] / shift[0] == pytest.approx((9 * 0.25) / (1 * 0.5), rel=1e-12), 'weighted by bar squared'

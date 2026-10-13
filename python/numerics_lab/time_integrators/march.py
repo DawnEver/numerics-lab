@@ -108,6 +108,7 @@ from motronics.gauss.time_integrators._step import HeldFactor, ProblemCapabiliti
 from motronics.gauss.time_integrators._time_lattice import adaptive_lattice
 from motronics.gauss.time_integrators.checkpoint import (
     EECCheckpointState,
+    StepControlCheckpointState,
     _checkpoint_of,
     owns_history,
     restore_history_checkpoint,
@@ -135,6 +136,7 @@ __all__ = [
     'StepNotConverged',
     'StepTolerance',
     'integrate_transient',
+    'march_log_record',
 ]
 
 #: Events tolerated inside ONE nominal cell before the function is declared chattering. A genuine
@@ -149,7 +151,7 @@ _MAX_EVENTS_PER_CELL = 512
 # recomputed; large field vectors must not make simultaneous event observers exhaust host memory.
 _EVENT_TRIAL_CACHE_BYTES = 64 * 1024**2
 #: The integrators a portable checkpoint can carry (their full history is ``us`` + ``v``/``a``).
-_CHECKPOINT_INTEGRATORS = ('bdf1', 'bdf2', 'tr_bdf2', 'newmark', 'generalized_alpha')
+_CHECKPOINT_INTEGRATORS = ('bdf1', 'bdf2', 'trapezoid', 'tr_bdf2', 'newmark', 'generalized_alpha')
 
 
 @dataclass(frozen=True)
@@ -234,8 +236,18 @@ def _rss_bytes() -> int:
     return int(psutil.Process().memory_info().rss)
 
 
+def march_log_record(body: str, **attributes) -> dict:
+    """THE one march log line: OpenTelemetry log-record field names, attributes namespaced ``march.``."""
+    return {
+        'timestamp': datetime.now(UTC).isoformat(),
+        'severity_text': 'WARN' if body in {'reject', 'nonconverged'} else 'INFO',
+        'body': body,
+        'attributes': {f'march.{k}': v for k, v in attributes.items()},
+    }
+
+
 class _StepLog:
-    """One JSON object per line, OpenTelemetry log-record field names, to a caller-owned text stream."""
+    """One JSON object per line (:func:`march_log_record`), to a caller-owned text stream."""
 
     def __init__(self, stream) -> None:
         self.stream = stream
@@ -243,13 +255,7 @@ class _StepLog:
     def __call__(self, body: str, **attributes) -> None:
         if self.stream is None:
             return
-        record = {
-            'timestamp': datetime.now(UTC).isoformat(),
-            'severity_text': 'WARN' if body in {'reject', 'nonconverged'} else 'INFO',
-            'body': body,
-            'attributes': {f'march.{k}': v for k, v in attributes.items()},
-        }
-        print(json.dumps(record), file=self.stream)
+        print(json.dumps(march_log_record(body, **attributes)), file=self.stream)
 
 
 @dataclass(frozen=True)
@@ -716,9 +722,6 @@ def integrate_transient(
         if integrator.name not in _CHECKPOINT_INTEGRATORS:
             msg = f'a portable checkpoint carries {_CHECKPOINT_INTEGRATORS} history, not {integrator.name}'
             raise ValueError(msg)
-        if step_control is not None:
-            msg = 'a checkpoint does not carry the local-error controller history; declare one or the other'
-            raise ValueError(msg)
         validate_history_owner(problem)
     if step_times is not None:
         grid = np.asarray(step_times, dtype=float)
@@ -832,6 +835,17 @@ def integrate_transient(
     lte_history: list[tuple[float, NDArray]] = [(state.t, u0)]
     h_floor = dt * 1e-6 if step_control is None or step_control.h_min is None else step_control.h_min
     h_ctrl = dt  # the local-error controller's next step size (only consulted with step_control)
+    if restart is not None and (restart.step_control_state is None) != (step_control is None):
+        msg = 'checkpoint step control does not match the march: a record and its resume declare it both or neither'
+        raise ValueError(msg)
+    if restart is not None and step_control is not None:
+        saved_control = restart.step_control_state
+        if saved_control.tolerance != StepControlCheckpointState.tolerance_of(step_control):
+            msg = 'checkpoint step control was taken under another tolerance; that resume would be another march'
+            raise ValueError(msg)
+        # The controller resumes where it stood: its predictor points and the step it proposed.
+        lte_history = [(t, np.array(u, dtype=float)) for t, u in saved_control.points]
+        h_ctrl = saved_control.next_step
     g_prev = [float(g(u0, state.t)) for g in event_fns]
     breakpoints = tuple(time_breakpoints)
     observations = tuple(observation_times)
@@ -1022,7 +1036,11 @@ def integrate_transient(
         return _checkpoint_of(
             problem,
             state,
-            accepted_dt,
+            # THE INTEGRATOR'S OWN STEP, not the clock difference: BDF2 forms its coefficients from the step
+            # ratio `state.h` carries, and `t_new - t_prev` sits ulps off it (0.0010000000000000009 for a
+            # 1 ms step), so a resume restored from the difference marched other coefficients -- MEASURED
+            # on the sampled terminal controller, whose ticks restart the history every other step.
+            accepted_dt if state.h is None else state.h,
             checkpoint_key,
             integrator.name,
             # A resume whose window is under the end tolerance takes no step (a source corner one ulp
@@ -1031,6 +1049,9 @@ def integrate_transient(
             eec_state=eec_state,
             step_origin=lattice_origin,
             event_state=event_state,
+            step_control_state=None
+            if step_control is None
+            else StepControlCheckpointState.of(lte_history, h_ctrl, step_control),
         )
 
     def emit_checkpoint(target: float | None, event_count: int) -> None:

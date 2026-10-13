@@ -29,8 +29,13 @@ import numpy as np
 from numpy.typing import NDArray
 
 from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
-from motronics.gauss.time_integrators._forms import TransientSolution, same_instant
+from motronics.gauss.time_integrators._forms import IntegratorState, TransientSolution, same_instant
 from motronics.gauss.time_integrators._integrators import get_integrator
+from motronics.gauss.time_integrators.checkpoint import (
+    CheckpointHistory,
+    ScheduleCheckpointState,
+    TransientCheckpoint,
+)
 from motronics.gauss.time_integrators.initial import consistent_initial_condition
 from motronics.gauss.time_integrators.march import BudgetExceeded, integrate_transient
 
@@ -210,6 +215,57 @@ def schedule(
     return order, [*hits, t1], due
 
 
+def checkpointed_schedule(
+    tasks: Sequence[SampledTask | ScheduledTask],
+    t0: float,
+    t1: float,
+    *,
+    restart: TransientCheckpoint | None,
+    checkpoint_key: str | None,
+    on_checkpoint,
+    task_history: CheckpointHistory | None,
+) -> tuple[list[SampledTask | ScheduledTask], list[float], list[set[int]]]:
+    """:func:`schedule`, resumed from ``restart``'s cursor when given -- the ONE resume rule of both sampled marches.
+
+    A resume re-derives the schedule from the checkpoint's ``segment_start`` (so every later bound is
+    the same float the straight march used), restores the task owner, and does NOT re-fire the first
+    segment's tasks: they fired before the step the record was taken after. Refuses a checkpoint
+    request that could not resume: tasks without a ``task_history`` owner, a record of another model or
+    instant, or one without a schedule cursor.
+    """
+    if (on_checkpoint is not None or restart is not None) and checkpoint_key is None:
+        msg = 'on_checkpoint and restart require checkpoint_key'
+        raise ValueError(msg)
+    if checkpoint_key is not None and tasks and task_history is None:
+        msg = 'a checkpointed sampled march with tasks requires task_history: the tasks hold state the plant cannot rebuild'
+        raise ValueError(msg)
+    if task_history is not None and not isinstance(task_history, CheckpointHistory):
+        msg = 'task_history must implement checkpoint_history / restore_checkpoint_history'
+        raise ValueError(msg)
+    start = t0
+    if restart is not None:
+        if restart.schedule_state is None or (restart.problem_key, restart.time) != (checkpoint_key, t0):
+            msg = 'checkpoint does not match the problem, the restart time or a sampled schedule cursor'
+            raise ValueError(msg)
+        if (restart.schedule_state.tasks is None) != (task_history is None):
+            msg = 'checkpoint task history does not match the declared task_history owner'
+            raise ValueError(msg)
+        if task_history is not None:
+            task_history.restore_checkpoint_history(restart.schedule_state.tasks)
+        start = restart.schedule_state.segment_start
+    order, bounds, due = schedule(tasks, start, t1)
+    if restart is not None:
+        due[0] = set()
+    return order, bounds, due
+
+
+def schedule_cursor(segment_start: float, task_history: CheckpointHistory | None) -> ScheduleCheckpointState:
+    """The cursor a sampled march records after an accepted step inside the segment from ``segment_start``."""
+    return ScheduleCheckpointState(
+        float(segment_start), None if task_history is None else task_history.checkpoint_history()
+    )
+
+
 def integrate_sampled(
     problem,
     study: TransientStudy,
@@ -218,6 +274,10 @@ def integrate_sampled(
     *,
     consistent_start: bool = False,
     segment_step_limit: Callable[[float, float], float] | None = None,
+    task_history: CheckpointHistory | None = None,
+    restart: TransientCheckpoint | None = None,
+    checkpoint_key: str | None = None,
+    on_checkpoint: Callable[[TransientCheckpoint], None] | None = None,
     **march,
 ) -> TransientSolution:
     """March ``problem`` over ``study`` with ``tasks`` firing at their hits and holding between them.
@@ -233,18 +293,30 @@ def integrate_sampled(
     systems, not acceleration.
     ``segment_step_limit(start, stop)`` optionally tightens the study's maximum step
     for each actual interval. It changes resolution, never task instants or priorities.
+    ``checkpoint_key`` / ``on_checkpoint`` / ``restart`` are the ONE transient checkpoint contract: every
+    segment's accepted records carry the schedule cursor and ``task_history``'s state (required whenever
+    there are tasks), and a resume at ``study.t0 == restart.time`` is bit-identical to the straight march.
     """
     if consistent_start and study.integrator in (IntegratorKind.NEWMARK, IntegratorKind.GENERALIZED_ALPHA):
         msg = 'consistent_start initializes first-order rates, not second-order acceleration'
         raise ValueError(msg)
-    order, bounds, due = schedule(tasks, study.t0, study.t1)
-    u = np.asarray(u0, dtype=float)
+    order, bounds, due = checkpointed_schedule(
+        tasks,
+        study.t0,
+        study.t1,
+        restart=restart,
+        checkpoint_key=checkpoint_key,
+        on_checkpoint=on_checkpoint,
+        task_history=task_history,
+    )
+    u = np.asarray(u0 if restart is None else restart.states[-1], dtype=float)
     out = TransientSolution(times=[study.t0], states=[u], state_rates=[], residual_times=[], rate_state_overrides={})
     v, a = march.pop('v0', None), march.pop('a0', None)
     integrator = get_integrator(study.integrator)
     budget = march.pop('budget', None)
     started = time.perf_counter()
-    for (t_a, t_b), firing in zip(itertools.pairwise(bounds), due, strict=True):
+    for segment, ((t_a, t_b), firing) in enumerate(zip(itertools.pairwise(bounds), due, strict=True)):
+        resuming = restart is not None and segment == 0
         if budget is not None:
             budget.check(started, out.times[-1], u, len(out.times) - 1)
         for index in sorted(firing):
@@ -261,7 +333,20 @@ def integrate_sampled(
                 msg = f'segment step limit must be finite and positive, got {limit!r}'
                 raise ValueError(msg)
             dt = min(dt, limit)
-        if consistent_start:
+        if resuming and restart.time >= t_b:
+            # The record closed this segment: hand its history on exactly as the straight march does.
+            out.checkpoint = restart
+            out.final_integrator_state = IntegratorState(
+                us=[np.array(state, dtype=float) for state in restart.states],
+                t=restart.time,
+                v=None if restart.velocity is None else np.array(restart.velocity, dtype=float),
+                a=None if restart.acceleration is None else np.array(restart.acceleration, dtype=float),
+                h=restart.previous_dt,
+            )
+            carried = integrator.restart(out.final_integrator_state, u, t_b)
+            v, a = carried.v, carried.a
+            continue
+        if consistent_start and not resuming:
             start = consistent_initial_condition(problem, u, t_a, tol=march.get('tol', 1e-10))
             u, v = start.u, start.u_dot
             if budget is not None:
@@ -269,14 +354,23 @@ def integrate_sampled(
         remaining = budget
         if budget is not None and budget.wall_seconds is not None:
             remaining = replace(budget, wall_seconds=max(0.0, budget.wall_seconds - (time.perf_counter() - started)))
+        stamp = None
+        if checkpoint_key is not None:
+
+            def stamp(record, origin=t_a):
+                return replace(record, schedule_state=schedule_cursor(origin, task_history))
+
         try:
             seg = integrate_transient(
                 problem,
-                TransientStudy(t0=t_a, t1=t_b, dt=dt, integrator=study.integrator),
+                TransientStudy(t0=restart.time if resuming else t_a, t1=t_b, dt=dt, integrator=study.integrator),
                 u,
-                v0=v,
-                a0=a,
+                v0=None if resuming else v,
+                a0=None if resuming else a,
                 budget=remaining,
+                restart=replace(restart, schedule_state=None) if resuming else None,
+                checkpoint_key=checkpoint_key,
+                on_checkpoint=None if on_checkpoint is None else (lambda record, s=stamp: on_checkpoint(s(record))),
                 **march,
             )
         except BudgetExceeded as exc:
@@ -301,6 +395,8 @@ def integrate_sampled(
         u = np.asarray(seg.states[-1], dtype=float)
         assert seg.final_integrator_state is not None
         out.final_integrator_state = seg.final_integrator_state.copy()
-        restart = integrator.restart(out.final_integrator_state, u, t_b)
-        v, a = restart.v, restart.a
+        if stamp is not None and seg.checkpoint is not None:
+            out.checkpoint = stamp(seg.checkpoint)
+        carried = integrator.restart(out.final_integrator_state, u, t_b)
+        v, a = carried.v, carried.a
     return out
