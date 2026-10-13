@@ -1,10 +1,13 @@
 """Portable numerical history for restarting a native transient, without pickle execution."""
 
+import dataclasses
 import hashlib
 import itertools
 import json
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -27,6 +30,7 @@ __all__ = [
     'StepControlCheckpointState',
     'TransientCheckpoint',
     'capture_history',
+    'declared_identity',
     'model_digest',
     'read_checkpoint_file',
     'restore_history_checkpoint',
@@ -42,6 +46,26 @@ def _number(value):
         msg = 'checkpoint numeric values must be finite JSON numbers, not booleans or strings'
         raise ValueError(msg)
     return float(value)
+
+
+def declared_identity(value):
+    """A declared model object as plain values for :func:`model_digest`; nothing is copied.
+
+    Dataclasses by field, mappings (a frozen ``mappingproxy`` included) by item, enums by value, a
+    non-finite float spelled as data (JSON cannot). Anything else is handed on as it is, so
+    :func:`model_digest` refuses what it cannot read -- an opaque callable never becomes an identity.
+    """
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return {f.name: declared_identity(getattr(value, f.name)) for f in dataclasses.fields(value)}
+    if isinstance(value, Mapping):
+        return {str(k): declared_identity(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [declared_identity(v) for v in value]
+    if isinstance(value, Enum):
+        return declared_identity(value.value)
+    if isinstance(value, float) and not math.isfinite(value):
+        return {'nonfinite': repr(value)}
+    return value
 
 
 def model_digest(parts):
@@ -258,6 +282,7 @@ class TransientCheckpoint:
                 'bdf1',
                 'bdf2',
                 'tr_bdf2',
+                'trapezoid',
                 'newmark',
                 'generalized_alpha',
                 'rk4',
@@ -279,7 +304,8 @@ class TransientCheckpoint:
             for value in state:
                 _number(value)
         second_order = self.integrator in ('newmark', 'generalized_alpha')
-        carried_rate = self.integrator == 'tr_bdf2'
+        # A one-state scheme whose history is the state AND the rate it carries (trapezoid, TR-BDF2's stage).
+        carried_rate = self.integrator in ('tr_bdf2', 'trapezoid')
         if (
             (second_order and (self.velocity is None or self.acceleration is None))
             or (carried_rate and (self.velocity is None or self.acceleration is not None))

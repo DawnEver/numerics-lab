@@ -151,7 +151,7 @@ _MAX_EVENTS_PER_CELL = 512
 # recomputed; large field vectors must not make simultaneous event observers exhaust host memory.
 _EVENT_TRIAL_CACHE_BYTES = 64 * 1024**2
 #: The integrators a portable checkpoint can carry (their full history is ``us`` + ``v``/``a``).
-_CHECKPOINT_INTEGRATORS = ('bdf1', 'bdf2', 'tr_bdf2', 'newmark', 'generalized_alpha')
+_CHECKPOINT_INTEGRATORS = ('bdf1', 'bdf2', 'trapezoid', 'tr_bdf2', 'newmark', 'generalized_alpha')
 
 
 @dataclass(frozen=True)
