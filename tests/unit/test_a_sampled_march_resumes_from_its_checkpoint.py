@@ -17,6 +17,8 @@ import pytest
 from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
 from motronics.gauss.time_integrators import Hold, SampledTask, integrate_explicit_sampled, integrate_sampled
 from motronics.gauss.time_integrators.checkpoint import read_checkpoint_file, write_checkpoint_file
+from motronics.gauss.time_integrators.waveform_relaxation import waveform_relaxation
+from motronics.gauss.time_integrators.zoh import march_zoh, zoh_discretize
 
 _KEY = 'sampled-resume'
 _T1, _DT, _TS = 1.0, 0.01, 0.07
@@ -161,3 +163,75 @@ def test_a_checkpointed_march_with_tasks_but_no_task_history_refuses(name):
                 checkpoint_key=_KEY,
             )
     assert march is not None
+
+
+# ---------------------------------------------------------------- the exact zero-order-hold march
+
+_AD, _COLUMNS = zoh_discretize(np.array([[0.0, 1.0], [-4.0, -0.4]]), (np.array([0.0, 1.0]),), 0.01)
+
+
+class _Feedback:
+    """A sampled integral law on the position: its integral is state the plant cannot rebuild."""
+
+    def __init__(self) -> None:
+        self.integral = 0.0
+
+    def __call__(self, _t, x) -> tuple[float]:
+        self.integral += 0.05 * (1.0 - x[0])
+        return (2.0 * (1.0 - x[0]) + self.integral,)
+
+    def checkpoint_history(self) -> dict:
+        return {'integral': self.integral}
+
+    def restore_checkpoint_history(self, data: dict) -> None:
+        self.integral = float(data['integral'])
+
+
+def _zoh(law, t0, n_steps, **checkpoint):
+    return march_zoh(
+        _AD, _COLUMNS, np.zeros(2), t0=t0, dt=0.01, n_steps=n_steps, control=law, control_history=law, **checkpoint
+    )
+
+
+def test_the_zoh_march_resumes_bit_for_bit_and_refuses_a_foreign_record(tmp_path):
+    straight = _zoh(_Feedback(), 0.3, 100, checkpoint_key=_KEY)
+    records = []
+    with pytest.raises(_Killed):
+        _zoh(_Feedback(), 0.3, 100, checkpoint_key=_KEY, on_checkpoint=_kill_at(37, records))
+    saved = read_checkpoint_file(write_checkpoint_file(tmp_path / 'checkpoint.json', records[-1]))
+    times, states = _zoh(_Feedback(), saved.time, 100 - 37, checkpoint_key=_KEY, restart=saved)
+    np.testing.assert_array_equal(times, straight[0][37:])
+    np.testing.assert_array_equal(states, straight[1][37:])
+    # Planted: the law's integral restarted from zero is visibly another trajectory.
+    blank = type(saved).from_mapping({
+        **saved.to_mapping(),
+        'schedule_state': {**saved.schedule_state.to_mapping(), 'tasks': {'integral': 0.0}},
+    })
+    _times, wrong = _zoh(_Feedback(), saved.time, 100 - 37, checkpoint_key=_KEY, restart=blank)
+    assert not np.array_equal(wrong[-1], straight[1][-1])
+    with pytest.raises(ValueError, match='checkpoint'):
+        _zoh(_Feedback(), saved.time, 100 - 37, checkpoint_key='another model', restart=saved)
+
+
+# ---------------------------------------------------------------- a fixed point OVER a march
+
+
+def _contraction(x):
+    return 0.5 * np.cos(np.asarray(x, dtype=float)) + np.linspace(0.0, 1.0, 5), None
+
+
+def test_waveform_relaxation_resumes_from_its_iterate_not_mid_window():
+    """WR is a fixed point over whole windows: its resumable state is the relaxed iterate, handed back as the seed.
+
+    Straight to the bar against six sweeps + a resume seeded with their state: the same final state bit for
+    bit, in the same total sweep count. Planted: a resume that forgot its iterate (seeded from the start again)
+    saves no sweep, so the count identity is falsifiable.
+    """
+    seed = np.zeros(5)
+    straight = waveform_relaxation(_contraction, seed, relaxation=0.7, tol=1e-13, max_iter=200)
+    partial = waveform_relaxation(_contraction, seed, relaxation=0.7, tol=1e-300, max_iter=6)
+    resumed = waveform_relaxation(_contraction, partial.state, relaxation=0.7, tol=1e-13, max_iter=200)
+    np.testing.assert_array_equal(resumed.state, straight.state)
+    assert resumed.iterations + 6 == straight.iterations
+    forgot = waveform_relaxation(_contraction, seed, relaxation=0.7, tol=1e-13, max_iter=200)
+    assert forgot.iterations + 6 != straight.iterations

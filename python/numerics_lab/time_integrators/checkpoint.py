@@ -15,7 +15,9 @@ from motronics.gauss.time_integrators.eec_checkpoint import EECCheckpointState
 from motronics.gauss.time_integrators.event_checkpoint import EventCheckpointState
 
 __all__ = [
+    'CHECKPOINTED_MARCHES',
     'CHECKPOINT_FILE_SCHEMA',
+    'FIXED_POINTS_OVER_A_MARCH',
     'CheckpointContext',
     'CheckpointHistory',
     'EECCheckpointState',
@@ -175,6 +177,7 @@ class TransientCheckpoint:
                 'newmark',
                 'generalized_alpha',
                 'rk4',
+                'zoh',
             )
         ):
             msg = 'checkpoint requires problem identity and integrator'
@@ -321,6 +324,29 @@ class TransientCheckpoint:
             ),
         )
 
+
+#: EVERY TIME MARCH, ``module:function``, and each takes ``checkpoint_key`` / ``on_checkpoint`` / ``restart``
+#: and streams and resumes this module's :class:`TransientCheckpoint` (user ruling 2026-10-13: checkpoint and
+#: resume are a general capability of every march). Every layer above marches THROUGH these (plan R2); the
+#: one private march left outside gauss is the layering test's named ``_DEBT``, and it is not on the contract.``tests/architecture/layering/test_every_march_is_on_the_checkpoint_contract.py``
+#: derives the march set from source and holds it equal to this one, both sides.
+CHECKPOINTED_MARCHES: frozenset[str] = frozenset({
+    'motronics.gauss.time_integrators.march:integrate_transient',
+    'motronics.gauss.time_integrators.multirate:integrate_sampled',
+    'motronics.gauss.time_integrators.explicit:integrate_explicit_sampled',
+    'motronics.gauss.time_integrators.zoh:march_zoh',
+})
+
+#: FIXED POINTS OVER A MARCH, not marches: each iterates WHOLE windows or periods of a checkpointed march,
+#: so there is no instant inside one to resume at. Its resumable state is its own iterate, which it already
+#: takes back as its seed (a periodic state, a relaxed waveform).
+FIXED_POINTS_OVER_A_MARCH: frozenset[str] = frozenset({
+    'motronics.gauss.time_integrators.waveform_relaxation:waveform_relaxation',
+    'motronics.gauss.time_integrators.shooting:periodic_shooting',
+    'motronics.gauss.time_integrators.periodic:periodic_fixed_point',
+    'motronics.gauss.time_integrators.periodic:periodic_steady_state',
+    'motronics.gauss.time_integrators.periodic_march:shoot_transient_cycle',
+})
 
 #: The sealed file envelope: the ONE on-disk form of a :class:`TransientCheckpoint`.
 CHECKPOINT_FILE_SCHEMA = 'motronics-transient-checkpoint/v1'
