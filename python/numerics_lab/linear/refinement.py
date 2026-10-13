@@ -78,7 +78,9 @@ def refine_factored_solution(matrix, rhs, initial, solve_correction):
 
     defect, score = measured(best)
     for _ in range(3):
-        if not np.any(defect):
+        # A defect below the smallest NORMAL float has no representable correction: a row-scaled
+        # solve underflows it to zero and refuses. The refined value is final there.
+        if not np.any(abs(defect) >= np.finfo(float).tiny):
             break
         correction = np.asarray(solve_correction(defect), dtype=float)
         if correction.shape != best.shape:

@@ -75,3 +75,22 @@ def test_singular_owned_correction_cannot_supply_a_successful_guard_measurement(
     matrix = sp.csr_matrix([[1.0, 1.0], [1.0, 1.0]])
     with pytest.raises(LinearSolveError):
         refine_factored_solution(matrix, np.array([1.0, 0.0]), np.zeros(2), lambda _rhs: np.zeros(2))
+
+
+def test_a_subnormal_defect_ends_refinement_instead_of_asking_for_its_correction():
+    """MEASURED 2026-10-13 on test_coupled_network_checkpoint's switched network: the joint storage
+    border's refinement handed its row-normalized correction a 1.3e-321 defect; divided by the row
+    scale 161 it underflowed to zero, and the normalization refused the admission. A defect below the
+    smallest normal float has no representable correction, so the refined value is final.
+    """
+    matrix = sp.diags([1.0, 1.0], format='csr')
+    rhs = np.array([1.0, 5e-322])
+    initial = np.array([1.0, 0.0])
+
+    def solve(forcing):
+        if np.any((forcing != 0) & (abs(forcing) < np.finfo(float).tiny)):
+            msg = 'a subnormal forcing cannot be normalized'
+            raise ValueError(msg)
+        return forcing.copy()
+
+    np.testing.assert_array_equal(refine_factored_solution(matrix, rhs, initial, solve), initial)
