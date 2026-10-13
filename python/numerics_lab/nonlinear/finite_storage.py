@@ -434,6 +434,12 @@ def finite_storage_actual_rate_initial_pair(
                         indices=sparse_state_indices,
                         state_directions=directions,
                         residual_allowance=np.concatenate((state_allowance, np.zeros(original.shape[0] - len(state)))),
+                        row_scale=np.concatenate((
+                            abs(jacobian) @ abs(state),
+                            abs(stored) @ abs(state),
+                            np.zeros(storage.algebraic_rows.shape[0]),
+                        )),
+                        tolerance=tolerance,
                     )
                     candidate = state + correction[: len(state)]
                     rate = correction[len(state) :]
