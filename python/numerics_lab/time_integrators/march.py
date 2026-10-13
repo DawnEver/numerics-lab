@@ -1036,7 +1036,11 @@ def integrate_transient(
         return _checkpoint_of(
             problem,
             state,
-            accepted_dt,
+            # THE INTEGRATOR'S OWN STEP, not the clock difference: BDF2 forms its coefficients from the step
+            # ratio `state.h` carries, and `t_new - t_prev` sits ulps off it (0.0010000000000000009 for a
+            # 1 ms step), so a resume restored from the difference marched other coefficients -- MEASURED
+            # on the sampled terminal controller, whose ticks restart the history every other step.
+            accepted_dt if state.h is None else state.h,
             checkpoint_key,
             integrator.name,
             # A resume whose window is under the end tolerance takes no step (a source corner one ulp
