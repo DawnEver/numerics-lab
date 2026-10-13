@@ -20,6 +20,7 @@ __all__ = [
     'CheckpointHistory',
     'EECCheckpointState',
     'HistoryPresence',
+    'ScheduleCheckpointState',
     'TransientCheckpoint',
     'capture_history',
     'model_digest',
@@ -89,6 +90,41 @@ class CheckpointContext(Protocol):
 
 
 @dataclass(frozen=True)
+class ScheduleCheckpointState:
+    """The sampled-schedule cursor: where the segment holding ``time`` started, and the tasks' history.
+
+    A sampled march (``integrate_sampled``, ``integrate_explicit_sampled``) fires its due tasks at a
+    segment's START, before any step in it, so a record taken inside or at the end of a segment has
+    already fired that segment's tasks and not yet the next one's. ``segment_start`` is that segment's
+    first bound: the resume re-derives the SAME schedule from it (the steps inside a segment are
+    measured from its start, so a resume anchored elsewhere would land other instants). ``tasks`` is
+    the plain-JSON history of the caller's task owner (held outputs, integrators, latches) through
+    the :class:`CheckpointHistory` protocol, ``None`` when the march has no task.
+    """
+
+    segment_start: float
+    tasks: dict | None = None
+
+    def __post_init__(self) -> None:
+        _number(self.segment_start)
+        if self.tasks is not None:
+            if not isinstance(self.tasks, dict):
+                msg = 'checkpoint schedule tasks history must be a JSON object'
+                raise ValueError(msg)
+            validate_history_json(self.tasks)
+
+    def to_mapping(self) -> dict:
+        return {'segment_start': self.segment_start, 'tasks': self.tasks}
+
+    @classmethod
+    def from_mapping(cls, data) -> 'ScheduleCheckpointState':
+        if not isinstance(data, dict) or set(data) != {'segment_start', 'tasks'}:
+            msg = 'checkpoint schedule_state must carry exactly segment_start and tasks'
+            raise ValueError(msg)
+        return cls(_number(data['segment_start']), data['tasks'])
+
+
+@dataclass(frozen=True)
 class TransientCheckpoint:
     """Integrator history plus caller-owned problem identity and last accepted step size.
 
@@ -115,6 +151,7 @@ class TransientCheckpoint:
     eec_state: EECCheckpointState | None = None
     step_origin: float | None = None
     event_state: EventCheckpointState | None = None
+    schedule_state: ScheduleCheckpointState | None = None
 
     def __post_init__(self) -> None:
         if self.problem_context is not None:
@@ -137,6 +174,7 @@ class TransientCheckpoint:
                 'tr_bdf2',
                 'newmark',
                 'generalized_alpha',
+                'rk4',
             )
         ):
             msg = 'checkpoint requires problem identity and integrator'
@@ -195,6 +233,11 @@ class TransientCheckpoint:
                 msg_0 = 'event checkpoint requires its actual locator state without EEC'
                 raise ValueError(msg_0)
             self.event_state.validate_clock(self.time, self.step_origin)
+        if self.schedule_state is not None and (
+            type(self.schedule_state) is not ScheduleCheckpointState or self.schedule_state.segment_start > self.time
+        ):
+            msg = 'checkpoint schedule_state must be a ScheduleCheckpointState whose segment starts by its time'
+            raise ValueError(msg)
 
     def validate_restart(self, problem_key, integrator, time, size):
         if (problem_key, integrator, time, size) != (
@@ -226,6 +269,8 @@ class TransientCheckpoint:
             mapping['step_origin'] = self.step_origin
         if self.event_state is not None:
             mapping['event_state'] = self.event_state.to_mapping()
+        if self.schedule_state is not None:
+            mapping['schedule_state'] = self.schedule_state.to_mapping()
         return mapping
 
     @classmethod
@@ -246,7 +291,7 @@ class TransientCheckpoint:
         if (
             not isinstance(data, dict)
             or not expected <= set(data)
-            or set(data) - expected - {'eec_state', 'step_origin', 'event_state'}
+            or set(data) - expected - {'eec_state', 'step_origin', 'event_state', 'schedule_state'}
             or type(data['schema_version']) is not int
             or data['schema_version'] != 3
         ):
@@ -266,6 +311,9 @@ class TransientCheckpoint:
             eec_state=None if 'eec_state' not in data else EECCheckpointState.from_mapping(data['eec_state']),
             step_origin=None if 'step_origin' not in data else _number(data['step_origin']),
             event_state=None if 'event_state' not in data else EventCheckpointState.from_mapping(data['event_state']),
+            schedule_state=(
+                None if 'schedule_state' not in data else ScheduleCheckpointState.from_mapping(data['schedule_state'])
+            ),
             states=tuple(tuple(_number(value) for value in state) for state in data['states']),
             velocity=None if data['velocity'] is None else tuple(_number(value) for value in data['velocity']),
             acceleration=(
