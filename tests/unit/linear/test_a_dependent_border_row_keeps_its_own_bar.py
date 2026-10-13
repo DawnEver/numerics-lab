@@ -18,7 +18,7 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear.initial_storage_border import _sparse_joint_border
+from motronics.gauss.linear.initial_storage_border import _sparse_joint_border, _weighted_by_row_bars
 
 pytestmark = pytest.mark.unit
 
@@ -95,3 +95,18 @@ def test_an_eliminated_rows_slack_stays_on_it_and_is_not_exported():
     defect = abs(matrix @ correction - rhs)
     assert defect[0] <= allowance[0], 'the slack stays on its own row, inside its own bound'
     assert np.all(defect[1:] <= _bars(matrix, rhs, correction)[1:])
+
+
+@pytest.mark.filterwarnings('error')
+def test_a_zero_bar_row_is_an_exact_constraint_never_a_division():
+    """A homogeneous witness has bar 0 (or a subnormal one); it is met exactly, not weighted by 1/0.
+
+    PLANTED after the switched-network checkpoint regression: dividing by a zero bar overflowed and
+    the weighted least squares raised ``SVD did not converge``.
+    """
+    schur = np.array([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [0.0, 0.0]])
+    forcing = np.array([0.0, 2.0, 2.5, 0.0])
+    bars = np.array([0.0, 1e-320, 1.0, 0.0])  # rows 0 and 1 exact, row 2 soft, row 3 empty
+    moved = _weighted_by_row_bars(schur, forcing, np.zeros(2), bars)
+    assert np.all(np.isfinite(moved))
+    assert moved[0] == 0.0 and moved[1] == 2.0, 'the exact rows hold exactly; the soft row keeps the 0.5'

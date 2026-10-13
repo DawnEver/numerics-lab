@@ -272,19 +272,34 @@ def _weighted_by_row_bars(schur, forcing, answer, bars):
     """Move ``answer`` to the least squares of the border rows, each in units of its own bar.
 
     Independent rows are already met; only a dependent set's residual moves, onto the rows whose
-    bars can hold it. A row with a zero scale (an exact homogeneous witness) takes the smallest
-    positive bar scaled by eps, so it stays exact. Free columns (no entry) are not touched.
+    bars can hold it. A row whose bar is zero (or below the normal range) is EXACT: it is kept as an
+    equality constraint, never divided by. Free columns (no entry) are not touched.
     """
-    positive = bars[bars > 0]
-    if not positive.size:
-        return answer
-    bars = np.where(bars > 0, bars, positive.min() * np.finfo(float).eps)
     live = np.flatnonzero(np.any(schur != 0, axis=0))
-    weighted = schur[:, live] / bars[:, None]
-    norm = np.linalg.norm(weighted, axis=0)
-    step, *_ = np.linalg.lstsq(weighted / norm, (forcing - schur @ answer) / bars, rcond=None)
+    if not live.size:
+        return answer
+    matrix = schur[:, live]
+    residual = forcing - schur @ answer
+    exact = ~(bars >= np.finfo(float).tiny)
+    step = np.zeros(len(live))
+    basis = np.eye(len(live))
+    if np.any(exact):
+        # Exact rows: the minimum-norm step that meets them, then move only in their null space.
+        u, sigma, vt = np.linalg.svd(matrix[exact], full_matrices=True)
+        rank = int(np.sum(sigma > sigma[0] * np.finfo(float).eps * max(matrix[exact].shape))) if sigma.size else 0
+        step = vt[:rank].T @ ((u[:, :rank].T @ residual[exact]) / sigma[:rank])
+        basis = vt[rank:].T
+    soft = ~exact
+    if np.any(soft) and basis.shape[1]:
+        weighted = (matrix[soft] @ basis) / bars[soft, None]
+        norm = np.linalg.norm(weighted, axis=0)
+        usable = norm > 0
+        if np.any(usable):
+            target = (residual[soft] - matrix[soft] @ step) / bars[soft]
+            reduced, *_ = np.linalg.lstsq(weighted[:, usable] / norm[usable], target, rcond=None)
+            step = step + basis[:, usable] @ (reduced / norm[usable])
     moved = answer.copy()
-    moved[live] += step / norm
+    moved[live] += step
     return moved
 
 
