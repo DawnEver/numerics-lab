@@ -287,18 +287,20 @@ def directional_line_search(residual, u, step, r0, *, curvature: float = 0.5):
     return u + (lo if lo > 0.0 else s) * step
 
 
-def _locally_stable(local: LocalIterationCheck, u, t, observed, tangent) -> bool:
+def _locally_stable(local: LocalIterationCheck, u, t, observed, tangent, forcing) -> bool:
     """The local check's verdict, or a change the residual's own arithmetic cannot resolve.
 
     A relative per-field bar judges a physically ZERO field against its own rounding noise and
     can never pass there; :func:`change_below_residual_resolution` asks the unit-safe question
     instead -- whether the change moved any residual row above that row's rounding floor. Both
     verdicts need a previous observation, so the first iteration is decided by the check alone.
+    ``forcing`` returns each row's own source (the residual at the zero state), read only when the
+    relative check has refused.
     """
     stable = local.observe(u, t)
     if stable or observed is None or tangent is None or not local.finite:
         return stable
-    return change_below_residual_resolution(tangent, observed, u)
+    return change_below_residual_resolution(tangent, observed, u, forcing())
 
 
 def _solve_step(
@@ -447,12 +449,18 @@ def _solve_step(
     tangent = None
     local = LocalIterationCheck(problem, tol_rel)
     observed = None  # the iterate the local check last observed, for the resolution test
+
+    def row_forcing():
+        # Each row's own source: the residual with every state and rate at zero.
+        zero = np.zeros_like(np.asarray(guess, dtype=float))
+        return np.asarray(problem.residual(zero, zero, zero, t), dtype=float)
+
     for _it in range(1, max_newton + 1):
         iterations = _it
         u_arg, u_dot, u_ddot = form.u_arg(u), form.u_dot(u), form.u_ddot(u)
         r = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
         residual = float(np.linalg.norm(r))
-        stable = _locally_stable(local, u, t, observed, tangent)
+        stable = _locally_stable(local, u, t, observed, tangent, row_forcing)
         observed = u.copy()
         local_ok = local.accepts(stable, residual, initial=_it == 1)
         if _it == 1:
@@ -571,7 +579,7 @@ def _solve_step(
         u_arg, u_dot, u_ddot = form.u_arg(u), form.u_dot(u), form.u_ddot(u)
         r = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
         residual = float(np.linalg.norm(r))
-        local_ok = _locally_stable(local, u, t, observed, tangent)
+        local_ok = _locally_stable(local, u, t, observed, tangent, row_forcing)
         if local_ok and (residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0)):
             converged = True
         elif local_ok and _at_roundoff_floor(problem, tangent, u, form, capabilities, r):

@@ -12,9 +12,11 @@ joint border's row bars and the projected-rate consistency check. They all ask t
 
 The resolution is ``FLOOR_SAFETY * eps`` of the system scale -- the same rounding floor
 :func:`motronics.gauss.time_integrators._forms.residual_floor` states. It replaces a row's bar ONLY
-where that row's own operands are themselves under it (:func:`row_bar`): such a row is noise and is
-judged as zero. Every row with real operands keeps its own relative bar, so a large row can never
-hide a small real one (ruling 2026-10-14).
+where that row is HOMOGENEOUS (its own forcing exactly zero: no source, no declared data) and its
+operands are themselves under it (:func:`row_bar`). Such a row's true value is exactly zero, so
+anything there is rounding and is judged as zero. A row with its own nonzero forcing is real at any
+magnitude and keeps its own relative bar, so a large row never hides a small real one (rulings
+2026-10-14).
 """
 
 from __future__ import annotations
@@ -52,11 +54,13 @@ def system_resolution(*magnitudes) -> float:
     return FLOOR_SAFETY * max(_EPS * largest, _TINY)
 
 
-def row_bar(own_bar, operands, resolution: float):
-    """Each row's bar: its own, unless its operands are all under ``resolution`` -- then it is noise.
+def row_bar(own_bar, operands, resolution: float, forcing):
+    """Each row's bar: its own, unless the row is NOISE -- homogeneous with rounding-sized operands.
 
-    A noise row is judged as zero, i.e. against the system's resolution. A row with real operands
-    keeps ``own_bar`` exactly, however small it is next to the system's largest row.
+    ``forcing`` is each row's own source/declared data. A row is noise iff that forcing is exactly
+    zero AND its ``operands`` are at or below ``resolution``; it is judged as zero, against the
+    system's resolution. Every other row keeps ``own_bar`` exactly, however small.
     """
     operands = np.asarray(operands, dtype=float)
-    return np.where(operands <= resolution, resolution, np.asarray(own_bar, dtype=float))
+    homogeneous = np.asarray(forcing, dtype=float) == 0.0
+    return np.where(homogeneous & (operands <= resolution), resolution, np.asarray(own_bar, dtype=float))

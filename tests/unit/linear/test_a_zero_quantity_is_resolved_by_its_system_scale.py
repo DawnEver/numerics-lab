@@ -34,16 +34,20 @@ def test_the_system_resolution_is_the_rounding_of_its_largest_row():
 #: Unknowns (A, i, v): the A row is driven by the winding current i, which is zero at rest, while the
 #: 300 V terminal row carries the system's scale.
 _TANGENT = sp.csr_matrix(np.array([[1.0, 1e-3, 0.0], [0.0, 1.0, -1.0], [0.0, 0.0, 1.0]]))
+#: Each row's own source: only the terminal row is driven; the A and KVL rows are homogeneous.
+_FORCING = np.array([0.0, 0.0, -300.0])
 
 
 def test_a_homogeneous_zero_field_driven_by_300_volts_is_resolved():
     before = np.array([2.74e-40, 0.0, 300.0])
     after = np.array([2.80e-40, 0.0, 300.0])  # the field's noise moved 2%, the circuit did not
-    assert change_below_residual_resolution(_TANGENT, before, after)
+    assert change_below_residual_resolution(_TANGENT, before, after, _FORCING)
 
 
 def test_planted_control_a_field_change_at_system_scale_is_not_resolved():
-    assert not change_below_residual_resolution(_TANGENT, np.array([0.0, 0.0, 300.0]), np.array([1e-3, 0.0, 300.0]))
+    assert not change_below_residual_resolution(
+        _TANGENT, np.array([0.0, 0.0, 300.0]), np.array([1e-3, 0.0, 300.0]), _FORCING
+    )
 
 
 # 2. the joint border's row bars ------------------------------------------------------------------
@@ -105,7 +109,15 @@ def test_a_system_below_the_normal_range_resolves_nothing_finer_than_float64_can
 def test_a_small_real_field_row_keeps_its_own_resolution_beside_300_volts():
     before = np.array([1e-6, 0.0, 300.0])  # real operands, far above the system's 4e-12 resolution
     after = np.array([1e-6 + 1e-12, 0.0, 300.0])
-    assert not change_below_residual_resolution(_TANGENT, before, after)
+    assert not change_below_residual_resolution(_TANGENT, before, after, _FORCING)
+
+
+def test_a_tiny_row_with_its_own_forcing_is_real_at_any_magnitude():
+    """The 1e-21 current row of `test_transient_local_convergence`: tiny operands, but it is DRIVEN."""
+    tangent = sp.csr_matrix(np.diag([1.0, 1e-12]))
+    before, after = np.array([1e6, 0.0]), np.array([1e6, 1e-9])
+    assert not change_below_residual_resolution(tangent, before, after, np.array([-1e6, -1e-21]))
+    assert change_below_residual_resolution(tangent, before, after, np.array([-1e6, 0.0])), 'homogeneous: noise'
 
 
 def test_a_small_real_constraint_is_not_hidden_by_a_large_rate():

@@ -7,8 +7,6 @@ import scipy.sparse as sp
 from scipy.sparse.csgraph import min_weight_full_bipartite_matching
 from scipy.sparse.linalg import splu
 
-from motronics.gauss.linear.resolution import system_resolution
-
 __all__ = ['normalize_sparse_rows', 'sparse_initial_rate']
 
 
@@ -115,9 +113,9 @@ def normalize_sparse_rows(matrix, rhs):
         not np.isfinite(normalized.data).all()
         or not np.isfinite(forcing).all()
         or np.any((matrix.data != 0) & (normalized.data == 0))
-        # A forcing that underflowed is unrepresentable only if it was more than its system's
-        # rounding; below the resolution it is zero (moving band after its pulse: subnormal forcing).
-        or np.any((rhs != 0) & (forcing == 0) & (abs(rhs) > system_resolution(rhs)))
+        # A SUBNORMAL forcing that underflows is zero, not an unrepresentable equation (moving band
+        # after its pulse); any normal forcing, 1e-308 included, stays a real equation.
+        or np.any((rhs != 0) & (forcing == 0) & (abs(rhs) >= np.finfo(float).tiny))
     ):
         msg = 'initial equation normalization requires representable finite operators and forcing'
         raise ValueError(msg)

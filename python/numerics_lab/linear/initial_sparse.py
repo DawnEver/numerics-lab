@@ -67,7 +67,7 @@ def projected_rate_consistent(jacobian, rate, partial_time, *, algebraic_rows, t
     defect = operator @ rate + forcing
     scale = np.abs(operator) @ np.abs(rate) + np.abs(forcing)
     resolution = system_resolution(abs(jacobian) @ np.abs(rate) + np.abs(partial_time))
-    return bool(np.all(np.abs(defect) <= row_bar(tolerance * scale, scale, resolution)))
+    return bool(np.all(np.abs(defect) <= row_bar(tolerance * scale, scale, resolution, forcing)))
 
 
 def sparse_initial_pair(

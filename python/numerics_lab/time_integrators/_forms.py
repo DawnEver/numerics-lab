@@ -88,11 +88,14 @@ def _abs_matvec(tangent, x: NDArray[np.floating]) -> NDArray[np.floating]:
     return (dense * x if dense.ndim == 0 else dense @ x).reshape(-1)
 
 
-def change_below_residual_resolution(tangent, before: NDArray[np.floating], after: NDArray[np.floating]) -> bool:
+def change_below_residual_resolution(
+    tangent, before: NDArray[np.floating], after: NDArray[np.floating], forcing: NDArray[np.floating]
+) -> bool:
     """Whether the iterate change ``after - before`` is invisible to the system's arithmetic.
 
     Row ``i`` cannot resolve a change below ``_FLOOR_SAFETY * eps`` of its own ``(|J| . |u|)_i``; a
-    row whose operands are themselves under the SYSTEM's resolution is noise and is judged as zero
+    HOMOGENEOUS row (``forcing``, the residual at the zero state, exactly zero) whose operands are
+    themselves under the SYSTEM's resolution is noise and is judged as zero
     (:func:`~motronics.gauss.linear.resolution.row_bar`). A change under that on EVERY row cannot be
     confirmed or corrected by another Newton iteration: it is rounding in the iterate. Judged only
     by its own operands, a field row whose operands are all rounding has no scale of its own --
@@ -112,7 +115,7 @@ def change_below_residual_resolution(tangent, before: NDArray[np.floating], afte
     if not (np.isfinite(change).all() and np.isfinite(magnitude).all()):
         return False
     own = _FLOOR_SAFETY * _EPS * magnitude  # the residual_floor criterion, per row
-    return bool(np.all(change <= row_bar(own, magnitude, system_resolution(magnitude))))
+    return bool(np.all(change <= row_bar(own, magnitude, system_resolution(magnitude), np.ravel(forcing))))
 
 
 def residual_floor_of_magnitude(magnitude: NDArray[np.floating]) -> float:

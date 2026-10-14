@@ -301,7 +301,7 @@ def _row_bars(matrix, rows, trial, rhs, row_scale, tolerance):
     """
     operands = np.asarray(abs(matrix) @ abs(trial)).ravel() + abs(rhs) + row_scale
     own = operands[rows]
-    return np.where(own > 0, row_bar(tolerance * own, own, system_resolution(operands)), 0.0)
+    return np.where(own > 0, row_bar(tolerance * own, own, system_resolution(operands), rhs[rows]), 0.0)
 
 
 def _weighted_by_row_bars(schur, forcing, answer, bars):
@@ -725,7 +725,7 @@ def _validate_joint_correction(
         or not np.isfinite(state_scale).all()
         or np.any(
             abs(state_defect)
-            > row_bar(tolerance * state_scale, state_scale, system_resolution(state_scale)) + admitted[:n]
+            > row_bar(tolerance * state_scale, state_scale, system_resolution(state_scale), residual) + admitted[:n]
         )
     ):
         msg = 'joint stored state contradicts actual state/rate equations'
@@ -740,7 +740,7 @@ def _validate_joint_correction(
         equation_scale[:n] += np.asarray(abs(jacobian) @ abs(state)).ravel()
         stored = matrix[n : 2 * n - algebraic.shape[0], :n]
         equation_scale[n : 2 * n - algebraic.shape[0]] += np.asarray(abs(stored) @ abs(state)).ravel()
-        bar = row_bar(tolerance * equation_scale, equation_scale, system_resolution(equation_scale))
+        bar = row_bar(tolerance * equation_scale, equation_scale, system_resolution(equation_scale), rhs)
         return bool(np.all(np.isfinite(defect)) and np.all(abs(defect) <= bar + bound))
 
     unique = np.ones(n, dtype=bool)
