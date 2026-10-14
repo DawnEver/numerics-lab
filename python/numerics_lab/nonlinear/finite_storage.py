@@ -719,10 +719,35 @@ def _actual_finite_storage_state(
             abs(projected) <= tolerance * projected_scale
         ):
             return state
-        correction = factor.solve(rhs)
-        state += base + mapping @ correction
+        step = base + mapping @ factor.solve(rhs)
+        state = _backtracked_state(state, step, target, residual_at, charge_at, storage, zero)
     msg = 'actual finite storage state equations did not converge with all original charge witnesses'
     raise ValueError(msg)
+
+
+def _backtracked_state(state, step, target, residual_at, charge_at, storage, zero, *, shrink=0.5, armijo=1e-4):
+    """``state + lam * step`` at the first ``lam`` in ``1, shrink, ...`` that decreases the state equations.
+
+    The same Armijo rule as :class:`~motronics.gauss.nonlinear._strategies_newton.NewtonStrategy`, on
+    the norm of what this search solves: the projected algebraic rows and the stored-charge mismatch.
+    A full step on a saturating field can overshoot into a two-cycle that never converges; near the
+    root ``lam = 1`` is accepted, so the search is Newton there. When no ``lam`` decreases the norm
+    (the roundoff floor) the full step is taken, as plain Newton would.
+    """
+
+    def norm(value):
+        mismatch = (charge_at(value) - target)[storage.stored_rows]
+        return float(np.linalg.norm(np.concatenate((storage.algebraic_rows @ residual_at(value, zero), mismatch))))
+
+    current = norm(state)
+    lam = 1.0
+    for _ in range(13):
+        trial = state + lam * step
+        trial_norm = norm(trial)
+        if np.isfinite(trial_norm) and trial_norm <= (1.0 - armijo * lam) * current:
+            return trial
+        lam *= shrink
+    return state + step
 
 
 def _exact_boundary_directions(matrix):
