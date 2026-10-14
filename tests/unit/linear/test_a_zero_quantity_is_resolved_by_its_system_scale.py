@@ -26,7 +26,7 @@ pytestmark = pytest.mark.unit
 
 def test_the_system_resolution_is_the_rounding_of_its_largest_row():
     assert system_resolution(np.array([1e-40, 300.0]), np.array([2.0])) == pytest.approx(64 * 2.220446e-16 * 300)
-    assert system_resolution(np.zeros(3)) == 0.0
+    assert system_resolution(np.zeros(3)) == 64 * np.finfo(float).tiny, 'nothing below the normal range is resolved'
 
 
 # 1. the transient step's local check -------------------------------------------------------------
@@ -88,3 +88,12 @@ def test_noise_rates_on_a_differentiated_constraint_are_consistent():
 def test_planted_control_a_contradicted_constraint_at_system_scale_is_refused():
     rate = np.array([1.0e3, 1.0, 0.0])
     assert not projected_rate_consistent(_JACOBIAN, rate, np.zeros(3), algebraic_rows=_CONSTRAINT, tolerance=1e-10)
+
+
+def test_a_system_below_the_normal_range_resolves_nothing_finer_than_float64_can_represent():
+    """MEASURED 2026-10-14, moving band [True-pulse]: the field decays after its pulse until the whole
+    joint system sits at 3.3e-308 -- subnormal, where float64 has lost its relative precision -- and
+    the stored-state check refused defects of 1e-317 against bars of 4e-322.
+    """
+    assert system_resolution(np.array([3.3e-308])) >= 1.5e-317
+    assert system_resolution(np.array([1.0])) == pytest.approx(64 * 2.220446e-16)  # normal range: unchanged

@@ -723,7 +723,9 @@ def _validate_joint_correction(
     if (
         not np.isfinite(state_defect).all()
         or not np.isfinite(state_scale).all()
-        or np.any(abs(state_defect) > tolerance * state_scale + admitted[:n])
+        or np.any(
+            abs(state_defect) > np.maximum(tolerance * state_scale, system_resolution(state_scale)) + admitted[:n]
+        )
     ):
         msg = 'joint stored state contradicts actual state/rate equations'
         raise ValueError(msg)
@@ -737,7 +739,8 @@ def _validate_joint_correction(
         equation_scale[:n] += np.asarray(abs(jacobian) @ abs(state)).ravel()
         stored = matrix[n : 2 * n - algebraic.shape[0], :n]
         equation_scale[n : 2 * n - algebraic.shape[0]] += np.asarray(abs(stored) @ abs(state)).ravel()
-        return bool(np.all(np.isfinite(defect)) and np.all(abs(defect) <= tolerance * equation_scale + bound))
+        bar = np.maximum(tolerance * equation_scale, system_resolution(equation_scale))
+        return bool(np.all(np.isfinite(defect)) and np.all(abs(defect) <= bar + bound))
 
     unique = np.ones(n, dtype=bool)
     unique[np.any(rate_directions != 0, axis=1)] = False

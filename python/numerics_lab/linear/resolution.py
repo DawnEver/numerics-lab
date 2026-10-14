@@ -27,6 +27,9 @@ __all__ = ['FLOOR_SAFETY', 'system_resolution']
 FLOOR_SAFETY = 64.0
 
 _EPS = float(np.finfo(float).eps)
+#: The smallest NORMAL double. Below it float64 keeps no relative precision (gradual underflow), so a
+#: system that small is representation, not physics -- whatever unit it is in.
+_TINY = float(np.finfo(float).tiny)
 
 
 def system_resolution(*magnitudes) -> float:
@@ -34,7 +37,9 @@ def system_resolution(*magnitudes) -> float:
 
     ``magnitudes`` are the system's own row magnitudes (``|J| . |u|``, ``|rhs|``, ...) over the
     WHOLE coupled block; their largest finite entry is the system scale. Anything at or below the
-    returned value is that system's rounding, whatever row it sits in.
+    returned value is that system's rounding, whatever row it sits in. The scale is never taken
+    below the normal range: a system decayed into subnormals (3.3e-308 measured on a moving band
+    after its pulse) has no relative precision left to judge anything by.
     """
     largest = 0.0
     for magnitude in magnitudes:
@@ -42,4 +47,4 @@ def system_resolution(*magnitudes) -> float:
         values = values[np.isfinite(values)]
         if values.size:
             largest = max(largest, float(values.max()))
-    return FLOOR_SAFETY * _EPS * largest
+    return FLOOR_SAFETY * max(_EPS * largest, _TINY)
