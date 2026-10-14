@@ -125,3 +125,26 @@ def test_exact_boundary_dependency_requires_source_selected_pair_even_when_lu_su
     np.testing.assert_allclose(pair.state[2], expected_current, rtol=1e-12)
     np.testing.assert_allclose(jacobian @ pair.state + mass @ pair.rate, forcing, atol=1e-14)
     np.testing.assert_allclose(storage.algebraic_rows @ jacobian @ pair.rate, 0.0, atol=1e-14)
+
+
+def test_a_saturating_state_search_backtracks_instead_of_cycling():
+    """Full Newton on ``arctan`` started 1.5 from its root overshoots without bound; the search must not.
+
+    The ipm_uv_cummins static march parked in a two-cycle here (projected residual 0.0047 <-> 0.0085,
+    the same 0.169 correction every iteration) because the state search took every full step.
+    """
+    storage = StorageRows(np.array([], dtype=int), sp.eye(1, format='csr'))
+    state = runtime._actual_finite_storage_state(
+        np.array([2.5]),
+        np.zeros(1),
+        lambda state, _rate: np.arctan(state - 1.0),
+        lambda state, _rate: sp.csr_matrix([[1.0 / (1.0 + (state[0] - 1.0) ** 2)]]),
+        lambda _state, _rate: sp.csr_matrix((1, 1)),
+        lambda _state: np.zeros(1),
+        lambda _state, _rate: storage,
+        50,
+        1e-10,
+        None,
+        None,
+    )
+    np.testing.assert_allclose(state, [1.0], atol=1e-9)
