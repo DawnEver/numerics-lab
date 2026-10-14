@@ -40,7 +40,8 @@ import numpy as np
 from numpy.typing import NDArray
 
 from motronics.contracts.spec.analysis_formulation import DerivativeWeights
-from motronics.gauss.time_integrators._forms import TransientSolution, same_instant
+from motronics.gauss.time_integrators._forms import TransientSolution
+from motronics.gauss.time_integrators.instants import same_instant
 
 __all__ = [
     'PeriodicFixedPoint',

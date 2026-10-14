@@ -93,7 +93,6 @@ from motronics.gauss.time_integrators._forms import (
     IntegratorState,
     TransientSolution,
     _default_solve,
-    same_instant,
     seeded_bdf2_state,
 )
 from motronics.gauss.time_integrators._integrators import get_integrator
@@ -117,6 +116,7 @@ from motronics.gauss.time_integrators.checkpoint import (
 from motronics.gauss.time_integrators.eec_tangent import CycleTangentCSR
 from motronics.gauss.time_integrators.event_checkpoint import EventCheckpointState
 from motronics.gauss.time_integrators.factor_reuse import FactorCache
+from motronics.gauss.time_integrators.instants import same_instant
 from motronics.gauss.time_integrators.periodic import (
     bdf2_boundary_moment,
     canonical_eec_study,

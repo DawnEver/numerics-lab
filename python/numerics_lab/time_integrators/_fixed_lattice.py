@@ -2,7 +2,7 @@
 
 import math
 
-from motronics.gauss.time_integrators._forms import same_instant
+from motronics.gauss.time_integrators.instants import same_instant
 
 __all__ = ['fixed_lattice_step_size', 'fixed_lattice_targets']
 

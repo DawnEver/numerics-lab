@@ -29,7 +29,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
-from motronics.gauss.time_integrators._forms import IntegratorState, TransientSolution, same_instant
+from motronics.gauss.time_integrators._forms import IntegratorState, TransientSolution
 from motronics.gauss.time_integrators._integrators import get_integrator
 from motronics.gauss.time_integrators.checkpoint import (
     CheckpointHistory,
@@ -37,6 +37,7 @@ from motronics.gauss.time_integrators.checkpoint import (
     TransientCheckpoint,
 )
 from motronics.gauss.time_integrators.initial import consistent_initial_condition
+from motronics.gauss.time_integrators.instants import same_instant
 from motronics.gauss.time_integrators.march import BudgetExceeded, integrate_transient
 
 __all__ = [
