@@ -989,6 +989,7 @@ def integrate_transient(
         # Called for steps that will land AND for bisection probes a rollback discards, so a failure
         # is recorded PROVISIONALLY as a probe; `_commit` promotes it when the point actually lands.
         solution.worst_step_residual = max(solution.worst_step_residual, residual)
+        solution.newton_iterations += int(out.iterations)
         if on_floor:
             # The SOLVE diagnostic: like `worst_step_residual` it includes discarded probes.
             solution.floor_converged_times.append(t_new)
