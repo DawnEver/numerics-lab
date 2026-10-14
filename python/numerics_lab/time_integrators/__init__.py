@@ -36,7 +36,6 @@ from motronics.gauss.time_integrators._forms import (
     TransientSolution,
     residual_floor,
     residual_floor_of_magnitude,
-    same_instant,
 )
 from motronics.gauss.time_integrators._integrators import (
     INTEGRATOR_REGISTRY,
@@ -57,6 +56,7 @@ from motronics.gauss.time_integrators._step import (
 )
 from motronics.gauss.time_integrators.explicit import integrate_explicit_sampled
 from motronics.gauss.time_integrators.factor_reuse import FactorCache
+from motronics.gauss.time_integrators.instants import canonical, is_future, same_instant
 from motronics.gauss.time_integrators.march import (
     BudgetExceeded,
     EventSurface,
@@ -103,11 +103,13 @@ __all__ = [
     'TrialNotEvaluable',
     '_solve_step',
     'base_sample_time',
+    'canonical',
     'directional_line_search',
     'get_integrator',
     'integrate_explicit_sampled',
     'integrate_sampled',
     'integrate_transient',
+    'is_future',
     'residual_floor',
     'residual_floor_of_magnitude',
     'same_instant',

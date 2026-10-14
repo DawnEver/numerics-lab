@@ -15,6 +15,7 @@ from motronics.gauss.linear.initial_rate import (
 )
 from motronics.gauss.linear.initial_rate_border import complete_rate_border
 from motronics.gauss.linear.initial_storage_border import stored_initial_correction
+from motronics.gauss.linear.resolution import row_bar, system_resolution
 from motronics.gauss.linear.storage_border import free_pinned_columns
 
 __all__ = ['SparseInitialPair', 'projected_rate_consistent', 'sparse_complete_initial_rate', 'sparse_initial_pair']
@@ -56,13 +57,17 @@ def projected_rate_consistent(jacobian, rate, partial_time, *, algebraic_rows, t
     """Check each actual differentiated equation in its own projected units.
 
     Null-basis row scales are arbitrary numerical coordinates, not physics.
-    A large constraint cannot hide a contradictory differently scaled row.
+    A large constraint cannot hide a contradictory differently scaled row: each row keeps its own
+    relative bar; only a row whose own operands are under the SYSTEM's resolution (the full
+    ``|J| . |rate| + |partial|``) is noise and judged as zero, so free rates that are rounding on a
+    homogeneous constraint are not read as a 100% defect.
     """
     operator = algebraic_rows @ jacobian
     forcing = algebraic_rows @ partial_time
     defect = operator @ rate + forcing
     scale = np.abs(operator) @ np.abs(rate) + np.abs(forcing)
-    return bool(np.all(np.abs(defect) <= tolerance * scale))
+    resolution = system_resolution(abs(jacobian) @ np.abs(rate) + np.abs(partial_time))
+    return bool(np.all(np.abs(defect) <= row_bar(tolerance * scale, scale, resolution, forcing)))
 
 
 def sparse_initial_pair(

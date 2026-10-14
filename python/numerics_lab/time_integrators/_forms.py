@@ -15,6 +15,7 @@ from numpy.typing import NDArray
 
 from motronics.contracts.spec.analysis_formulation import DerivativeWeights
 from motronics.gauss.linear import solve_linear_system
+from motronics.gauss.linear.resolution import FLOOR_SAFETY, row_bar, system_resolution
 from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint
 
 __all__ = [
@@ -26,26 +27,16 @@ __all__ = [
     'change_below_residual_resolution',
     'residual_floor',
     'residual_floor_of_magnitude',
-    'same_instant',
     'seeded_bdf2_state',
 ]
 
 
-#: Safety factor on the estimated roundoff floor, DELIBERATELY the same 64 as the DC operating
-#: point's ``laplace.circuit.core.mna_solves._FLOOR_SAFETY``, and for the same stated reason: the
-#: estimate bounds the rounding error of ONE row sum, while the accumulated error over a row of
-#: ``n`` assembled terms grows like ``sqrt(n)`` at best and ``n`` at worst. 64 buys that headroom
-#: and still sits ORDERS below any residual a stalled-but-wrong Newton shows -- measured
-#: 2026-09-12 at 1e8x on the planted stall, against a 64x allowance.
-_FLOOR_SAFETY = 64.0
+#: Safety factor on the estimated roundoff floor, owned by :mod:`motronics.gauss.linear.resolution`
+#: and DELIBERATELY the same 64 as the DC operating point's ``laplace.circuit.core.mna_solves._FLOOR_SAFETY``.
+_FLOOR_SAFETY = FLOOR_SAFETY
 
 #: The machine epsilon the floor is written in (double precision -- the marcher is ``float64``).
 _EPS = float(np.finfo(float).eps)
-
-
-def same_instant(a: float, b: float) -> bool:
-    """Join only arithmetic roundoff, not physically distinct clock instants."""
-    return abs(a - b) <= 4 * max(abs(np.spacing(a)), abs(np.spacing(b)))
 
 
 def residual_floor(tangent, u: NDArray[np.floating]) -> float:
@@ -91,14 +82,19 @@ def _abs_matvec(tangent, x: NDArray[np.floating]) -> NDArray[np.floating]:
     return (dense * x if dense.ndim == 0 else dense @ x).reshape(-1)
 
 
-def change_below_residual_resolution(tangent, before: NDArray[np.floating], after: NDArray[np.floating]) -> bool:
-    """Whether the iterate change ``after - before`` is invisible to every residual row's arithmetic.
+def change_below_residual_resolution(
+    tangent, before: NDArray[np.floating], after: NDArray[np.floating], forcing: NDArray[np.floating]
+) -> bool:
+    """Whether the iterate change ``after - before`` is invisible to the system's arithmetic.
 
-    Row ``i`` of the residual is a floating-point sum of terms of total magnitude ``(|J| . |u|)_i``
-    and cannot resolve anything below ``_FLOOR_SAFETY * eps`` of it -- the :func:`residual_floor`
-    criterion, kept PER ROW so a KCL row and a field row are each judged in their own unit. A change
-    whose own row contribution ``(|J| . |du|)_i`` sits under that on EVERY row cannot be confirmed or
-    corrected by another Newton iteration: it is rounding in the iterate, not an unconverged state.
+    Row ``i`` cannot resolve a change below ``_FLOOR_SAFETY * eps`` of its own ``(|J| . |u|)_i``; a
+    HOMOGENEOUS row (``forcing``, the residual at the zero state, exactly zero) whose operands are
+    themselves under the SYSTEM's resolution is noise and is judged as zero
+    (:func:`~motronics.gauss.linear.resolution.row_bar`). A change under that on EVERY row cannot be
+    confirmed or corrected by another Newton iteration: it is rounding in the iterate. Judged only
+    by its own operands, a field row whose operands are all rounding has no scale of its own --
+    MEASURED 2026-10-14 on transformer_3ph_concentric t = 2.05e-7: nodal A at 2.7e-40 moved 2% per
+    iteration beside 300 V circuit rows that did not move, and was refused 50 times.
 
     This is what a per-field RELATIVE change cannot see on a field that is physically zero. Measured
     2026-10-13 on transformer_3ph_concentric at rest: the 96834 nodal A values sat at 1e-40 Wb/m,
@@ -112,7 +108,8 @@ def change_below_residual_resolution(tangent, before: NDArray[np.floating], afte
     magnitude = _abs_matvec(tangent, np.maximum(np.abs(before), np.abs(after)))
     if not (np.isfinite(change).all() and np.isfinite(magnitude).all()):
         return False
-    return bool(np.all(change <= _FLOOR_SAFETY * _EPS * magnitude))
+    own = _FLOOR_SAFETY * _EPS * magnitude  # the residual_floor criterion, per row
+    return bool(np.all(change <= row_bar(own, magnitude, system_resolution(magnitude), np.ravel(forcing))))
 
 
 def residual_floor_of_magnitude(magnitude: NDArray[np.floating]) -> float:

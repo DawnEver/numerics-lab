@@ -360,13 +360,16 @@ class TransientCheckpoint:
             raise ValueError(msg)
 
     def validate_restart(self, problem_key, integrator, time, size):
-        if (problem_key, integrator, time, size) != (
-            self.problem_key,
-            self.integrator,
-            self.time,
-            len(self.states[-1]),
-        ):
-            msg = 'checkpoint does not match problem, integrator, restart time or state dimension'
+        asked = {'problem': problem_key, 'integrator': integrator, 'restart time': time, 'state dimension': size}
+        held = {
+            'problem': self.problem_key,
+            'integrator': self.integrator,
+            'restart time': self.time,
+            'state dimension': len(self.states[-1]),
+        }
+        differ = [f'{name} {held[name]!r} != {asked[name]!r}' for name in asked if asked[name] != held[name]]
+        if differ:
+            msg = f'checkpoint does not match problem, integrator, restart time or state dimension: {"; ".join(differ)}'
             raise ValueError(msg)
 
     def to_mapping(self):

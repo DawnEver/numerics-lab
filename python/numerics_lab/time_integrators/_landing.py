@@ -5,6 +5,8 @@ from numbers import Integral, Real
 
 import numpy as np
 
+from motronics.gauss.time_integrators.instants import canonical, is_future
+
 __all__ = [
     'AcceptedProjectionResult',
     'accepted_landing',
@@ -46,7 +48,7 @@ class AcceptedProjectionResult:
 
 
 def next_deadline(callback, time, target):
-    """Clip a numerical target to an owner's live, strictly future breakpoint."""
+    """Clip a numerical target to an owner's live breakpoint, joined to the target within roundoff."""
     if callback is None:
         return target
     deadline = callback(time)
@@ -56,11 +58,14 @@ def next_deadline(callback, time, target):
         isinstance(deadline, (bool, np.bool_))
         or not isinstance(deadline, Real)
         or not np.isfinite(deadline)
-        or deadline <= time
+        or not is_future(float(deadline), time)
     ):
         msg = 'next breakpoint must be a finite, strictly future time or None'
         raise ValueError(msg)
-    return min(target, float(deadline))
+    # One instant proposed by two owners through different arithmetic is ONE landing, never a
+    # roundoff-sized second step to the other spelling of it.
+    deadline = canonical(float(deadline), target)
+    return min(target, deadline)
 
 
 def live_targets(targets, current_time, callback):
