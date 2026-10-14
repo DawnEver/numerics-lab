@@ -294,20 +294,31 @@ class RowAcceptance:
     The scale is the admission's: ``|F_u| |u| + |F_u'| |u'| + |F(u, 0)|``, so a step this accepts is a
     state the finite-storage admission at the next law change can admit (ruling 2026-10-14; the NORM
     bar it replaces accepted Cummins row 16580 at 1.19x). Noise rows are judged by
-    :func:`~motronics.gauss.linear.resolution.row_bar`. The two extra tangents are paid only when the
-    previous iterate's bars do not already refuse the residual by 10x: that screen can only skip a
-    check, never pass one.
+    :func:`~motronics.gauss.linear.resolution.row_bar`.
+
+    THE SCREEN. Reading the scale costs two tangents, so an iterate within :data:`_NEAR` of the last
+    judged one (relative, in the state's own max norm) whose residual still exceeds that one's bars by
+    :data:`_SCREEN` on some row is refused unread: so close, the scale has not moved by 10x, and a row
+    10x over its bar is over it. An iterate farther away is always read -- a first iterate at rest has
+    ``|u| = 0`` and a rest-sized scale, and reusing its bars refused every later iterate (measured on
+    the Cummins first step, 2026-10-15). A screen can only cost an iteration, never pass one.
     """
 
     _SCREEN = 10.0
+    _NEAR = 1e-3
 
     def __init__(self, problem, form, forcing) -> None:
         self.problem, self.form, self.forcing = problem, form, forcing
-        self.bars = None
+        self.bars = self.judged = None
 
     def accepts(self, u, r) -> bool:
         residual = np.abs(np.asarray(r, dtype=float))
-        if self.bars is not None and np.any(residual > self._SCREEN * self.bars):
+        u = np.asarray(u, dtype=float)
+        if (
+            self.bars is not None
+            and np.max(np.abs(u - self.judged), initial=0.0) <= self._NEAR * np.max(np.abs(u), initial=0.0)
+            and np.any(residual > self._SCREEN * self.bars)
+        ):
             return False
         form, problem, t = self.form, self.problem, self.form.t_eval
         u_arg, u_dot, u_ddot = form.u_arg(u), form.u_dot(u), form.u_ddot(u)
@@ -319,6 +330,7 @@ class RowAcceptance:
             scale = scale + np.asarray(magnitude @ np.abs(np.asarray(operand, dtype=float))).ravel()
         forcing = self.forcing()
         self.bars = row_bar(ADMISSION_BAR * scale, scale, system_resolution(scale, forcing), forcing)
+        self.judged = u.copy()
         return bool(np.all(residual <= self.bars))
 
 
