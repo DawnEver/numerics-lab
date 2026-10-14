@@ -20,6 +20,7 @@ from motronics.gauss.linear.initial_sparse import (
     sparse_initial_pair,
 )
 from motronics.gauss.linear.initial_storage_border import joint_coordinate_sparse_correction
+from motronics.gauss.linear.resolution import system_resolution
 from motronics.gauss.nonlinear import AssembledState, NewtonStrategy
 from motronics.gauss.nonlinear.initial_joint import joint_finite_storage_initial_pair
 
@@ -336,6 +337,14 @@ def finite_storage_actual_rate_initial_pair(
     if target.shape != state.shape or not np.isfinite(target).all():
         msg = 'actual-rate admission requires an aligned finite full storage target'
         raise ValueError(msg)
+    # A HOMOGENEOUS system (its own forcing, the residual at rest F(0, 0, t), exactly zero) whose target
+    # storage is zero under the floor no system resolves is AT REST: (0, 0) satisfies F = 0 and Q = 0
+    # exactly, so the search starts there. Seeded from the incoming state, it walked down into gradual
+    # underflow instead (1.6e-11 A -> 2.8e-309 A after a pulse, 2026-10-14) and judged noise as forcing.
+    # Uniqueness is still certified by the admission below, from this seed.
+    rest = np.zeros_like(state)
+    if np.any(state) and np.all(np.abs(target) <= system_resolution()) and not np.any(residual_at(rest, rest)):
+        state, target = rest, rest.copy()
 
     if joint_coordinates_at is not None:
         return joint_finite_storage_initial_pair(

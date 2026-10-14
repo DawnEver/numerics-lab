@@ -290,3 +290,43 @@ def test_all_finite_charge_witnesses_are_preserved_not_only_the_selected_square(
             storage_rows_at=lambda state, _rate: StorageRows(np.array([1]), sp.csr_matrix([[-2 * state[0], 1.0]])),
             rate_constraint_jacobian_at=lambda _state, rate: sp.csr_matrix([[1, 0], [4 * rate[0], 1]]),
         )
+
+
+def _rl_pair(seed, *, source, visited=None):
+    """The RL loop psi' + R i = v, psi = L i: one stored linkage, one algebraic current (L/R = 3e-15 s)."""
+    visited = [] if visited is None else visited
+    resistance, inductance = 3.0, 1.0e-14
+    jacobian = sp.csr_matrix([[0.0, resistance], [1.0, -inductance]])
+    mass = sp.csr_matrix([[1.0, 0.0], [0.0, 0.0]])
+    forcing = np.array([source, 0.0])
+    return finite_storage_actual_rate_initial_pair(
+        np.asarray(seed, dtype=float),
+        residual_at=lambda state, rate: visited.append(np.array(state)) or jacobian @ state + mass @ rate - forcing,
+        jacobian_at=lambda _state, _rate: jacobian,
+        mass_at=lambda _state, _rate: mass,
+        partial_time_at=lambda _state, _rate: np.zeros(2),
+        storage_at=lambda state: mass @ state,
+        storage_rows_at=lambda _state, _rate: StorageRows(np.array([0]), sp.eye(2, format='csr')[[1]]),
+        rate_constraint_jacobian_at=lambda _state, _rate: jacobian,
+        target_storage=np.zeros(2),
+    )
+
+
+def test_a_homogeneous_system_with_zero_storage_is_admitted_at_exact_rest():
+    # The left limit of a pulse that ended: 1.6e-11 A on a source now exactly zero. The answer is
+    # the exact zero, never a walk into gradual underflow (2.8e-309 A on the moving band, 2026-10-14).
+    visited = []
+    pair = _rl_pair([0.0, 1.6e-11], source=0.0, visited=visited)
+    # The search STARTS at rest: the left-limit seed is never an iterate.
+    assert all(not state.any() for state in visited)
+    np.testing.assert_array_equal(pair.state, np.zeros(2))
+    np.testing.assert_array_equal(pair.rate, np.zeros(2))
+    assert pair.rate_is_unique.all()
+
+
+def test_PLANTED_CONTROL_a_forced_system_is_not_taken_for_rest():
+    visited = []
+    pair = _rl_pair([0.0, 1.6e-11], source=1.0, visited=visited)
+    assert any(state.any() for state in visited), 'a forced system must search from its own seed'
+    np.testing.assert_array_equal(pair.state, np.zeros(2))
+    np.testing.assert_allclose(pair.rate[0], 1.0, rtol=1e-12)
