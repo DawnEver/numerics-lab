@@ -9,6 +9,7 @@ from motronics.gauss.linear.border_rank import border_affine_space, homogeneous_
 from motronics.gauss.linear.index_two import index_two_frozen_rate
 from motronics.gauss.linear.initial_rate import normalize_sparse_rows
 from motronics.gauss.linear.refinement import refine_factored_solution
+from motronics.gauss.linear.resolution import system_resolution
 from motronics.gauss.linear.storage_border import free_pinned_columns
 
 __all__ = ['joint_coordinate_sparse_correction', 'stored_initial_correction']
@@ -242,7 +243,7 @@ def _sparse_joint_border(
         trial[remaining_columns] = answer
         trial[selected_columns] = solve(rhs[selected_rows] - kept - coupling @ answer)
         rows = remaining_rows[supported]
-        bars = tolerance * (np.asarray(abs(matrix[rows]) @ abs(trial)).ravel() + abs(rhs[rows]) + row_scale[rows])
+        bars = _row_bars(matrix, rows, trial, rhs, row_scale, tolerance)
         dense = schur[supported].toarray()
         answer = _weighted_by_row_bars(dense, forcing[supported], answer, bars)
         # A retained row whose Schur row is too weak to share its residual with the other
@@ -251,11 +252,7 @@ def _sparse_joint_border(
         # units of its own bar -- the same weighted least squares, one level down.
         # Judged on the ACTUAL original rows, not the Schur model: the elimination's own
         # error is what put the residual there.
-        selected_bars = tolerance * (
-            np.asarray(abs(matrix[selected_rows]) @ abs(trial)).ravel()
-            + abs(rhs[selected_rows])
-            + row_scale[selected_rows]
-        )
+        selected_bars = _row_bars(matrix, selected_rows, trial, rhs, row_scale, tolerance)
         for _ in range(4):
             trial[remaining_columns] = answer
             trial[selected_columns] = solve(rhs[selected_rows] - kept - coupling @ answer)
@@ -292,6 +289,19 @@ def _sparse_joint_border(
     admitted = allowance.copy()
     admitted[remaining_rows] = inherited
     return correction, full_directions[n : 2 * n], admitted
+
+
+def _row_bars(matrix, rows, trial, rhs, row_scale, tolerance):
+    """Each row's own relative bar, floored at the SYSTEM's resolution; a row with no operands stays exact.
+
+    A row whose operands are all rounding (forcing 0, ``|row| . |trial|`` at 1e-46 beside rows at
+    the system's scale) has no scale of its own, and its relative bar is noise judging noise --
+    MEASURED 2026-10-14 on the moving-band networks: residual 1.1e-44 against bars of 1e-56.
+    :func:`~motronics.gauss.linear.resolution.system_resolution` owns that floor.
+    """
+    operands = np.asarray(abs(matrix) @ abs(trial)).ravel() + abs(rhs) + row_scale
+    own = tolerance * operands[rows]
+    return np.where(own > 0, np.maximum(own, system_resolution(operands)), 0.0)
 
 
 def _weighted_by_row_bars(schur, forcing, answer, bars):
