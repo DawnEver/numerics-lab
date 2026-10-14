@@ -10,16 +10,18 @@ Three sites carried a per-row, noise-derived bar for this and each failed on it 
 transformer_3ph_concentric and the moving-band networks): the transient step's local check, the
 joint border's row bars and the projected-rate consistency check. They all ask this module now.
 
-The bar is ``FLOOR_SAFETY * eps`` of the system scale -- the same rounding floor
-:func:`motronics.gauss.time_integrators._forms.residual_floor` states -- so a genuine defect at
-system scale is never hidden: only what lies under the system's own arithmetic is.
+The resolution is ``FLOOR_SAFETY * eps`` of the system scale -- the same rounding floor
+:func:`motronics.gauss.time_integrators._forms.residual_floor` states. It replaces a row's bar ONLY
+where that row's own operands are themselves under it (:func:`row_bar`): such a row is noise and is
+judged as zero. Every row with real operands keeps its own relative bar, so a large row can never
+hide a small real one (ruling 2026-10-14).
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-__all__ = ['FLOOR_SAFETY', 'system_resolution']
+__all__ = ['FLOOR_SAFETY', 'row_bar', 'system_resolution']
 
 #: Safety factor on one row sum's rounding estimate: the accumulated error over ``n`` assembled
 #: terms grows like ``sqrt(n)`` at best and ``n`` at worst, and 64 buys that headroom while sitting
@@ -48,3 +50,13 @@ def system_resolution(*magnitudes) -> float:
         if values.size:
             largest = max(largest, float(values.max()))
     return FLOOR_SAFETY * max(_EPS * largest, _TINY)
+
+
+def row_bar(own_bar, operands, resolution: float):
+    """Each row's bar: its own, unless its operands are all under ``resolution`` -- then it is noise.
+
+    A noise row is judged as zero, i.e. against the system's resolution. A row with real operands
+    keeps ``own_bar`` exactly, however small it is next to the system's largest row.
+    """
+    operands = np.asarray(operands, dtype=float)
+    return np.where(operands <= resolution, resolution, np.asarray(own_bar, dtype=float))

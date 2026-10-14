@@ -9,7 +9,7 @@ from motronics.gauss.linear.border_rank import border_affine_space, homogeneous_
 from motronics.gauss.linear.index_two import index_two_frozen_rate
 from motronics.gauss.linear.initial_rate import normalize_sparse_rows
 from motronics.gauss.linear.refinement import refine_factored_solution
-from motronics.gauss.linear.resolution import system_resolution
+from motronics.gauss.linear.resolution import row_bar, system_resolution
 from motronics.gauss.linear.storage_border import free_pinned_columns
 
 __all__ = ['joint_coordinate_sparse_correction', 'stored_initial_correction']
@@ -292,7 +292,7 @@ def _sparse_joint_border(
 
 
 def _row_bars(matrix, rows, trial, rhs, row_scale, tolerance):
-    """Each row's own relative bar, floored at the SYSTEM's resolution; a row with no operands stays exact.
+    """Each row's own relative bar; a noise row is judged as zero; a row with no operands stays exact.
 
     A row whose operands are all rounding (forcing 0, ``|row| . |trial|`` at 1e-46 beside rows at
     the system's scale) has no scale of its own, and its relative bar is noise judging noise --
@@ -300,8 +300,8 @@ def _row_bars(matrix, rows, trial, rhs, row_scale, tolerance):
     :func:`~motronics.gauss.linear.resolution.system_resolution` owns that floor.
     """
     operands = np.asarray(abs(matrix) @ abs(trial)).ravel() + abs(rhs) + row_scale
-    own = tolerance * operands[rows]
-    return np.where(own > 0, np.maximum(own, system_resolution(operands)), 0.0)
+    own = operands[rows]
+    return np.where(own > 0, row_bar(tolerance * own, own, system_resolution(operands)), 0.0)
 
 
 def _weighted_by_row_bars(schur, forcing, answer, bars):
@@ -724,7 +724,8 @@ def _validate_joint_correction(
         not np.isfinite(state_defect).all()
         or not np.isfinite(state_scale).all()
         or np.any(
-            abs(state_defect) > np.maximum(tolerance * state_scale, system_resolution(state_scale)) + admitted[:n]
+            abs(state_defect)
+            > row_bar(tolerance * state_scale, state_scale, system_resolution(state_scale)) + admitted[:n]
         )
     ):
         msg = 'joint stored state contradicts actual state/rate equations'
@@ -739,7 +740,7 @@ def _validate_joint_correction(
         equation_scale[:n] += np.asarray(abs(jacobian) @ abs(state)).ravel()
         stored = matrix[n : 2 * n - algebraic.shape[0], :n]
         equation_scale[n : 2 * n - algebraic.shape[0]] += np.asarray(abs(stored) @ abs(state)).ravel()
-        bar = np.maximum(tolerance * equation_scale, system_resolution(equation_scale))
+        bar = row_bar(tolerance * equation_scale, equation_scale, system_resolution(equation_scale))
         return bool(np.all(np.isfinite(defect)) and np.all(abs(defect) <= bar + bound))
 
     unique = np.ones(n, dtype=bool)

@@ -97,3 +97,32 @@ def test_a_system_below_the_normal_range_resolves_nothing_finer_than_float64_can
     """
     assert system_resolution(np.array([3.3e-308])) >= 1.5e-317
     assert system_resolution(np.array([1.0])) == pytest.approx(64 * 2.220446e-16)  # normal range: unchanged
+
+
+# the other side of the ruling (2026-10-14): a large row never hides a small REAL row -------------
+
+
+def test_a_small_real_field_row_keeps_its_own_resolution_beside_300_volts():
+    before = np.array([1e-6, 0.0, 300.0])  # real operands, far above the system's 4e-12 resolution
+    after = np.array([1e-6 + 1e-12, 0.0, 300.0])
+    assert not change_below_residual_resolution(_TANGENT, before, after)
+
+
+def test_a_small_real_constraint_is_not_hidden_by_a_large_rate():
+    rate = np.array([1.0e3, 1.0e-6, -1.0e-6 + 1.0e-12])
+    assert not projected_rate_consistent(_JACOBIAN, rate, np.zeros(3), algebraic_rows=_CONSTRAINT, tolerance=1e-10)
+
+
+def test_a_small_real_border_row_keeps_its_own_relative_bar():
+    matrix = sp.csr_matrix(np.array([[300.0, 0.0], [0.0, 1.0]]))
+    bars = _row_bars(matrix, np.array([0, 1]), np.array([1.0, 1e-6]), np.zeros(2), np.zeros(2), 1e-10)
+    assert bars[1] == pytest.approx(1e-16)
+
+
+def test_a_subnormal_forcing_that_underflows_in_normalization_is_zero_not_unrepresentable():
+    from motronics.gauss.linear.initial_rate import normalize_sparse_rows  # noqa: PLC0415
+
+    _matrix, forcing = normalize_sparse_rows(sp.csr_matrix(np.array([[1e10]])), np.array([1e-315]))
+    assert forcing[0] == 0.0
+    with pytest.raises(ValueError, match='representable'):
+        normalize_sparse_rows(sp.csr_matrix(np.array([[1e305]])), np.array([1e-20]))
