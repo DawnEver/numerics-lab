@@ -20,6 +20,7 @@ from motronics.gauss.linear.initial_sparse import (
     sparse_initial_pair,
 )
 from motronics.gauss.linear.initial_storage_border import joint_coordinate_sparse_correction
+from motronics.gauss.linear.resolution import ADMISSION_BAR
 from motronics.gauss.nonlinear import AssembledState, NewtonStrategy
 from motronics.gauss.nonlinear.initial_joint import joint_finite_storage_initial_pair
 
@@ -40,7 +41,7 @@ class StorageRateAuthorityRequired(ValueError):
 
 
 def finite_storage_right_state(
-    initial, *, residual_at, jacobian_at, mass_at, storage_at, storage_rows, max_newton=30, tolerance=1e-10
+    initial, *, residual_at, jacobian_at, mass_at, storage_at, storage_rows, max_newton=30, tolerance=ADMISSION_BAR
 ):
     """Preserve actual finite stored coordinates, not DQ(initial) times state."""
     initial = np.asarray(initial, dtype=float)
@@ -158,7 +159,7 @@ def finite_storage_initial_pair(
     partial_time_at,
     storage_rows,
     max_newton=30,
-    tolerance=1e-10,
+    tolerance=ADMISSION_BAR,
     algebraic_bulk_size=None,
     stored_columns=None,
 ):
@@ -268,7 +269,7 @@ def finite_storage_actual_rate_initial_pair(
     stored_columns_at=None,
     sparse_state_indices=None,
     max_newton=30,
-    tolerance=1e-10,
+    tolerance=ADMISSION_BAR,
 ):
     """Admit actual finite Q and full differentiated equations at the actual rate.
 

@@ -23,12 +23,19 @@ from __future__ import annotations
 
 import numpy as np
 
-__all__ = ['FLOOR_SAFETY', 'row_bar', 'system_resolution']
+__all__ = ['ADMISSION_BAR', 'FLOOR_SAFETY', 'row_bar', 'system_resolution']
 
 #: Safety factor on one row sum's rounding estimate: the accumulated error over ``n`` assembled
 #: terms grows like ``sqrt(n)`` at best and ``n`` at worst, and 64 buys that headroom while sitting
 #: orders below any residual a stalled-but-wrong Newton shows (measured 2026-09-12: 1e8x).
 FLOOR_SAFETY = 64.0
+
+#: THE ONE per-row relative bar a coupled state is judged by: the finite-storage admission's exit
+#: ``tolerance`` and the stacked march's step acceptance (ruling 2026-10-14). A march that accepted on
+#: the NORM of its residual could keep a small-scale row at 1.2x this bar, and the admission at the
+#: next law change then refused the very state the march had accepted -- two bars for one fact
+#: (Cummins a5, row 16580 at t=0.0134838).
+ADMISSION_BAR = 1e-10
 
 _EPS = float(np.finfo(float).eps)
 #: The smallest NORMAL double. Below it float64 keeps no relative precision (gradual underflow), so a
