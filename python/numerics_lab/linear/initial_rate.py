@@ -113,9 +113,7 @@ def normalize_sparse_rows(matrix, rhs):
         not np.isfinite(normalized.data).all()
         or not np.isfinite(forcing).all()
         or np.any((matrix.data != 0) & (normalized.data == 0))
-        # A SUBNORMAL forcing that underflows is zero, not an unrepresentable equation (moving band
-        # after its pulse); any normal forcing, 1e-308 included, stays a real equation.
-        or np.any((rhs != 0) & (forcing == 0) & (abs(rhs) >= np.finfo(float).tiny))
+        or np.any((rhs != 0) & (forcing == 0))
     ):
         msg = 'initial equation normalization requires representable finite operators and forcing'
         raise ValueError(msg)

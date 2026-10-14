@@ -129,12 +129,3 @@ def test_a_small_real_border_row_keeps_its_own_relative_bar():
     matrix = sp.csr_matrix(np.array([[300.0, 0.0], [0.0, 1.0]]))
     bars = _row_bars(matrix, np.array([0, 1]), np.array([1.0, 1e-6]), np.zeros(2), np.zeros(2), 1e-10)
     assert bars[1] == pytest.approx(1e-16)
-
-
-def test_a_subnormal_forcing_that_underflows_in_normalization_is_zero_not_unrepresentable():
-    from motronics.gauss.linear.initial_rate import normalize_sparse_rows  # noqa: PLC0415
-
-    _matrix, forcing = normalize_sparse_rows(sp.csr_matrix(np.array([[1e10]])), np.array([1e-315]))
-    assert forcing[0] == 0.0
-    with pytest.raises(ValueError, match='representable'):
-        normalize_sparse_rows(sp.csr_matrix(np.array([[1e305]])), np.array([1e-20]))
