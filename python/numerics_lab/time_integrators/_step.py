@@ -20,7 +20,12 @@ from motronics.contracts.spec.analysis_formulation import (
     StepEvaluationProblem,
 )
 from motronics.gauss.linear import reject_nonfinite_solution
-from motronics.gauss.time_integrators._forms import IntegratorState, StepForm, residual_floor
+from motronics.gauss.time_integrators._forms import (
+    IntegratorState,
+    StepForm,
+    change_below_residual_resolution,
+    residual_floor,
+)
 from motronics.gauss.time_integrators.factor_reuse import FactorCache, apply_factor, factor_matrix
 from motronics.gauss.time_integrators.local_convergence import LocalIterationCheck
 from motronics.gauss.time_integrators.prepared import (
@@ -282,6 +287,20 @@ def directional_line_search(residual, u, step, r0, *, curvature: float = 0.5):
     return u + (lo if lo > 0.0 else s) * step
 
 
+def _locally_stable(local: LocalIterationCheck, u, t, observed, tangent) -> bool:
+    """The local check's verdict, or a change the residual's own arithmetic cannot resolve.
+
+    A relative per-field bar judges a physically ZERO field against its own rounding noise and
+    can never pass there; :func:`change_below_residual_resolution` asks the unit-safe question
+    instead -- whether the change moved any residual row above that row's rounding floor. Both
+    verdicts need a previous observation, so the first iteration is decided by the check alone.
+    """
+    stable = local.observe(u, t)
+    if stable or observed is None or tangent is None or not local.finite:
+        return stable
+    return change_below_residual_resolution(tangent, observed, u)
+
+
 def _solve_step(
     problem: SemiDiscreteProblem,
     form: StepForm,
@@ -427,12 +446,14 @@ def _solve_step(
     # equal jacobian -- stands in, and a hit still never pays a build.
     tangent = None
     local = LocalIterationCheck(problem, tol_rel)
+    observed = None  # the iterate the local check last observed, for the resolution test
     for _it in range(1, max_newton + 1):
         iterations = _it
         u_arg, u_dot, u_ddot = form.u_arg(u), form.u_dot(u), form.u_ddot(u)
         r = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
         residual = float(np.linalg.norm(r))
-        stable = local.observe(u, t)
+        stable = _locally_stable(local, u, t, observed, tangent)
+        observed = u.copy()
         local_ok = local.accepts(stable, residual, initial=_it == 1)
         if _it == 1:
             residual_0 = residual
@@ -550,7 +571,7 @@ def _solve_step(
         u_arg, u_dot, u_ddot = form.u_arg(u), form.u_dot(u), form.u_ddot(u)
         r = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
         residual = float(np.linalg.norm(r))
-        local_ok = local.observe(u, t)
+        local_ok = _locally_stable(local, u, t, observed, tangent)
         if local_ok and (residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0)):
             converged = True
         elif local_ok and _at_roundoff_floor(problem, tangent, u, form, capabilities, r):

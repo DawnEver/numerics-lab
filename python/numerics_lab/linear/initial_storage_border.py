@@ -302,11 +302,13 @@ def _weighted_by_row_bars(schur, forcing, answer, bars):
     equality constraint, never divided by. Free columns (no entry) are not touched.
     """
     live = np.flatnonzero(np.any(schur != 0, axis=0))
-    if not live.size:
-        return answer
-    matrix = schur[:, live]
     residual = forcing - schur @ answer
     exact = ~(bars >= np.finfo(float).tiny)
+    # An answer every row already accepts is not a least-squares seed: moving it only writes the
+    # solve's rounding into coordinates that are exactly zero (the at-rest switched network: 1e-58).
+    if not live.size or (np.all(residual[exact] == 0) and np.all(abs(residual[~exact]) <= bars[~exact])):
+        return answer
+    matrix = schur[:, live]
     step = np.zeros(len(live))
     basis = np.eye(len(live))
     if np.any(exact):

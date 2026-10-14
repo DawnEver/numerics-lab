@@ -136,6 +136,15 @@ class _AffineInitialConstraints:
     def residual_norm(self, value, state):
         return float(np.linalg.norm(state.payload))
 
+    def rhs_norm(self, state):
+        """The ORIGINAL system's source norm, on the reduced tangent this Newton actually solves.
+
+        Without it the Newton stop fell back to the SEED residual, so a seed already at the root
+        (transformer_3ph_concentric `network_controlled` REST, 1.6e-14) was asked for 1e-10 of
+        its own roundoff and refused after 40 iterations at ratio 1.0.
+        """
+        return self.original.rhs_norm(state)
+
     def tangent(self, value, state):
         return state.system_matrix
 

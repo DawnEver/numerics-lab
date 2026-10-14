@@ -69,3 +69,32 @@ def test_exact_residual_cannot_accept_nonfinite_local_fields():
 
     _, converged, _, _, _ = _step(1, problem=InvalidFields(), guess=np.array([1e6, 1e-9]))
     assert not converged
+
+
+class _ZeroFieldNoise:
+    """A physically ZERO field ``a`` re-solved to fresh rounding noise every evaluation.
+
+    Row 1 sums ``a`` with an ampere-scale coupling term, so a change of ``a`` at ``noise`` is either
+    below that row's rounding (``noise`` 1e-40) or a real, resolvable change (``noise`` 1e-3).
+    """
+
+    def __init__(self, noise) -> None:
+        self.noise, self.calls = noise, 0
+
+    def residual(self, u, u_dot, u_ddot, t):
+        self.calls += 1
+        return np.array([u[0] - 1.0, (u[0] - 1.0) + (u[1] - self.noise * self.calls)])
+
+    def jacobian(self, u, u_dot, u_ddot, t, weights):
+        return np.array([[1.0, 0.0], [1.0, 1.0]])
+
+    def local_convergence_fields(self, u, t):
+        return (u[:1], u[1:])
+
+
+@pytest.mark.parametrize(('noise', 'accepted'), [(1e-40, True), (1e-3, False)])
+def test_a_zero_field_changing_below_its_rows_rounding_is_converged(noise, accepted):
+    # MEASURED 2026-10-13 on transformer_3ph_concentric at rest: nodal A at 1e-40 Wb/m changed by
+    # 0.03..2 RELATIVE to its own noise every iteration, so the march halved to its minimum step.
+    _, converged, _, _, _ = _step(8, tol=1e-12, problem=_ZeroFieldNoise(noise), guess=np.array([0.0, 0.0]))
+    assert converged is accepted

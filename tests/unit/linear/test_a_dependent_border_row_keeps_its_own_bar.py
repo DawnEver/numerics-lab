@@ -112,6 +112,22 @@ def test_a_zero_bar_row_is_an_exact_constraint_never_a_division():
     assert moved[0] == 0.0 and moved[1] == 2.0, 'the exact rows hold exactly; the soft row keeps the 0.5'
 
 
+def test_an_answer_inside_every_bar_is_not_moved_so_an_exact_zero_stays_zero():
+    """An answer that already meets every row's bar is returned as it is.
+
+    MEASURED 2026-10-13 on the switched-network checkpoint: the border answered the at-rest boundary
+    exactly (field coordinates 0), every row inside its bar, and the unconditional weighted least
+    squares still moved it -- 1.4e-58 on the winding coordinates, 1e-63 on every field rate -- noise the
+    boundary Newton then judged against itself and amplified until it diverged.
+    """
+    schur = np.array([[1.0, 1.0, 0.0], [1.0, -1.0, 0.0], [0.0, 0.0, 1.0]])
+    forcing = np.array([2e-12, 0.0, 0.0])
+    bars = np.array([2e-4, 2e-4, 0.0])  # rows 0, 1 soft; row 2 exact
+    answer = np.zeros(3)
+    moved = _weighted_by_row_bars(schur, forcing, answer, bars)
+    assert np.array_equal(moved, answer), 'a met answer is exact authority, not a least-squares seed'
+
+
 def test_a_joint_correction_that_already_holds_is_not_rate_re_solved(monkeypatch):
     """Every original row at the bare bar: the rate re-solve is skipped, not re-run.
 

@@ -23,6 +23,7 @@ __all__ = [
     'ProjectedRestartIntegrator',
     'StepForm',
     'TransientSolution',
+    'change_below_residual_resolution',
     'residual_floor',
     'residual_floor_of_magnitude',
     'same_instant',
@@ -81,6 +82,37 @@ def residual_floor(tangent, u: NDArray[np.floating]) -> float:
         dense = np.abs(np.asarray(tangent, dtype=float))
         magnitude = dense * u_abs if dense.ndim == 0 else dense @ u_abs
     return residual_floor_of_magnitude(magnitude)
+
+
+def _abs_matvec(tangent, x: NDArray[np.floating]) -> NDArray[np.floating]:
+    if sp.issparse(tangent):
+        return np.asarray(abs(tangent) @ x).reshape(-1)
+    dense = np.abs(np.asarray(tangent, dtype=float))
+    return (dense * x if dense.ndim == 0 else dense @ x).reshape(-1)
+
+
+def change_below_residual_resolution(tangent, before: NDArray[np.floating], after: NDArray[np.floating]) -> bool:
+    """Whether the iterate change ``after - before`` is invisible to every residual row's arithmetic.
+
+    Row ``i`` of the residual is a floating-point sum of terms of total magnitude ``(|J| . |u|)_i``
+    and cannot resolve anything below ``_FLOOR_SAFETY * eps`` of it -- the :func:`residual_floor`
+    criterion, kept PER ROW so a KCL row and a field row are each judged in their own unit. A change
+    whose own row contribution ``(|J| . |du|)_i`` sits under that on EVERY row cannot be confirmed or
+    corrected by another Newton iteration: it is rounding in the iterate, not an unconverged state.
+
+    This is what a per-field RELATIVE change cannot see on a field that is physically zero. Measured
+    2026-10-13 on transformer_3ph_concentric at rest: the 96834 nodal A values sat at 1e-40 Wb/m,
+    pure solve noise, and their change relative to their own noise scale stayed 0.03..2 on every
+    iteration, so the relative bar refused a step whose residual was already at its floor and the
+    adaptive march halved the step to its minimum.
+    """
+    before = np.asarray(before, dtype=float).reshape(-1)
+    after = np.asarray(after, dtype=float).reshape(-1)
+    change = _abs_matvec(tangent, np.abs(after - before))
+    magnitude = _abs_matvec(tangent, np.maximum(np.abs(before), np.abs(after)))
+    if not (np.isfinite(change).all() and np.isfinite(magnitude).all()):
+        return False
+    return bool(np.all(change <= _FLOOR_SAFETY * _EPS * magnitude))
 
 
 def residual_floor_of_magnitude(magnitude: NDArray[np.floating]) -> float:
