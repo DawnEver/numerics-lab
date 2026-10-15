@@ -18,6 +18,8 @@ import scipy.sparse as sp
 
 from motronics.contracts.spec.analysis_formulation import DerivativeWeights
 from motronics.contracts.spec.study_spec import TransientStudy
+from motronics.core.materials.library import library
+from motronics.core.materials.registry import compile_selection
 from motronics.gauss.nonlinear import (
     DEFAULT_ITERATION_STRATEGY,
     ITERATION_REGISTRY,
@@ -144,7 +146,7 @@ def _fea(strategy: str):
         ele_mat=_TRIS,
         ele_group_mat=_GROUP,
         vert_mat=_VERT,
-        binding=binding_from_group_materials(_GML, _MIU),
+        binding=binding_from_group_materials(_GML, compile_selection(library(), _MIU)),
         conductor_current_density_list=np.array([3.0e8, 0.0]),
         bound_vert_ids_dict={'dirichlet': {0.0: np.array([0, 1, 2, 3, 5, 6, 7, 8])}, 'symmetry': {}},
         depth=0.005,
