@@ -20,7 +20,7 @@ from motronics.contracts.spec.analysis_formulation import (
     StepEvaluationProblem,
 )
 from motronics.gauss.linear import reject_nonfinite_solution
-from motronics.gauss.linear.resolution import ADMISSION_BAR, row_bar, system_resolution
+from motronics.gauss.linear.resolution import ADMISSION_BAR, FLOOR_SAFETY, row_bar, system_resolution
 from motronics.gauss.time_integrators._forms import (
     IntegratorState,
     StepForm,
@@ -293,7 +293,10 @@ class RowAcceptance:
 
     The scale is the admission's: ``|F_u| |u| + |F_u'| |u'| + |F(u, 0)|``, so a step this accepts is a
     state the finite-storage admission at the next law change can admit (ruling 2026-10-14; the NORM
-    bar it replaces accepted Cummins row 16580 at 1.19x). Noise rows are judged by
+    bar it replaces accepted Cummins row 16580 at 1.19x). No bar sits below the step's own CONSTRUCTION
+    floor ``FLOOR_SAFETY eps |F_u'| |alpha1 u|``: the rate is a difference of states, so a row whose rate
+    is small cannot resolve below it (Cummins 2026-10-15: a linkage row at a 1.85 us zero-vector step
+    was held to 1.2e-13 under a ~1e-11 rounding, and Newton exhausted). Noise rows are judged by
     :func:`~motronics.gauss.linear.resolution.row_bar`.
 
     THE SCREEN. Reading the scale costs two tangents, so an iterate within :data:`_NEAR` of the last
@@ -324,12 +327,18 @@ class RowAcceptance:
         u_arg, u_dot, u_ddot = form.u_arg(u), form.u_dot(u), form.u_ddot(u)
         zero = np.zeros_like(np.asarray(u_dot, dtype=float))
         scale = np.abs(np.asarray(problem.residual(u_arg, zero, zero, t), dtype=float))
+        magnitudes = []
         for weights, operand in ((DerivativeWeights(1, 0, 0), u_arg), (DerivativeWeights(0, 1, 0), u_dot)):
             matrix = problem.jacobian(u_arg, u_dot, u_ddot, t, weights)
-            magnitude = abs(matrix) if sp.issparse(matrix) else np.abs(np.asarray(matrix, dtype=float))
-            scale = scale + np.asarray(magnitude @ np.abs(np.asarray(operand, dtype=float))).ravel()
+            magnitudes.append(abs(matrix) if sp.issparse(matrix) else np.abs(np.asarray(matrix, dtype=float)))
+            scale = scale + np.asarray(magnitudes[-1] @ np.abs(np.asarray(operand, dtype=float))).ravel()
         forcing = self.forcing()
-        self.bars = row_bar(ADMISSION_BAR * scale, scale, system_resolution(scale, forcing), forcing)
+        # THE RATE IS BUILT FROM THE STATE, ``u' = alpha1 (u - origin) + h``: it carries the rounding of
+        # ``alpha1 u`` however small the rate is, so no row resolves below that construction floor.
+        built = abs(form.weights.alpha1.real) * np.abs(u)
+        floor = FLOOR_SAFETY * float(np.finfo(float).eps) * np.asarray(magnitudes[1] @ built).ravel()
+        own = row_bar(ADMISSION_BAR * scale, scale, system_resolution(scale, forcing), forcing)
+        self.bars = np.maximum(own, floor)
         self.judged = u.copy()
         return bool(np.all(residual <= self.bars))
 

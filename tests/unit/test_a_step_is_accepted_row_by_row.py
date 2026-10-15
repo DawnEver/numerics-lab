@@ -47,3 +47,25 @@ def test_the_row_bar_holds_every_row_at_its_own_scale() -> None:
 def test_the_row_bar_is_the_only_bar() -> None:
     with pytest.raises(ValueError, match='only bar'):
         _march(row_acceptance=True, tol_rel=1e-12)
+
+
+class _SlowLinkage:
+    """``lambda' = 1e-3``: a large stored state whose rate is small, over a short step.
+
+    BDF builds the rate from the state, ``lambda' = alpha1 (lambda - origin) + h``, so the row can
+    resolve no better than ``eps alpha1 |lambda|`` (2.2e-9 here) however small the rate it carries --
+    the Cummins zero-vector step (2026-10-15): a linkage row at a 1.85 us step held to 1.2e-13.
+    """
+
+    def residual(self, u, u_dot, u_ddot, t):
+        return np.array([u_dot[0] - 1e-3])
+
+    def jacobian(self, u, u_dot, u_ddot, t, weights):
+        return np.array([[weights.alpha1.real]])
+
+
+def test_a_rate_row_is_judged_at_the_scale_its_rate_is_built_from() -> None:
+    study = TransientStudy(t0=0.0, t1=3e-7, dt=1e-7, integrator=IntegratorKind.BDF1)
+    solution = integrate_transient(_SlowLinkage(), study, np.array([1.0]), max_newton=20, row_acceptance=True)
+    assert solution.converged
+    assert solution.states[-1][0] == pytest.approx(1.0 + 3e-10, abs=1e-14)
