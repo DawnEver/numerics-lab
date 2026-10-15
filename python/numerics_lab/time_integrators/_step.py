@@ -20,6 +20,7 @@ from motronics.contracts.spec.analysis_formulation import (
     StepEvaluationProblem,
 )
 from motronics.gauss.linear import reject_nonfinite_solution
+from motronics.gauss.linear.resolution import ADMISSION_BAR, row_bar, system_resolution
 from motronics.gauss.time_integrators._forms import (
     IntegratorState,
     StepForm,
@@ -287,6 +288,52 @@ def directional_line_search(residual, u, step, r0, *, curvature: float = 0.5):
     return u + (lo if lo > 0.0 else s) * step
 
 
+class RowAcceptance:
+    """The per-row step verdict: every row of the step residual at :data:`ADMISSION_BAR` of its own scale.
+
+    The scale is the admission's: ``|F_u| |u| + |F_u'| |u'| + |F(u, 0)|``, so a step this accepts is a
+    state the finite-storage admission at the next law change can admit (ruling 2026-10-14; the NORM
+    bar it replaces accepted Cummins row 16580 at 1.19x). Noise rows are judged by
+    :func:`~motronics.gauss.linear.resolution.row_bar`.
+
+    THE SCREEN. Reading the scale costs two tangents, so an iterate within :data:`_NEAR` of the last
+    judged one (relative, in the state's own max norm) whose residual still exceeds that one's bars by
+    :data:`_SCREEN` on some row is refused unread: so close, the scale has not moved by 10x, and a row
+    10x over its bar is over it. An iterate farther away is always read -- a first iterate at rest has
+    ``|u| = 0`` and a rest-sized scale, and reusing its bars refused every later iterate (measured on
+    the Cummins first step, 2026-10-15). A screen can only cost an iteration, never pass one.
+    """
+
+    _SCREEN = 10.0
+    _NEAR = 1e-3
+
+    def __init__(self, problem, form, forcing) -> None:
+        self.problem, self.form, self.forcing = problem, form, forcing
+        self.bars = self.judged = None
+
+    def accepts(self, u, r) -> bool:
+        residual = np.abs(np.asarray(r, dtype=float))
+        u = np.asarray(u, dtype=float)
+        if (
+            self.bars is not None
+            and np.max(np.abs(u - self.judged), initial=0.0) <= self._NEAR * np.max(np.abs(u), initial=0.0)
+            and np.any(residual > self._SCREEN * self.bars)
+        ):
+            return False
+        form, problem, t = self.form, self.problem, self.form.t_eval
+        u_arg, u_dot, u_ddot = form.u_arg(u), form.u_dot(u), form.u_ddot(u)
+        zero = np.zeros_like(np.asarray(u_dot, dtype=float))
+        scale = np.abs(np.asarray(problem.residual(u_arg, zero, zero, t), dtype=float))
+        for weights, operand in ((DerivativeWeights(1, 0, 0), u_arg), (DerivativeWeights(0, 1, 0), u_dot)):
+            matrix = problem.jacobian(u_arg, u_dot, u_ddot, t, weights)
+            magnitude = abs(matrix) if sp.issparse(matrix) else np.abs(np.asarray(matrix, dtype=float))
+            scale = scale + np.asarray(magnitude @ np.abs(np.asarray(operand, dtype=float))).ravel()
+        forcing = self.forcing()
+        self.bars = row_bar(ADMISSION_BAR * scale, scale, system_resolution(scale, forcing), forcing)
+        self.judged = u.copy()
+        return bool(np.all(residual <= self.bars))
+
+
 def _locally_stable(local: LocalIterationCheck, u, t, observed, tangent, forcing) -> bool:
     """The local check's verdict, or a change the residual's own arithmetic cannot resolve.
 
@@ -320,6 +367,7 @@ def _solve_step(
     gmin_stages: tuple[float, ...] | None = None,
     held: HeldFactor | None = None,
     capabilities: ProblemCapabilities | None = None,
+    row_acceptance: bool = False,
 ) -> NDArray[np.floating]:
     """Advance one step by a Newton loop on ``residual(u_arg, u_dot, u_ddot, t)`` for ``u_{n+1}``.
 
@@ -361,7 +409,14 @@ def _solve_step(
     ``converged=True``, so a march that quietly STOPPED converging could be certified by the
     arithmetic with nothing for a caller to read -- the shape ``taste.md`` forbids. The flag
     rides out to :attr:`TransientSolution.floor_converged_times`.
+
+    ``row_acceptance`` replaces every norm verdict (``tol``, ``tol_rel`` and the arithmetic floor) by
+    :class:`RowAcceptance`; it is the one bar there is, so the norm bars and the gmin continuation
+    beside it refuse.
     """
+    if row_acceptance and (tol_rel is not None or gmin_stages is not None):
+        msg = 'a per-row step acceptance is the only bar: it takes no tol_rel and no gmin continuation'
+        raise ValueError(msg)
     if capabilities is None:
         capabilities = ProblemCapabilities.resolve(problem)
     if capabilities.step_evaluation:
@@ -377,6 +432,7 @@ def _solve_step(
     if (
         capabilities.native_step
         and tol_rel is None
+        and not row_acceptance
         and line_search == 'backtrack'
         and jacobian_tangent is None
         and gmin_stages is None
@@ -447,13 +503,20 @@ def _solve_step(
     # HIT no matrix is built, so the cache's own -- valid by its contract that equal keys imply an
     # equal jacobian -- stands in, and a hit still never pays a build.
     tangent = None
-    local = LocalIterationCheck(problem, tol_rel)
+    local = LocalIterationCheck(problem, ADMISSION_BAR if row_acceptance else tol_rel)
     observed = None  # the iterate the local check last observed, for the resolution test
 
     def row_forcing():
         # Each row's own source: the residual with every state and rate at zero.
         zero = np.zeros_like(np.asarray(guess, dtype=float))
         return np.asarray(problem.residual(zero, zero, zero, t), dtype=float)
+
+    rows = RowAcceptance(problem, form, row_forcing) if row_acceptance else None
+
+    def met(residual, r, u):
+        if rows is not None:
+            return rows.accepts(u, r)
+        return residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0)
 
     for _it in range(1, max_newton + 1):
         iterations = _it
@@ -471,7 +534,7 @@ def _solve_step(
         # The opt-in ``tol_rel`` accepts a step whose residual dropped below
         # ``tol_rel * r0`` (r0 = the first iteration's norm). Off by default: every
         # existing march keeps the absolute contract unchanged.
-        if local_ok and (residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0)):
+        if local_ok and met(residual, r, u):
             converged = True
             break
         # The STALL-POLISH (MANUAL-627 (i)): the fixed jacobian (the switch's chord i/v)
@@ -493,7 +556,7 @@ def _solve_step(
             # monotonically, so no stall ratio can be relied on to see it). It is the same floor
             # verdict the exhaustion branch below gives, reached before the ceiling instead of at
             # it (measured on ipm_uv's chopper: 50 iterations, ~30 s a step, at |r| ~ 4e-9).
-            if local_ok and _at_roundoff_floor(problem, tangent, u, form, capabilities, r):
+            if rows is None and local_ok and _at_roundoff_floor(problem, tangent, u, form, capabilities, r):
                 converged = True
                 on_floor = True
                 break
@@ -580,9 +643,9 @@ def _solve_step(
         r = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
         residual = float(np.linalg.norm(r))
         local_ok = _locally_stable(local, u, t, observed, tangent, row_forcing)
-        if local_ok and (residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0)):
+        if local_ok and met(residual, r, u):
             converged = True
-        elif local_ok and _at_roundoff_floor(problem, tangent, u, form, capabilities, r):
+        elif rows is None and local_ok and _at_roundoff_floor(problem, tangent, u, form, capabilities, r):
             on_floor = True
             # THE ARITHMETIC FLOOR, and the reason an exactly-solved LINEAR step no longer lies.
             # ``tol`` is ABSOLUTE on a residual whose scale is the supply, so the same one-Newton
