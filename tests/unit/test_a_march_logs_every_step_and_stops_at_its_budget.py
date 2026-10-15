@@ -116,3 +116,15 @@ def test_an_invalid_wall_budget_is_refused(seconds) -> None:
 def test_an_invalid_memory_budget_is_refused(size) -> None:
     with pytest.raises(ValueError, match='memory_bytes'):
         RunBudget(memory_bytes=size)
+
+
+def test_the_solution_carries_the_newton_work_every_logged_solve_did() -> None:
+    """The total a per-step cost is divided by is the log's own per-solve counts summed, probes included."""
+    stream = io.StringIO()
+    sol = integrate_transient(
+        _Decay(), _STUDY, np.ones(1), step_control=StepTolerance(rtol=1e-4, atol=1e-8), step_log=stream
+    )
+    solves = [r['attributes'] for r in _records(stream) if r['body'] == 'solve']
+    counted = sum(int(next(v for k, v in a.items() if k.endswith('iterations'))) for a in solves)
+    assert counted >= len(sol.times) - 1
+    assert sol.newton_iterations == counted

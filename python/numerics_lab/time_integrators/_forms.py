@@ -287,6 +287,9 @@ class TransientSolution:
     landed_events: list[tuple[int, float]] = field(default_factory=list)
     #: Genuine accepted observer law changes that restarted derivative history, not located event IDs.
     accepted_discontinuities: list[float] = field(default_factory=list)
+    #: Newton iterations over every step the march took, discarded bisection probes included: the
+    #: solver WORK, which is what a per-step cost is divided by.
+    newton_iterations: int = 0
 
     @property
     def history_restarts(self) -> tuple[float, ...]:
