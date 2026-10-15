@@ -308,22 +308,29 @@ def _weighted_by_row_bars(schur, forcing, answer, bars):
     residual = forcing - schur @ answer
     exact = ~(bars >= np.finfo(float).tiny)
     step = np.zeros(len(live))
-    basis = np.eye(len(live))
+    # The exact rows' row space is held by its ECONOMY basis ``vt[:rank]`` (rank <= rows); the
+    # null space is the implicit projector ``I - V V^T``, never an explicit live x live basis:
+    # live spans the whole field (tens of thousands of columns), and the explicit square factor
+    # was a 60 GB allocation on the transformer march (2026-10-14).
+    row_space = np.zeros((0, len(live)))
     if np.any(exact):
         # Exact rows: the minimum-norm step that meets them, then move only in their null space.
-        u, sigma, vt = np.linalg.svd(matrix[exact], full_matrices=True)
+        u, sigma, vt = np.linalg.svd(matrix[exact], full_matrices=False)
         rank = int(np.sum(sigma > sigma[0] * np.finfo(float).eps * max(matrix[exact].shape))) if sigma.size else 0
         step = vt[:rank].T @ ((u[:, :rank].T @ residual[exact]) / sigma[:rank])
-        basis = vt[rank:].T
+        row_space = vt[:rank]
     soft = ~exact
-    if np.any(soft) and basis.shape[1]:
-        weighted = (matrix[soft] @ basis) / bars[soft, None]
+    if np.any(soft) and row_space.shape[0] < len(live):
+        projected = matrix[soft] - (matrix[soft] @ row_space.T) @ row_space
+        weighted = projected / bars[soft, None]
         norm = np.linalg.norm(weighted, axis=0)
         usable = norm > 0
         if np.any(usable):
             target = (residual[soft] - matrix[soft] @ step) / bars[soft]
             reduced, *_ = np.linalg.lstsq(weighted[:, usable] / norm[usable], target, rcond=None)
-            step = step + basis[:, usable] @ (reduced / norm[usable])
+            move = np.zeros(len(live))
+            move[usable] = reduced / norm[usable]
+            step = step + move - row_space.T @ (row_space @ move)
     moved = answer.copy()
     moved[live] += step
     return moved
