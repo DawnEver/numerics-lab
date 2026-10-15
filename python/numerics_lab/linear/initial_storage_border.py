@@ -252,15 +252,23 @@ def _sparse_joint_border(
         # units of its own bar -- the same weighted least squares, one level down.
         # Judged on the ACTUAL original rows, not the Schur model: the elimination's own
         # error is what put the residual there.
+        # Every row is judged at the trial it is judged ON: the bars above were formed at the first
+        # trial, where a row with no operands has a zero bar, and the weighted answer then leaves
+        # rounding there -- 16203 rows "over" at Cummins 90 deg t=0.0011921, so this share never ran.
+        # The rows already shared stay in the set, driven to zero together: shared one at a time,
+        # the residual of a solid body's dependent net-current row only moved to its sibling bodies.
         selected_bars = _row_bars(matrix, selected_rows, trial, rhs, row_scale, tolerance)
+        shared = np.zeros(len(rows), dtype=bool)
         for _ in range(4):
             trial[remaining_columns] = answer
             trial[selected_columns] = solve(rhs[selected_rows] - kept - coupling @ answer)
             defect = np.asarray(matrix[rows] @ trial).ravel() - rhs[rows]
-            over = np.flatnonzero(abs(defect) > bars)
+            over = abs(defect) > _row_bars(matrix, rows, trial, rhs, row_scale, tolerance)
             # A dependent residual is a few weak rows; more rows than border columns is no such set.
-            if not over.size or over.size > len(remaining_columns):
+            if not over.any() or np.count_nonzero(over | shared) > len(remaining_columns):
                 break
+            shared |= over
+            over = np.flatnonzero(shared)
             shift = _eliminated_share(block, left[np.flatnonzero(supported)[over]], selected_bars, defect[over])
             if shift is None:
                 break
