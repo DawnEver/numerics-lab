@@ -13,8 +13,10 @@ import numpy as np
 __all__ = ['ROUNDOFF_ULPS', 'canonical', 'is_future', 'same_instant']
 
 #: Two spellings of one instant differ by the roundoff of a few products and sums of clock terms;
-#: 64 ulps is ~1e-19 s at a millisecond clock, far below any physical edge separation.
-ROUNDOFF_ULPS = 64
+#: 4 ulps covers the one-ulp split of two spellings (``origin + 36 * dt`` against ``1 / 2400``) and no
+#: more: the window is relative, so a wider one grows with the clock (64 ulps is 1.2e-10 s at
+#: 1e4 s, a distinct tick) and joins an endpoint 5 ulps off a uniform lattice (pinned 2026-10-15).
+ROUNDOFF_ULPS = 4
 
 
 def same_instant(a: float, b: float) -> bool:
