@@ -400,7 +400,7 @@ class _TimeBudgetedSystem:
 DEFAULT_SOLVE_BUDGET_S = 500.0
 
 #: The run-scoped override of :data:`DEFAULT_SOLVE_BUDGET_S`, or ``None`` for the default. A
-#: PROCESS property, like the FEMM COM ceiling: the CLI boundary applies ``[solve] budget`` (``--set`` over the
+#: PROCESS property, like the FEMM call ceiling: the CLI boundary applies ``[solve] budget`` (``--set`` over the
 #: case's table) once per run (`motronics.cli.target._resolve_target`), and every
 #: driver not handed its own ``seconds`` reads :func:`run_solve_budget_s`.
 #:
