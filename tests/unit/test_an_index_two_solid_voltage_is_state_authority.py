@@ -18,7 +18,7 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear.index_two import index_two_columns, index_two_frozen_rate
+from motronics.gauss.linear.index_two import index_two_directions, index_two_frozen_rate
 from motronics.gauss.linear.initial_rate import sparse_initial_rate
 
 pytestmark = pytest.mark.unit
@@ -36,7 +36,9 @@ def _system(u):
 
 
 def test_the_body_voltage_is_the_one_index_two_column():
-    assert index_two_columns(_M, _J, _Y).tolist() == [2]
+    columns, basis = index_two_directions(_M, _J, _Y)
+    assert columns.tolist() == [2]
+    assert basis.tolist() == [[1.0]]
 
 
 def test_the_frozen_discrete_voltage_is_refused():

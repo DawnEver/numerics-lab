@@ -5,7 +5,13 @@ from scipy.sparse import csr_matrix
 
 from motronics.contracts.runtime.ports import ResidualAssemblyBound
 
-__all__ = ['affine_residual_bound', 'certified_sparse_product', 'matrix_vector_roundoff', 'transport_residual_bound']
+__all__ = [
+    'affine_residual_bound',
+    'certified_sparse_product',
+    'matrix_vector_roundoff',
+    'sparse_product_bound',
+    'transport_residual_bound',
+]
 
 
 def _row_arithmetic(matrix, vector, offset):
@@ -36,15 +42,8 @@ def _row_arithmetic(matrix, vector, offset):
     return matrix, values, known, gamma
 
 
-def certified_sparse_product(left, right):
-    """``left @ right`` without coefficients its own summation cannot certify.
-
-    An entry no larger than the gamma bound of its own dot product,
-    ``gamma_k * (|left| @ |right|)``, has neither sign nor magnitude
-    authority: an exact cancellation (a left-null storage row against a
-    column in the range of the mass) lands there. Kept, it reads as a
-    structural dependence and a sparse LU pivots on it.
-    """
+def sparse_product_bound(left, right):
+    """``(left @ right, gamma_k * (|left| @ |right|))``: the product and its own summation bound."""
     left, right = csr_matrix(left), csr_matrix(right)
     product = csr_matrix(left @ right)
     magnitude = csr_matrix(abs(left) @ abs(right))
@@ -54,7 +53,19 @@ def certified_sparse_product(left, right):
         matrix.sort_indices()
     gamma = counts.multiply(np.finfo(float).eps).tocsr()
     gamma.data = gamma.data / (1 - gamma.data)
-    bound = csr_matrix(magnitude.multiply(gamma))
+    return product, csr_matrix(magnitude.multiply(gamma))
+
+
+def certified_sparse_product(left, right):
+    """``left @ right`` without coefficients its own summation cannot certify.
+
+    An entry no larger than the gamma bound of its own dot product,
+    ``gamma_k * (|left| @ |right|)``, has neither sign nor magnitude
+    authority: an exact cancellation (a left-null storage row against a
+    column in the range of the mass) lands there. Kept, it reads as a
+    structural dependence and a sparse LU pivots on it.
+    """
+    product, bound = sparse_product_bound(left, right)
     # JUDGED ON THE PRODUCT'S OWN ENTRIES: a sparse `<=` is True at every implicit zero, and
     # materialised n^2 of them on a field-sized product (76 GiB, ipm_uv_cummins, 2026-10-12).
     product.eliminate_zeros()

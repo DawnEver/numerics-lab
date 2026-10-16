@@ -5,16 +5,17 @@ and a proven invariant left-nullspace of DQ. A changing storage nullspace
 requires its own coordinate authority rather than a constant-mass surrogate.
 """
 
-from fractions import Fraction
-
 import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import splu
 
 from motronics.gauss.linear.algebraic_bulk_initial import algebraic_bulk_initial_pair
 from motronics.gauss.linear.arithmetic import affine_residual_bound, certified_sparse_product
-from motronics.gauss.linear.index_two import index_two_frozen_rate
-from motronics.gauss.linear.initial_rate import _independent_exact_columns, sparse_initial_rate
+from motronics.gauss.linear.index_two import (
+    certified_null_directions,
+    index_two_frozen_rate,
+)
+from motronics.gauss.linear.initial_rate import sparse_initial_rate
 from motronics.gauss.linear.initial_sparse import (
     SparseInitialPair,
     projected_rate_consistent,
@@ -395,17 +396,20 @@ def finite_storage_actual_rate_initial_pair(
                 evaluation = None if residual_evaluation_at is None else residual_evaluation_at(state, rate)
                 residual = residual_at(state, rate) if evaluation is None else evaluation.residual
                 derivative = storage.algebraic_rows @ (jacobian @ rate + partial)
+                # The CERTIFIED hidden rows, as on the frozen branch: a left-null row against a
+                # column in the range of the mass cancels to residue, and the border would pivot on it.
+                hidden = certified_sparse_product(storage.algebraic_rows, tangent)
                 equations = sp.bmat(
                     [
                         [jacobian @ directions, mass],
                         [
                             sp.csr_matrix((storage.algebraic_rows.shape[0], directions.shape[1])),
-                            storage.algebraic_rows @ tangent,
+                            hidden,
                         ],
                     ],
                     format='csr',
                 )
-                rhs = np.concatenate((-residual + mass @ rate, -derivative + storage.algebraic_rows @ tangent @ rate))
+                rhs = np.concatenate((-residual + mass @ rate, -derivative + hidden @ rate))
                 algebraic_state = np.asarray(mass.getnnz(axis=1)).ravel() == 0
                 state_allowance = tolerance * (
                     abs(jacobian) @ abs(state) + abs(residual_at(state, np.zeros_like(rate)))
@@ -418,7 +422,7 @@ def finite_storage_actual_rate_initial_pair(
                         [
                             [jacobian, mass],
                             [stored, sp.csr_matrix(stored.shape)],
-                            [sp.csr_matrix(storage.algebraic_rows.shape), storage.algebraic_rows @ tangent],
+                            [sp.csr_matrix(storage.algebraic_rows.shape), hidden],
                         ],
                         format='csr',
                     )
@@ -712,28 +716,30 @@ def _actual_finite_storage_state(
                 response = sp.csr_matrix(solved) @ sp.eye(len(free), format='csr')[active]
             selectors = sp.eye(len(state), format='csr')
             mapping = selectors[:, free] + selectors[:, columns] @ response
-            matrix = (storage.algebraic_rows @ jacobian @ mapping).tocsc()
+            left, right = storage.algebraic_rows, (jacobian @ mapping).tocsc()
+            matrix = (left @ right).tocsc()
             rhs = -projected - storage.algebraic_rows @ jacobian @ base
         else:
+            left = sp.block_diag((storage.algebraic_rows, sp.eye(len(storage.stored_rows))), format='csr')
+            right = sp.vstack((jacobian, mass[storage.stored_rows]), format='csc')
             matrix = sp.vstack((storage.algebraic_rows @ jacobian, mass[storage.stored_rows]), format='csc')
             rhs = -np.concatenate((projected, (charge - target)[storage.stored_rows]))
             free = np.arange(len(state))
         if sparse_state_indices is not None:
             boundary = np.flatnonzero(~np.isin(free, sparse_state_indices))
             if 0 < len(boundary) <= 512:
-                independent, _ = _independent_exact_columns(
-                    matrix[:, boundary], np.arange(len(boundary)), dependent_start=0
-                )
-                if len(independent) != len(boundary):
+                # The boundary's freedom is the CERTIFIED null space: a solid body's voltage column
+                # cancels to rounding residue against the left-null rows, and two bodies sharing a
+                # field node cancel only as a pair, so an exact rational dependency misses both.
+                null = certified_null_directions(left, right[:, boundary])
+                if null.shape[1]:
                     msg = 'original boundary state equations require actual differentiated rate authority'
                     charge_scale = abs(charge) + abs(target) + abs(mass) @ abs(state)
                     projected_scale = abs(storage.algebraic_rows) @ (abs(jacobian) @ abs(state) + abs(residual))
                     admitted = np.all(abs(charge - target) <= tolerance * charge_scale) and np.all(
                         abs(projected) <= tolerance * projected_scale
                     )
-                    directions = _exact_boundary_directions(matrix[:, boundary]) if admitted else None
-                    if directions is not None:
-                        directions = mapping[:, boundary] @ directions
+                    directions = sp.csr_matrix(mapping[:, boundary] @ null) if admitted else None
                     raise StorageRateAuthorityRequired(msg, state=state, directions=directions)
         try:
             factor = splu(matrix)
@@ -775,44 +781,3 @@ def _backtracked_state(state, step, target, residual_at, charge_at, storage, zer
             return trial
         lam *= shrink
     return state + step
-
-
-def _exact_boundary_directions(matrix):
-    """Exact sparse dependencies of the already bounded physical border only."""
-    columns = matrix.tocsc()
-    basis, dependencies = {}, []
-    for column in range(columns.shape[1]):
-        start, stop = columns.indptr[column : column + 2]
-        vector = {
-            int(row): Fraction(float(value))
-            for row, value in zip(columns.indices[start:stop], columns.data[start:stop], strict=True)
-            if value
-        }
-        support = {column: Fraction(1)}
-        while vector:
-            pivot = min(vector)
-            if pivot not in basis:
-                divisor = vector[pivot]
-                basis[pivot] = (
-                    {row: value / divisor for row, value in vector.items()},
-                    {index: value / divisor for index, value in support.items()},
-                )
-                break
-            previous, provenance = basis[pivot]
-            multiplier = vector[pivot]
-            for target, source in ((vector, previous), (support, provenance)):
-                for index, value in source.items():
-                    target[index] = target.get(index, Fraction(0)) - multiplier * value
-                    if target[index] == 0:
-                        del target[index]
-        if not vector:
-            dependencies.append(support)
-    rows, cols, data = [], [], []
-    for index, support in enumerate(dependencies):
-        if any(Fraction(float(value)) != value for value in support.values()):
-            return None
-        for row, value in support.items():
-            rows.append(row)
-            cols.append(index)
-            data.append(float(value))
-    return sp.csr_matrix((data, (rows, cols)), shape=(matrix.shape[1], len(dependencies)))
