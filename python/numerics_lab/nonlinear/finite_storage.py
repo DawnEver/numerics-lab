@@ -400,7 +400,7 @@ def finite_storage_actual_rate_initial_pair(
                         [jacobian @ directions, mass],
                         [
                             sp.csr_matrix((storage.algebraic_rows.shape[0], directions.shape[1])),
-                            storage.algebraic_rows @ tangent,
+                            certified_sparse_product(storage.algebraic_rows, tangent),
                         ],
                     ],
                     format='csr',
@@ -418,7 +418,10 @@ def finite_storage_actual_rate_initial_pair(
                         [
                             [jacobian, mass],
                             [stored, sp.csr_matrix(stored.shape)],
-                            [sp.csr_matrix(storage.algebraic_rows.shape), storage.algebraic_rows @ tangent],
+                            [
+                                sp.csr_matrix(storage.algebraic_rows.shape),
+                                certified_sparse_product(storage.algebraic_rows, tangent),
+                            ],
                         ],
                         format='csr',
                     )
@@ -721,9 +724,16 @@ def _actual_finite_storage_state(
         if sparse_state_indices is not None:
             boundary = np.flatnonzero(~np.isin(free, sparse_state_indices))
             if 0 < len(boundary) <= 512:
-                independent, _ = _independent_exact_columns(
-                    matrix[:, boundary], np.arange(len(boundary)), dependent_start=0
-                )
+                # The CERTIFIED hidden rows decide which boundary column the state owns: a left-null
+                # row against a solid body's voltage column cancels to rounding, never to authority
+                # (ipm_uv_cummins voltage_driven at its magnetostatic REST: four of six at 4e-15..2e-14).
+                hidden = certified_sparse_product(storage.algebraic_rows, jacobian)
+                if columns is not None and len(columns):
+                    certified = certified_sparse_product(hidden, mapping[:, boundary])
+                else:
+                    certified = sp.vstack((hidden, mass[storage.stored_rows]), format='csr')[:, boundary]
+                certified = sp.csc_matrix(certified)
+                independent, _ = _independent_exact_columns(certified, np.arange(len(boundary)), dependent_start=0)
                 if len(independent) != len(boundary):
                     msg = 'original boundary state equations require actual differentiated rate authority'
                     charge_scale = abs(charge) + abs(target) + abs(mass) @ abs(state)
@@ -731,7 +741,7 @@ def _actual_finite_storage_state(
                     admitted = np.all(abs(charge - target) <= tolerance * charge_scale) and np.all(
                         abs(projected) <= tolerance * projected_scale
                     )
-                    directions = _exact_boundary_directions(matrix[:, boundary]) if admitted else None
+                    directions = _exact_boundary_directions(certified) if admitted else None
                     if directions is not None:
                         directions = mapping[:, boundary] @ directions
                     raise StorageRateAuthorityRequired(msg, state=state, directions=directions)
