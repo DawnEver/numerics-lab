@@ -29,6 +29,8 @@ from motronics.gauss.nonlinear._seam import (
     ResidualStoppingStrategy,
     has_secant_system,
     increment_ratio,
+    run_solve_budget_s,
+    set_run_solve_budget_s,
     unwrap_system,
     with_time_budget,
 )
@@ -72,6 +74,8 @@ __all__ = [
     'PicardStrategy',
     'get_strategy',
     'increment_ratio',
+    'run_solve_budget_s',
+    'set_run_solve_budget_s',
     'strategy_requires',
     'strategy_runs_on',
     'strategy_stops_on_residual',

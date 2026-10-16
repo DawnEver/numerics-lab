@@ -749,6 +749,10 @@ def integrate_transient(
     if restart is not None and step_origin is not None and restart.step_origin != step_origin:
         msg = 'checkpoint step_origin does not match the explicit schedule'
         raise ValueError(msg)
+    if restart is not None and restart.newton_tolerance is not None:
+        # THE STRAIGHT MARCH'S BAR: the record's, never the one the caller recomputed at the resume instant
+        # (`TransientCheckpoint.newton_tolerance` says why).
+        tol = restart.newton_tolerance
     # THE STEP PLAN: exactly one of nominal / lattice (table, parent lattice or EEC clock) / curvature.
     plan = (
         'curvature'
@@ -991,6 +995,7 @@ def integrate_transient(
         # Called for steps that will land AND for bisection probes a rollback discards, so a failure
         # is recorded PROVISIONALLY as a probe; `_commit` promotes it when the point actually lands.
         solution.worst_step_residual = max(solution.worst_step_residual, residual)
+        solution.newton_iterations += int(out.iterations)
         if on_floor:
             # The SOLVE diagnostic: like `worst_step_residual` it includes discarded probes.
             solution.floor_converged_times.append(t_new)
@@ -1054,6 +1059,7 @@ def integrate_transient(
             step_control_state=None
             if step_control is None
             else StepControlCheckpointState.of(lte_history, h_ctrl, step_control),
+            newton_tolerance=float(tol),
         )
 
     def emit_checkpoint(target: float | None, event_count: int) -> None:
