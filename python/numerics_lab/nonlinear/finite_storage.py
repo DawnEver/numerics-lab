@@ -12,7 +12,8 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import splu
 
 from motronics.gauss.linear.algebraic_bulk_initial import algebraic_bulk_initial_pair
-from motronics.gauss.linear.arithmetic import affine_residual_bound
+from motronics.gauss.linear.arithmetic import affine_residual_bound, certified_sparse_product
+from motronics.gauss.linear.index_two import index_two_frozen_rate
 from motronics.gauss.linear.initial_rate import _independent_exact_columns, sparse_initial_rate
 from motronics.gauss.linear.initial_sparse import (
     SparseInitialPair,
@@ -512,12 +513,26 @@ def finite_storage_actual_rate_initial_pair(
             )
             state_allowance[~algebraic_state] = 0.0
             state_allowance += construction_allowance(rate, mass, residual, evaluation)
-            rate, _unique = sparse_initial_rate(
-                sp.vstack((mass, storage.algebraic_rows @ tangent), format='csr'),
-                np.concatenate((mass @ rate - residual, storage.algebraic_rows @ tangent @ rate - derivative)),
+            # The hidden rows are the CERTIFIED product: a left-null row against a column in the
+            # range of the mass cancels to rounding residue, and a pivot on that residue absorbs a
+            # junk rate (ipm_uv at its magnetostatic rest: 1.2e21 on the solid bodies' voltages).
+            # A solid body's voltage is index two -- no undifferentiated row fixes it, so a frozen
+            # state carried from the seed contradicts the hidden constraint and is re-solved with
+            # the rates, exactly as the joint path's frozen solve does.
+            hidden = certified_sparse_product(storage.algebraic_rows, tangent)
+            columns, state_step, rate, _unique = index_two_frozen_rate(
+                storage.algebraic_rows,
+                hidden,
+                mass,
+                jacobian,
+                hidden @ rate - derivative,
+                mass @ rate - residual,
                 tolerance=tolerance,
-                residual_allowance=np.concatenate((state_allowance, np.zeros(storage.algebraic_rows.shape[0]))),
+                allowance=state_allowance,
             )
+            if len(columns):
+                state = state.copy()
+                state[columns] += state_step
             final_mass = sp.csr_matrix(mass_at(state, rate))
             final_jacobian = sp.csr_matrix(jacobian_at(state, rate))
             final_partial = np.asarray(partial_time_at(state, rate))
@@ -556,7 +571,10 @@ def finite_storage_actual_rate_initial_pair(
                     tolerance=tolerance,
                 )
                 _, unique = sparse_initial_rate(
-                    sp.vstack((final_mass, final_storage.algebraic_rows @ final_tangent), format='csr'),
+                    sp.vstack(
+                        (final_mass, certified_sparse_product(final_storage.algebraic_rows, final_tangent)),
+                        format='csr',
+                    ),
                     np.zeros(len(state) + final_storage.algebraic_rows.shape[0]),
                     tolerance=tolerance,
                 )
