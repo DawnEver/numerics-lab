@@ -262,6 +262,10 @@ class TransientCheckpoint:
     event_state: EventCheckpointState | None = None
     schedule_state: ScheduleCheckpointState | None = None
     step_control_state: StepControlCheckpointState | None = None
+    #: The per-step Newton bar the producing march stopped on. A resume marches on it: a caller can only
+    #: recompute its bar at the resume instant and through the restored material history, where a cosine drive's
+    #: load or a hysteretic law's ``r(0)`` is another number -- and another bar is another trajectory.
+    newton_tolerance: float | None = None
 
     def __post_init__(self) -> None:
         if self.problem_context is not None:
@@ -331,6 +335,11 @@ class TransientCheckpoint:
         if self.integrator in ('newmark', 'generalized_alpha') and (self.velocity is None or self.acceleration is None):
             msg = 'checkpoint second-order integrator requires derivative history'
             raise ValueError(msg)
+        if self.newton_tolerance is not None and (
+            not math.isfinite(_number(self.newton_tolerance)) or self.newton_tolerance <= 0.0
+        ):
+            msg = 'checkpoint newton_tolerance must be a finite positive bar'
+            raise ValueError(msg)
         if self.step_origin is not None:
             _number(self.step_origin)
             if self.step_origin > self.time:
@@ -396,6 +405,8 @@ class TransientCheckpoint:
             mapping['schedule_state'] = self.schedule_state.to_mapping()
         if self.step_control_state is not None:
             mapping['step_control_state'] = self.step_control_state.to_mapping()
+        if self.newton_tolerance is not None:
+            mapping['newton_tolerance'] = self.newton_tolerance
         return mapping
 
     @classmethod
@@ -418,7 +429,7 @@ class TransientCheckpoint:
             or not expected <= set(data)
             or set(data)
             - expected
-            - {'eec_state', 'step_origin', 'event_state', 'schedule_state', 'step_control_state'}
+            - {'eec_state', 'step_origin', 'event_state', 'schedule_state', 'step_control_state', 'newton_tolerance'}
             or type(data['schema_version']) is not int
             or data['schema_version'] != 3
         ):
@@ -437,6 +448,7 @@ class TransientCheckpoint:
             problem_context=data['problem_context'],
             eec_state=None if 'eec_state' not in data else EECCheckpointState.from_mapping(data['eec_state']),
             step_origin=None if 'step_origin' not in data else _number(data['step_origin']),
+            newton_tolerance=None if 'newton_tolerance' not in data else _number(data['newton_tolerance']),
             event_state=None if 'event_state' not in data else EventCheckpointState.from_mapping(data['event_state']),
             schedule_state=(
                 None if 'schedule_state' not in data else ScheduleCheckpointState.from_mapping(data['schedule_state'])
@@ -608,6 +620,7 @@ def _checkpoint_of(
     step_origin=None,
     event_state=None,
     step_control_state=None,
+    newton_tolerance=None,
 ):
     if state.stage != 0:
         msg = 'portable checkpoint requires an accepted macrostep, not an intermediate stage'
@@ -627,4 +640,5 @@ def _checkpoint_of(
         step_origin=step_origin,
         event_state=event_state,
         step_control_state=step_control_state,
+        newton_tolerance=newton_tolerance,
     )

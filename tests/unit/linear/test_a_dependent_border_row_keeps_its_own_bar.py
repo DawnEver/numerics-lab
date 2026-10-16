@@ -189,3 +189,27 @@ def test_a_weak_retained_row_takes_its_residual_from_the_eliminated_rows_by_thei
     assert adjoint @ shift == pytest.approx(5e-9, rel=1e-12)
     assert shift[2] == 0.0
     assert shift[1] / shift[0] == pytest.approx((9 * 0.25) / (1 * 0.5), rel=1e-12), 'weighted by bar squared'
+
+
+def test_the_exact_row_null_space_is_never_formed_as_a_square_basis():
+    """Memory is O(rows x live), never O(live^2): a wide border with an exact row stays small.
+
+    The transformer march (2026-10-14, Ada OOM at 62.6 GB) reached this with a live set spanning the
+    field: ``svd(full_matrices=True)`` and ``np.eye(live)`` each formed a live x live dense square.
+    PLANTED: 3 rows x 6000 live columns (a square would be 288 MB); the bound is 64x the input.
+    """
+    import tracemalloc  # noqa: PLC0415
+
+    rng = np.random.default_rng(0)
+    schur = rng.standard_normal((3, 6000))
+    forcing = rng.standard_normal(3)
+    bars = np.array([0.0, 1.0, 1.0])  # row 0 exact, rows 1-2 soft
+    tracemalloc.start()
+    try:
+        moved = _weighted_by_row_bars(schur, forcing, np.zeros(schur.shape[1]), bars)
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 64 * schur.nbytes, f'peak {peak / 2**20:.0f} MiB: a live x live square was formed'
+    assert schur[0] @ moved == pytest.approx(forcing[0], rel=1e-12), 'the exact row holds'
+    assert np.allclose(schur[1:] @ moved, forcing[1:], rtol=1e-10), 'an underdetermined soft set is met'
