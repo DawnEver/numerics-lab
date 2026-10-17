@@ -41,7 +41,7 @@ pub use newton::{
     ContinuationStrategy, HeldFactorNewtonStrategy, ModifiedNewtonStrategy, NewtonKrylovStrategy,
     NewtonLineSearchStrategy, NewtonStrategy,
 };
-pub use picard::{DampedPicardStrategy, NuRelaxationDampedPicardStrategy, PicardStrategy};
+pub use picard::{DampedPicardStrategy, CoefficientDampedPicardStrategy, PicardStrategy};
 pub use quasi::{AndersonStrategy, BfgsStrategy, BroydenStrategy, LbfgsStrategy};
 
 // -- The damped-Picard parameters, moved verbatim from `mec/_sparse.py` -----------------------
@@ -131,7 +131,7 @@ pub const KNOWN_STRATEGIES: [&str; 13] = [
     "newton-held-factor",
     "newton-krylov",
     "newton-linesearch",
-    "nu-damped",
+    "coefficient-damped",
     "picard",
     "picard-damped",
     "quasi-newton",
@@ -224,9 +224,9 @@ pub struct AssembledState<M, P> {
     pub payload: Option<P>,
 }
 
-/// The pre-boundary-fold arrays `nu-damped` mixes.
+/// The pre-boundary-fold arrays `coefficient-damped` mixes.
 ///
-/// See [`NuRelaxationDampedPicardStrategy`] for why the mixing has to happen on THESE arrays and
+/// See [`CoefficientDampedPicardStrategy`] for why the mixing has to happen on THESE arrays and
 /// not on an already-folded [`AssembledState`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct RawState {
@@ -419,10 +419,10 @@ pub trait NonlinearSystem: Sized {
         Err(NonlinearError::SourceNotScalable)
     }
 
-    /// Whether this system exposes the raw pre-fold pair `nu-damped` needs.
+    /// Whether this system exposes the raw pre-fold pair `coefficient-damped` needs.
     ///
     /// Asked as DATA rather than discovered as a failure: the Python's iteration-method matrix
-    /// once generated a `nu-damped` cell for the MEC system, which cannot supply either half, and
+    /// once generated a `coefficient-damped` cell for the MEC system, which cannot supply either half, and
     /// read the designed refusal as a red (heavy shard 1, 2026-08-29).
     fn supports_raw_mixing(&self) -> bool {
         false
@@ -521,7 +521,7 @@ pub trait IterationStrategy<S: NonlinearSystem> {
 
 /// The system capabilities strategy `name` needs, or `&[]`.
 ///
-/// Every strategy runs on the generic `assemble`/`solve_linear` seam except `nu-damped`, which
+/// Every strategy runs on the generic `assemble`/`solve_linear` seam except `coefficient-damped`, which
 /// mixes reluctivity BEFORE the boundary fold and so needs the raw pre-fold pair. That is a
 /// capability boundary, not a convergence property: a system without the pair cannot run the
 /// strategy at all, and asking beforehand is the difference between a matrix that declares a cell
@@ -530,7 +530,7 @@ pub trait IterationStrategy<S: NonlinearSystem> {
 /// # Errors
 /// [`NonlinearError::UnknownStrategy`].
 pub fn strategy_requires(name: &str) -> Result<&'static [&'static str], NonlinearError> {
-    if name == "nu-damped" {
+    if name == "coefficient-damped" {
         return Ok(&["raw_state", "fold_raw"]);
     }
     if KNOWN_STRATEGIES.contains(&name) {
@@ -619,7 +619,7 @@ pub fn get_strategy<S: NonlinearSystem + 'static>(
     let name = name.unwrap_or("newton");
     let s: Box<dyn IterationStrategy<S>> = match name {
         "picard-damped" => Box::new(DampedPicardStrategy),
-        "nu-damped" => Box::new(NuRelaxationDampedPicardStrategy),
+        "coefficient-damped" => Box::new(CoefficientDampedPicardStrategy),
         "picard" => Box::new(PicardStrategy),
         "newton" => Box::new(NewtonStrategy::default()),
         "anderson" => Box::new(AndersonStrategy::default()),

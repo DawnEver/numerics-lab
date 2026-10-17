@@ -210,7 +210,7 @@ impl NonlinearSystem for NuMix {
         vec![0.0]
     }
     fn assemble(&mut self, _x: &[f64]) -> Result<StateOf<Self>, NonlinearError> {
-        unreachable!("nu-damped drives raw_state/fold_raw, never assemble")
+        unreachable!("coefficient-damped drives raw_state/fold_raw, never assemble")
     }
     fn solve_linear(&mut self, _state: &StateOf<Self>) -> Result<Vec<f64>, NonlinearError> {
         Ok(vec![1.0])
@@ -332,9 +332,9 @@ fn every_strategy_walks_the_python_trajectory_on_every_fixture() {
 }
 
 #[test]
-fn nu_damped_mixes_the_raw_arrays_the_way_the_python_does() {
+fn coefficient_damped_mixes_the_raw_arrays_the_way_the_python_does() {
     let g = golden();
-    let nu = &g["nu_damped"];
+    let nu = &g["coefficient_damped"];
     let mut sys = NuMix {
         k_seq: floats(&nu["k_seq"]),
         calls: 0,
@@ -346,24 +346,24 @@ fn nu_damped_mixes_the_raw_arrays_the_way_the_python_does() {
         rtol_energy_pct: g["rtol_energy_pct"].as_f64().expect("rtol"),
         seed: None,
     };
-    let strategy: Box<dyn IterationStrategy<NuMix>> = get_strategy(Some("nu-damped")).unwrap();
-    let res = strategy.solve(&mut sys, &opts).expect("nu-damped runs");
+    let strategy: Box<dyn IterationStrategy<NuMix>> = get_strategy(Some("coefficient-damped")).unwrap();
+    let res = strategy.solve(&mut sys, &opts).expect("coefficient-damped runs");
 
     let want = nu["folded"].as_array().expect("folded is an array");
-    assert_eq!(sys.folded.len(), want.len(), "nu_damped: fold count");
+    assert_eq!(sys.folded.len(), want.len(), "coefficient_damped: fold count");
     for (k, ((vals, source), w)) in sys.folded.iter().zip(want).enumerate() {
-        close_opt(*vals, &w[0], &format!("nu_damped.folded[{k}].vals"));
-        close_opt(*source, &w[1], &format!("nu_damped.folded[{k}].source"));
+        close_opt(*vals, &w[0], &format!("coefficient_damped.folded[{k}].vals"));
+        close_opt(*source, &w[1], &format!("coefficient_damped.folded[{k}].source"));
     }
     let want_trace = nu["trace"].as_array().expect("trace is an array");
-    assert_eq!(sys.trace.len(), want_trace.len(), "nu_damped: trace length");
+    assert_eq!(sys.trace.len(), want_trace.len(), "coefficient_damped: trace length");
     for (k, ((alpha, err, inc), w)) in sys.trace.iter().zip(want_trace).enumerate() {
-        close_opt(*alpha, &w["alpha"], &format!("nu_damped.trace[{k}].alpha"));
-        close_opt(*err, &w["err"], &format!("nu_damped.trace[{k}].err"));
+        close_opt(*alpha, &w["alpha"], &format!("coefficient_damped.trace[{k}].alpha"));
+        close_opt(*err, &w["err"], &format!("coefficient_damped.trace[{k}].err"));
         close_opt(
             *inc,
             &w["increment"],
-            &format!("nu_damped.trace[{k}].increment"),
+            &format!("coefficient_damped.trace[{k}].increment"),
         );
     }
     assert_eq!(
@@ -382,7 +382,7 @@ fn the_golden_covers_every_strategy_the_port_registers() {
         .as_object()
         .expect("the contraction fixture drives the generic strategies");
     for name in KNOWN_STRATEGIES {
-        let covered = generic.contains_key(name) || name == "nu-damped";
+        let covered = generic.contains_key(name) || name == "coefficient-damped";
         assert!(
             covered,
             "the port registers {name} but the golden does not cover it -- regenerate on the \
@@ -390,8 +390,8 @@ fn the_golden_covers_every_strategy_the_port_registers() {
         );
     }
     assert!(
-        g["nu_damped"].is_object(),
-        "nu-damped needs the raw pre-fold pair, so it has its own fixture -- and it is missing"
+        g["coefficient_damped"].is_object(),
+        "coefficient-damped needs the raw pre-fold pair, so it has its own fixture -- and it is missing"
     );
 }
 

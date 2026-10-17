@@ -157,7 +157,7 @@ fn plateau_system(x0: f64) -> Synth {
 
 /// Every registered strategy except five, EXCLUDED BY NAME with their reasons rather than by a
 /// silent filter: `continuation` wraps another strategy and is driven through `scale_source`,
-/// `nu-damped` needs the raw pre-fold pair and refuses a system without it (it runs the same loop
+/// `coefficient-damped` needs the raw pre-fold pair and refuses a system without it (it runs the same loop
 /// and the same `has_converged` as `picard-damped`), and `newton` / `newton-linesearch` /
 /// `newton-held-factor` REFUSE a system with no tangent (2026-09-25) -- they are held to the
 /// plateau on a tangent-bearing fixture below.
@@ -323,7 +323,7 @@ fn the_fast_break_still_fires_first() {
     }
 }
 
-// -- nu-damped -------------------------------------------------------------------------------
+// -- coefficient-damped -------------------------------------------------------------------------------
 
 /// Minimal stand-in for the FEA `raw_state`/`fold_raw` contract.
 ///
@@ -347,7 +347,7 @@ impl NonlinearSystem for NuMix {
     }
 
     fn assemble(&mut self, _x: &[f64]) -> Result<StateOf<Self>, NonlinearError> {
-        unreachable!("nu-damped drives raw_state/fold_raw, never assemble")
+        unreachable!("coefficient-damped drives raw_state/fold_raw, never assemble")
     }
 
     fn solve_linear(&mut self, _state: &StateOf<Self>) -> Result<Vec<f64>, NonlinearError> {
@@ -394,7 +394,7 @@ impl NonlinearSystem for NuMix {
 }
 
 #[test]
-fn nu_damped_mixes_the_raw_arrays_exactly_like_the_deleted_per_element_mix() {
+fn coefficient_damped_mixes_the_raw_arrays_exactly_like_the_deleted_per_element_mix() {
     // `k_seq = [1, 3, 2, 5]` (energy k^2) gives deltas +8 (sign +1, no ratchet yet -- there is no
     // PRIOR sign to flip against), then -5 (sign -1, FLIPS vs +1 -> alpha ratchets to 0.6 for the
     // NEXT mix). So the 4th call's mixed reluctivity is 0.4*2 + 0.6*5 = 3.8, computed here
@@ -404,7 +404,7 @@ fn nu_damped_mixes_the_raw_arrays_exactly_like_the_deleted_per_element_mix() {
         calls: 0,
         folded: Vec::new(),
     };
-    NuRelaxationDampedPicardStrategy
+    CoefficientDampedPicardStrategy
         .solve(&mut sys, &opts(4))
         .unwrap();
     assert_eq!(sys.folded.len(), 4);
@@ -417,11 +417,11 @@ fn nu_damped_mixes_the_raw_arrays_exactly_like_the_deleted_per_element_mix() {
 }
 
 #[test]
-fn nu_damped_refuses_a_system_without_the_raw_pair() {
+fn coefficient_damped_refuses_a_system_without_the_raw_pair() {
     // The refusal is a declared capability boundary, not a discovered TypeError -- and it names
     // what is missing rather than naming a wrapper.
     let mut sys = linear_system(vec![1.0]);
-    let err = NuRelaxationDampedPicardStrategy
+    let err = CoefficientDampedPicardStrategy
         .solve(&mut sys, &opts(5))
         .unwrap_err();
     assert!(

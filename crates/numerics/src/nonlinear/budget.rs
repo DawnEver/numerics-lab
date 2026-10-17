@@ -61,7 +61,7 @@ impl<S, C: Fn() -> f64> TimeBudgetedSystem<S, C> {
     ///
     /// Present because a caller reaching through a private field is a caller that breaks when the
     /// private moves, and every diagnostic that wants to say WHICH system lacks a capability needs
-    /// this. Measured 2026-08-29: a `nu-damped` refusal read "got `_TimeBudgetedSystem`" and sent
+    /// this. Measured 2026-08-29: a `coefficient-damped` refusal read "got `_TimeBudgetedSystem`" and sent
     /// the reader to the budget wrapper, which is not the reason the combination cannot run.
     pub fn unwrapped(&self) -> &S {
         &self.inner

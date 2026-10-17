@@ -1,6 +1,6 @@
 //! The Picard family: ONE successive-substitution loop on two orthogonal axes.
 //!
-//! * WHAT is relaxed — the iterate (`x += alpha (solve - x)`) or the reluctivity (mix the raw
+//! * WHAT is relaxed — the iterate (`x += alpha (solve - x)`) or the coefficients (mix the raw
 //!   secant arrays before the boundary fold, then `x = solve`).
 //! * HOW alpha moves — constant 1, or the damped schedule of [`AlphaSchedule`].
 //!
@@ -18,8 +18,8 @@ use super::{
 enum Relax {
     /// The iterate: `x += alpha (solve - x)`.
     X,
-    /// The reluctivity, through the raw pre-fold arrays; then `x = solve`.
-    Nu,
+    /// The assembly coefficients, through the raw pre-fold arrays; then `x = solve`.
+    Coefficients,
 }
 
 /// The under-relaxation factor: constant 1, or damped.
@@ -104,7 +104,7 @@ impl AlphaSchedule {
 
 /// Successive substitution, parametrised by relax target and alpha schedule.
 ///
-/// `Relax::Nu` rests on one identity: every raw stiffness and remanence-source entry is
+/// `Relax::Coefficients` rests on one identity: every raw stiffness and remanence-source entry is
 /// `nu_e * <geometric factor>` and assembly is linear, so mixing the per-element reluctivity
 /// `nu_k = (1-a) nu_{k-1} + a nu(B_k)` equals mixing the assembled raw arrays
 /// `S_k = (1-a) S_{k-1} + a S(nu(B_k))` (likewise the source). That holds ONLY for a GLOBAL
@@ -121,7 +121,7 @@ fn picard_loop<S: NonlinearSystem>(
         strategy: name,
         need: "raw_state/fold_raw".to_owned(),
     };
-    if relax == Relax::Nu && !system.supports_raw_mixing() {
+    if relax == Relax::Coefficients && !system.supports_raw_mixing() {
         return Err(refuse());
     }
     let rtol = opts.rtol_energy_pct;
@@ -129,7 +129,7 @@ fn picard_loop<S: NonlinearSystem>(
     let mut trend = IncrementTrend::new();
     let mut watch = StagnationWatch::new(rtol);
     let mut x = opts.start(system);
-    // Last iteration's MIXED raw arrays (`Relax::Nu` only); `None` before the first pass.
+    // Last iteration's MIXED raw arrays (`Relax::Coefficients` only); `None` before the first pass.
     let mut prev_mixed: Option<(Vec<f64>, Vec<f64>)> = None;
     let mut state: Option<StateOf<S>> = None;
     let mut last_energy: Option<f64> = None;
@@ -139,7 +139,7 @@ fn picard_loop<S: NonlinearSystem>(
         ran = i + 1;
         let st = match relax {
             Relax::X => system.assemble(&x)?,
-            Relax::Nu => {
+            Relax::Coefficients => {
                 let raw = system.raw_state(&x)?.ok_or_else(refuse)?;
                 let (vals, source) = match &prev_mixed {
                     None => (raw.vals, raw.source),
@@ -218,11 +218,11 @@ impl<S: NonlinearSystem> IterationStrategy<S> for DampedPicardStrategy {
 
 /// Relax the reluctivity on the damped schedule — the FEA default.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct NuRelaxationDampedPicardStrategy;
+pub struct CoefficientDampedPicardStrategy;
 
-impl<S: NonlinearSystem> IterationStrategy<S> for NuRelaxationDampedPicardStrategy {
+impl<S: NonlinearSystem> IterationStrategy<S> for CoefficientDampedPicardStrategy {
     fn name(&self) -> &'static str {
-        "nu-damped"
+        "coefficient-damped"
     }
 
     /// What this strategy needs of a system, as data, so a caller can ask before solving.
@@ -231,7 +231,7 @@ impl<S: NonlinearSystem> IterationStrategy<S> for NuRelaxationDampedPicardStrate
     }
 
     fn solve(&self, system: &mut S, opts: &SolveOptions) -> Result<ResultOf<S>, NonlinearError> {
-        picard_loop(system, opts, "nu-damped", Relax::Nu, true)
+        picard_loop(system, opts, "coefficient-damped", Relax::Coefficients, true)
     }
 }
 

@@ -266,10 +266,10 @@ fn the_registry_resolves_every_declared_name_and_refuses_the_rest() {
         Err(NonlinearError::UnknownStrategy { .. })
     ));
     // The requirement is DATA, askable without running anything.
-    assert_eq!(strategy_requires("nu-damped").unwrap().len(), 2);
+    assert_eq!(strategy_requires("coefficient-damped").unwrap().len(), 2);
     assert!(strategy_requires("picard").unwrap().is_empty());
     let sys = linear_system(vec![1.0]);
-    assert!(!strategy_runs_on("nu-damped", &sys).unwrap());
+    assert!(!strategy_runs_on("coefficient-damped", &sys).unwrap());
     assert!(strategy_runs_on("picard", &sys).unwrap());
 }
 
