@@ -16,10 +16,9 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.contracts.spec.study_spec import TransientStudy
 from motronics.core.materials.library import library
 from motronics.core.materials.registry import compile_selection
-from motronics.gauss.formulation import DerivativeWeights
+from motronics.gauss.formulation import DerivativeWeights, TimeWindow
 from motronics.gauss.nonlinear import (
     DEFAULT_ITERATION_STRATEGY,
     ITERATION_REGISTRY,
@@ -184,7 +183,7 @@ class _SaturatingDiffusion:
 
 def test_the_held_factor_march_lands_the_full_newton_trajectory() -> None:
     problem = _SaturatingDiffusion()
-    study = TransientStudy(t0=0.0, t1=0.2, dt=0.01)
+    study = TimeWindow(t0=0.0, t1=0.2, dt=0.01)
     u0 = np.zeros(30)
     full = integrate_transient(problem, study, u0, max_newton=30, tol=1e-12, tol_rel=1e-10)
     held = integrate_transient(problem, study, u0, max_newton=30, tol=1e-12, tol_rel=1e-10, refactor_every=4)

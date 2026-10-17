@@ -5,8 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import DerivativeWeights, IntegratorKind
+from motronics.gauss.formulation import DerivativeWeights, IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import integrate_transient
 from motronics.gauss.time_integrators.initial import InconsistentInitialCondition, consistent_initial_condition
 
@@ -70,7 +69,7 @@ def test_an_index_two_start_raises_with_its_residual() -> None:
 def test_the_consistent_rate_seeds_the_trapezoid_and_removes_its_bootstrap_error() -> None:
     problem = _RcWithResistorCurrent()
     start = consistent_initial_condition(problem, np.array([1.0, 0.0]))
-    study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.TRAPEZOID)
+    study = TimeWindow(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.TRAPEZOID)
     exact = np.exp(-1.0 / (_R * _C))
     seeded = integrate_transient(problem, study, start.u, v0=start.u_dot)
     bootstrapped = integrate_transient(problem, study, start.u)

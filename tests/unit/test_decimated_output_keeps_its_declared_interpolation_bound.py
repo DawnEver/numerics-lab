@@ -9,8 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import TransientSolution, integrate_transient
 from motronics.gauss.time_integrators.decimate import decimate, interpolation_error
 
@@ -27,7 +26,7 @@ class _Driven:
 
 @pytest.fixture(scope='module')
 def marched():
-    study = TransientStudy(t0=0.0, t1=2.0, dt=1e-3, integrator=IntegratorKind.TRAPEZOID)
+    study = TimeWindow(t0=0.0, t1=2.0, dt=1e-3, integrator=IntegratorKind.TRAPEZOID)
     return integrate_transient(_Driven(), study, np.array([0.0, 1.0]))
 
 
@@ -60,7 +59,7 @@ def test_an_event_instant_is_always_kept() -> None:
 
     sol = integrate_transient(
         _Ramp(),
-        TransientStudy(t0=0.0, t1=1.0, dt=0.01),
+        TimeWindow(t0=0.0, t1=1.0, dt=0.01),
         np.zeros(1),
         event_fns=(lambda u, _t: float(u[0]) - 0.333,),
     )

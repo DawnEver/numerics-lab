@@ -11,8 +11,7 @@ import json
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import integrate_transient
 from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint
 
@@ -30,7 +29,7 @@ class _Cubic:
 
 
 def _march(t0, tol, **kw):
-    study = TransientStudy(t0, 1.0, 0.1, IntegratorKind.BDF2)
+    study = TimeWindow(t0, 1.0, 0.1, IntegratorKind.BDF2)
     return integrate_transient(_Cubic(), study, np.zeros(1), tol=tol, max_newton=30, checkpoint_key='cubic', **kw)
 
 
@@ -38,7 +37,7 @@ def test_the_record_carries_the_bar_and_a_resume_marches_on_it():
     whole = _march(0.0, 1e-4)
     first = integrate_transient(
         _Cubic(),
-        TransientStudy(0.0, 0.5, 0.1, IntegratorKind.BDF2),
+        TimeWindow(0.0, 0.5, 0.1, IntegratorKind.BDF2),
         np.zeros(1),
         tol=1e-4,
         max_newton=30,

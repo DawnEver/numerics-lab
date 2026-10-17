@@ -11,8 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import integrate_transient
 
 _C = 2.0
@@ -27,7 +26,7 @@ class _TwoScales:
         return np.diag([1e6 * a0 + a1, 3.0 * (u[1] - _C) ** 2 * a0])
 
 
-_STUDY = TransientStudy(t0=0.0, t1=2e-6, dt=1e-6, integrator=IntegratorKind.BDF1)
+_STUDY = TimeWindow(t0=0.0, t1=2e-6, dt=1e-6, integrator=IntegratorKind.BDF1)
 
 
 def _march(**bars):
@@ -66,7 +65,7 @@ class _SlowLinkage:
 
 
 def test_a_rate_row_is_judged_at_the_scale_its_rate_is_built_from() -> None:
-    study = TransientStudy(t0=0.0, t1=3e-7, dt=1e-7, integrator=IntegratorKind.BDF1)
+    study = TimeWindow(t0=0.0, t1=3e-7, dt=1e-7, integrator=IntegratorKind.BDF1)
     solution = integrate_transient(_SlowLinkage(), study, np.array([1.0]), max_newton=20, row_acceptance=True)
     assert solution.converged
     assert solution.states[-1][0] == pytest.approx(1.0 + 3e-10, abs=1e-14)

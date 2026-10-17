@@ -7,8 +7,7 @@ import numpy as np
 import pytest
 from tests.unit.gauss.test_antiperiodic_eec import Affine
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import integrate_transient
 from motronics.gauss.time_integrators.checkpoint import EECCheckpointState, TransientCheckpoint
 
@@ -16,7 +15,7 @@ from motronics.gauss.time_integrators.checkpoint import EECCheckpointState, Tran
 def _run(t0, t1, *, integrator=IntegratorKind.BDF2, sign=1, restart=None, callback=None, period=None):
     return integrate_transient(
         Affine(),
-        TransientStudy(t0, t1, 0.05, integrator),
+        TimeWindow(t0, t1, 0.05, integrator),
         np.array([1.0]),
         eec_period=(1.0 if sign == 1 else 0.5) if period is None else period,
         eec_sign=sign,
@@ -62,7 +61,7 @@ def test_steady_stop_streams_canonical_eec_checkpoint_and_resumes_future_states(
     records = []
     stopped = integrate_transient(
         Affine(),
-        TransientStudy(0.0, 2.1, 0.05, integrator),
+        TimeWindow(0.0, 2.1, 0.05, integrator),
         np.ones(1),
         eec_period=1.0,
         eec_sign=1,
@@ -127,7 +126,7 @@ def test_eec_restart_cannot_change_correction_controls_or_drop_algorithm_state()
         _run(saved.time, 1.1, restart=saved, sign=-1)
     with pytest.raises(ValueError, match='EEC|eec|cycle'):
         integrate_transient(
-            Affine(), TransientStudy(saved.time, 1.1, 0.05), np.ones(1), restart=saved, checkpoint_key='eec-native'
+            Affine(), TimeWindow(saved.time, 1.1, 0.05), np.ones(1), restart=saved, checkpoint_key='eec-native'
         )
     mapping = saved.to_mapping()
     del mapping['eec_state']

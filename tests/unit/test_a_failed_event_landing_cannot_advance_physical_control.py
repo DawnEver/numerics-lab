@@ -6,8 +6,7 @@ import numpy as np
 import pytest
 from tests.unit.gauss._helpers import _RampWithToggle
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import _step as _step_mod
 
 
@@ -31,7 +30,7 @@ def test_failed_landing_cannot_call_the_physical_handler(monkeypatch, adaptive):
     monkeypatch.setattr(events, '_locate_bracket', lambda *_args, **_kwargs: (0.5, 0.5))
     physical_samples = []
     problem = _RampWithToggle(0.5)
-    study = TransientStudy(t0=0.0, t1=1.0, dt=1.0, integrator=IntegratorKind.BDF1)
+    study = TimeWindow(t0=0.0, t1=1.0, dt=1.0, integrator=IntegratorKind.BDF1)
     with pytest.raises(RuntimeError, match='event landing.*did not converge'):
         events.integrate_transient(
             problem,

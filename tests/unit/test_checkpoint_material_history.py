@@ -5,8 +5,7 @@ import json
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import integrate_transient
 from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint, restore_history_checkpoint
 
@@ -41,7 +40,7 @@ def test_checkpoint_preserves_actual_previous_accepted_endpoint_bits():
     assert motion_edge - (motion_edge - source_edge) != source_edge
     solved = integrate_transient(
         RememberingProblem(),
-        TransientStudy(0.0, motion_edge, 0.001),
+        TimeWindow(0.0, motion_edge, 0.001),
         np.zeros(1),
         step_times=(0.0, source_edge, motion_edge),
         checkpoint_key='exact-source-clock',
@@ -53,13 +52,11 @@ def test_checkpoint_preserves_actual_previous_accepted_endpoint_bits():
 
 
 def test_committed_material_and_bdf_history_restart_together():
-    whole = integrate_transient(RememberingProblem(), TransientStudy(0.0, 1.0, 0.1), np.zeros(1))
-    first = integrate_transient(
-        RememberingProblem(), TransientStudy(0.0, 0.5, 0.1), np.zeros(1), checkpoint_key='memory'
-    )
+    whole = integrate_transient(RememberingProblem(), TimeWindow(0.0, 1.0, 0.1), np.zeros(1))
+    first = integrate_transient(RememberingProblem(), TimeWindow(0.0, 0.5, 0.1), np.zeros(1), checkpoint_key='memory')
     checkpoint = TransientCheckpoint.from_mapping(json.loads(json.dumps(first.checkpoint.to_mapping())))
     resumed = integrate_transient(
-        RememberingProblem(), TransientStudy(0.5, 1.0, 0.1), np.zeros(1), restart=checkpoint, checkpoint_key='memory'
+        RememberingProblem(), TimeWindow(0.5, 1.0, 0.1), np.zeros(1), restart=checkpoint, checkpoint_key='memory'
     )
     np.testing.assert_allclose(resumed.states, whole.states[5:], rtol=1e-13, atol=1e-14)
 
@@ -96,14 +93,14 @@ class Oscillator:
 def test_newmark_restart_keeps_velocity_and_acceleration():
     whole = integrate_transient(
         Oscillator(),
-        TransientStudy(0.0, 1.0, 0.01, IntegratorKind.NEWMARK),
+        TimeWindow(0.0, 1.0, 0.01, IntegratorKind.NEWMARK),
         np.ones(1),
         v0=np.zeros(1),
         a0=np.array([-4.0]),
     )
     first = integrate_transient(
         Oscillator(),
-        TransientStudy(0.0, 0.5, 0.01, IntegratorKind.NEWMARK),
+        TimeWindow(0.0, 0.5, 0.01, IntegratorKind.NEWMARK),
         np.ones(1),
         v0=np.zeros(1),
         a0=np.array([-4.0]),
@@ -111,7 +108,7 @@ def test_newmark_restart_keeps_velocity_and_acceleration():
     )
     resumed = integrate_transient(
         Oscillator(),
-        TransientStudy(0.5, 1.0, 0.01, IntegratorKind.NEWMARK),
+        TimeWindow(0.5, 1.0, 0.01, IntegratorKind.NEWMARK),
         np.zeros(1),
         restart=first.checkpoint,
         checkpoint_key='oscillator',

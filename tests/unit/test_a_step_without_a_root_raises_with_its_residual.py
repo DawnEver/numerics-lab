@@ -12,8 +12,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import StepNotConverged, integrate_transient
 
 
@@ -29,7 +28,7 @@ class _GateCoupledSource:
         return np.atleast_2d(weights.alpha0.real + weights.alpha1.real)
 
 
-_STUDY = TransientStudy(t0=0.0, t1=2.0, dt=0.1, integrator=IntegratorKind.BDF2)
+_STUDY = TimeWindow(t0=0.0, t1=2.0, dt=0.1, integrator=IntegratorKind.BDF2)
 
 
 def test_a_rootless_gate_coupled_step_raises_with_its_residual_and_the_state_reached() -> None:

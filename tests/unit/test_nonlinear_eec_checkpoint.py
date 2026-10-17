@@ -6,8 +6,7 @@ import numpy as np
 import pytest
 from tests.unit.gauss.test_nonlinear_eec_cycle_tangent import Cubic
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import integrate_transient
 from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint
 
@@ -15,7 +14,7 @@ from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint
 def _run(start, end, restart=None):
     return integrate_transient(
         Cubic(),
-        TransientStudy(start, end, 0.05, IntegratorKind.BDF1),
+        TimeWindow(start, end, 0.05, IntegratorKind.BDF1),
         np.array([0.7]),
         max_newton=30,
         eec_period=1.0,
@@ -70,7 +69,7 @@ def test_nonlinear_checkpoint_cannot_silently_switch_to_affine_eec():
     with pytest.raises(ValueError, match='nonlinear|model|mode'):
         integrate_transient(
             Cubic(),
-            TransientStudy(0.35, 2.1, 0.05, IntegratorKind.BDF1),
+            TimeWindow(0.35, 2.1, 0.05, IntegratorKind.BDF1),
             np.array([0.7]),
             eec_period=1.0,
             eec_affine_first_order=True,
@@ -101,20 +100,20 @@ def test_restart_keeps_a_failed_cycle_flag_and_does_not_correct_its_converged_en
         'on_nonconverged': 'label',
     }
     first = integrate_transient(
-        FailingStep(), TransientStudy(0.0, 7 * 0.05, 0.05, IntegratorKind.BDF1), np.array([0.7]), **options
+        FailingStep(), TimeWindow(0.0, 7 * 0.05, 0.05, IntegratorKind.BDF1), np.array([0.7]), **options
     )
     saved = TransientCheckpoint.from_mapping(json.loads(json.dumps(first.checkpoint.to_mapping(), allow_nan=False)))
     assert not saved.eec_state.cycle_converged
     resumed = integrate_transient(
         FailingStep(),
-        TransientStudy(7 * 0.05, 1.05, 0.05, IntegratorKind.BDF1),
+        TimeWindow(7 * 0.05, 1.05, 0.05, IntegratorKind.BDF1),
         np.array([0.7]),
         restart=saved,
         **options,
     )
     plain = integrate_transient(
         FailingStep(),
-        TransientStudy(0.0, 1.05, 0.05, IntegratorKind.BDF1),
+        TimeWindow(0.0, 1.05, 0.05, IntegratorKind.BDF1),
         np.array([0.7]),
         max_newton=30,
         on_nonconverged='label',

@@ -15,8 +15,7 @@ import numpy as np
 import pytest
 from tests.unit.gauss._helpers import _RampWithToggle
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import integrate_transient
 
 
@@ -36,7 +35,7 @@ def test_time_breakpoints_land_on_the_grid_and_do_not_change_a_breakpointless_ma
         def jacobian(self, u, u_dot, u_ddot, t, weights):
             return np.array([[weights.alpha1.real]])
 
-    study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
     problem = _Linear()
     solution = integrate_transient(problem, study, np.array([0.0]), time_breakpoints=(0.05, 0.27, 0.8))
     ts = np.asarray(solution.times)
@@ -62,7 +61,7 @@ def test_time_breakpoints_and_state_events_coexist() -> None:
     grid alignment, not the integral, is what the seam guarantees.)
     """
     problem = _RampWithToggle(level=0.5)
-    study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
     solution = integrate_transient(
         problem,
         study,
@@ -79,7 +78,7 @@ def test_time_breakpoints_and_state_events_coexist() -> None:
 
 
 def test_time_breakpoints_outside_the_study_window_are_refused() -> None:
-    study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
 
     class _Linear:
         def residual(self, u, u_dot, u_ddot, t):
@@ -101,7 +100,7 @@ def test_thousands_of_time_breakpoints_all_land_on_the_grid() -> None:
     """
     n_edges = 4000  # a 20 kHz carrier over 100 ms -- the SR-014 scale
     t1 = 0.1
-    study = TransientStudy(t0=0.0, t1=t1, dt=1.0e-5, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=t1, dt=1.0e-5, integrator=IntegratorKind.BDF2)
     bps = tuple(np.linspace(t1 / n_edges, t1, n_edges))  # every 2.5 cells, off-grid
 
     class _Linear:
@@ -137,7 +136,7 @@ def test_breakpoint_clipping_never_drifts_the_time_base() -> None:
         def jacobian(self, u, u_dot, u_ddot, t, weights):
             return np.array([[weights.alpha1.real]])
 
-    study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
     solution = integrate_transient(_Linear(), study, np.array([0.0]), time_breakpoints=(0.05, 0.27, 0.8))
     ts = np.asarray(solution.times)
     us = np.asarray([float(s[0]) for s in solution.states])
@@ -161,7 +160,7 @@ def test_a_final_cell_breakpoint_is_a_partial_step_not_a_full_dt() -> None:
         def jacobian(self, u, u_dot, u_ddot, t, weights):
             return np.array([[weights.alpha1.real]])
 
-    study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
     solution = integrate_transient(_Linear(), study, np.array([0.0]), time_breakpoints=(0.95,))
     ts = np.asarray(solution.times)
     us = np.asarray([float(s[0]) for s in solution.states])
@@ -181,7 +180,7 @@ def test_a_breakpoint_in_a_non_integral_final_interval_is_consumed(bp: float) ->
         def jacobian(self, u, u_dot, u_ddot, t, weights):
             return np.array([[weights.alpha1.real]])
 
-    study = TransientStudy(t0=0.0, t1=1.0, dt=0.3, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=1.0, dt=0.3, integrator=IntegratorKind.BDF2)
     solution = integrate_transient(_Linear(), study, np.array([0.0]), time_breakpoints=(bp,))
 
     assert solution.times[-1] == pytest.approx(study.t1)
@@ -198,7 +197,7 @@ def test_a_non_integral_window_is_bit_identical_to_the_plain_march() -> None:
         def jacobian(self, u, u_dot, u_ddot, t, weights):
             return np.array([[weights.alpha1.real]])
 
-    study = TransientStudy(t0=0.0, t1=1.0, dt=0.3, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=1.0, dt=0.3, integrator=IntegratorKind.BDF2)
     plain = integrate_transient(_Linear(), study, np.array([0.0]))
     eventful = integrate_transient(_Linear(), study, np.array([0.0]))
     assert np.array_equal(plain.times, eventful.times)
@@ -214,6 +213,6 @@ def test_event_location_tolerance_cannot_erase_a_short_observation_window() -> N
         def jacobian(self, u, u_dot, u_ddot, t, weights):
             return np.array([[weights.alpha1.real]])
 
-    study = TransientStudy(t0=0.0, t1=0.1, dt=1.0, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=0.1, dt=1.0, integrator=IntegratorKind.BDF2)
     solution = integrate_transient(_Linear(), study, np.array([0.0]), time_tol=0.2)
     assert solution.times == pytest.approx([0.0, 0.1])

@@ -5,7 +5,7 @@ import pytest
 from scipy.linalg import expm
 from tests.unit.gauss.test_trapezoid_and_tr_bdf2_are_second_order_on_rc_rl_rlc import _Linear
 
-from motronics.contracts.spec.study_spec import TransientStudy
+from motronics.gauss.formulation import TimeWindow
 from motronics.gauss.time_integrators import integrate_transient
 
 
@@ -13,7 +13,7 @@ def test_offset_nominal_observations_are_exact_hits_without_ulp_sized_cells():
     grid = np.linspace(0.1, 0.12, 401)
     solution = integrate_transient(
         _Linear(1, 1, lambda _t: np.zeros(1)),
-        TransientStudy(t0=grid[0], t1=grid[-1], dt=5e-5, integrator='trapezoid'),
+        TimeWindow(t0=grid[0], t1=grid[-1], dt=5e-5, integrator='trapezoid'),
         np.ones(1),
         v0=-np.ones(1),
         observation_times=grid[1:],
@@ -27,7 +27,7 @@ def test_distinct_requested_final_neighbors_are_not_discarded_by_end_tolerance()
     grid = np.array([0.0, np.nextafter(0.2, 0.0), 0.2])
     solution = integrate_transient(
         _Linear(1, 0, lambda _t: np.ones(1)),
-        TransientStudy(t0=0.0, t1=0.2, dt=0.2, integrator='trapezoid'),
+        TimeWindow(t0=0.0, t1=0.2, dt=0.2, integrator='trapezoid'),
         np.zeros(1),
         v0=np.ones(1),
         observation_times=grid[1:],
@@ -42,7 +42,7 @@ def test_nonuniform_observations_preserve_trapezoid_history_and_match_expm():
     grid = np.r_[0.0, np.cumsum(np.tile([0.001, 0.002, 0.003], 20))]
     solution = integrate_transient(
         problem,
-        TransientStudy(t0=0, t1=grid[-1], dt=0.1, integrator='trapezoid'),
+        TimeWindow(t0=0, t1=grid[-1], dt=0.1, integrator='trapezoid'),
         u0,
         v0=a @ u0,
         observation_times=grid[1:],
@@ -60,7 +60,7 @@ def test_observation_on_a_real_breakpoint_still_restarts_discontinuous_history()
     problem = _Linear(1, 0, lambda t: np.array([1 if t < 0.1 else 3]))
     solution = integrate_transient(
         problem,
-        TransientStudy(t0=0, t1=0.2, dt=0.2, integrator='trapezoid'),
+        TimeWindow(t0=0, t1=0.2, dt=0.2, integrator='trapezoid'),
         np.zeros(1),
         v0=np.ones(1),
         observation_times=(0.1, 0.2),
@@ -81,7 +81,7 @@ def test_continuous_observations_do_not_suppress_a_state_event_restart():
 
     solution = integrate_transient(
         problem,
-        TransientStudy(t0=0, t1=0.2, dt=0.2, integrator='trapezoid'),
+        TimeWindow(t0=0, t1=0.2, dt=0.2, integrator='trapezoid'),
         np.zeros(1),
         v0=np.ones(1),
         observation_times=(0.1, 0.2),
@@ -98,7 +98,7 @@ def test_invalid_observation_times_are_named_refusals(grid):
     with pytest.raises(ValueError, match='observation_times'):
         integrate_transient(
             _Linear(1, 1, lambda _t: np.zeros(1)),
-            TransientStudy(t0=0, t1=0.2, dt=0.1),
+            TimeWindow(t0=0, t1=0.2, dt=0.1),
             np.ones(1),
             observation_times=grid,
         )

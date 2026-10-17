@@ -3,8 +3,7 @@
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import integrate_transient
 
 
@@ -22,7 +21,7 @@ class Cubic:
 
 def test_nonlinear_eec_matches_the_independent_integrated_tangent_and_next_physical_step():
     dt, period = 0.05, 1.0
-    study = TransientStudy(0.0, period + dt, dt, IntegratorKind.BDF1)
+    study = TimeWindow(0.0, period + dt, dt, IntegratorKind.BDF1)
     plain = integrate_transient(Cubic(), study, np.array([0.7]), max_newton=30)
     result = integrate_transient(
         Cubic(), study, np.array([0.7]), max_newton=30, eec_period=period, eec_nonlinear_first_order=True
@@ -55,7 +54,7 @@ def test_nonlinear_eec_explicitly_refuses_unsupported_algorithm_state(controls):
     with pytest.raises(ValueError, match='nonlinear EEC'):
         integrate_transient(
             Cubic(),
-            TransientStudy(0.0, 2.0, 0.05, IntegratorKind.BDF1),
+            TimeWindow(0.0, 2.0, 0.05, IntegratorKind.BDF1),
             np.ones(1),
             eec_period=1.0,
             eec_nonlinear_first_order=True,

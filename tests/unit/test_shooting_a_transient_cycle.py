@@ -3,8 +3,7 @@
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import integrate_transient
 from motronics.gauss.time_integrators.periodic_march import shoot_transient_cycle
 
@@ -20,7 +19,7 @@ class DrivenDecay:
 def test_nonlinear_shooting_closes_the_accepted_cycle():
     result = shoot_transient_cycle(
         DrivenDecay(),
-        TransientStudy(0.0, 2.0, 0.02, IntegratorKind.BDF1),
+        TimeWindow(0.0, 2.0, 0.02, IntegratorKind.BDF1),
         np.zeros(1),
         period=1.0,
         max_newton=20,
@@ -31,7 +30,7 @@ def test_nonlinear_shooting_closes_the_accepted_cycle():
 
 
 def test_bdf2_closes_both_history_states_without_bootstrapping():
-    study = TransientStudy(0.0, 2.0, 0.02)
+    study = TimeWindow(0.0, 2.0, 0.02)
     result = shoot_transient_cycle(DrivenDecay(), study, np.zeros(1), period=1.0, step_tol=1e-10)
     assert len(result.initial_history) == 2
     march = integrate_transient(
@@ -44,16 +43,14 @@ def test_bdf2_closes_both_history_states_without_bootstrapping():
 
 def test_period_must_have_an_exact_step_boundary():
     with pytest.raises(ValueError, match='whole number'):
-        shoot_transient_cycle(
-            DrivenDecay(), TransientStudy(0.0, 2.0, 0.03, IntegratorKind.BDF1), np.zeros(1), period=1.0
-        )
+        shoot_transient_cycle(DrivenDecay(), TimeWindow(0.0, 2.0, 0.03, IntegratorKind.BDF1), np.zeros(1), period=1.0)
 
 
 def test_unconverged_trial_cycle_cannot_produce_a_steady_seed():
     with pytest.raises(RuntimeError, match='trial cycle'):
         shoot_transient_cycle(
             DrivenDecay(),
-            TransientStudy(0.0, 2.0, 0.02, IntegratorKind.BDF1),
+            TimeWindow(0.0, 2.0, 0.02, IntegratorKind.BDF1),
             np.zeros(1),
             period=1.0,
             max_newton=1,
@@ -67,11 +64,11 @@ def test_unconverged_trial_cycle_cannot_produce_a_steady_seed():
 )
 def test_invalid_bdf2_seed_history_is_never_silently_reset(history):
     with pytest.raises(ValueError, match='exactly two finite BDF2'):
-        integrate_transient(DrivenDecay(), TransientStudy(0.0, 1.0, 0.02), np.zeros(1), initial_history=history)
+        integrate_transient(DrivenDecay(), TimeWindow(0.0, 1.0, 0.02), np.zeros(1), initial_history=history)
 
 
 def test_antiperiodic_bdf2_shooting_closes_both_signed_history_states():
-    study = TransientStudy(0.0, 1.0, 0.02)
+    study = TimeWindow(0.0, 1.0, 0.02)
 
     # Linear affine odd-symmetric law is the native supported subset.
     class LinearDecay:

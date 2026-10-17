@@ -53,7 +53,7 @@ def test_an_invalid_forcing_period_is_refused_before_marching(period) -> None:
 @pytest.mark.parametrize('integrator', ['bdf1', 'bdf2', 'trapezoid', 'tr_bdf2'])
 def test_the_steady_state_driver_restarts_off_every_edge_and_lands_the_closed_form(integrator) -> None:
     """``u' = -u + s(t)``, ``s`` a 0/1 square wave of period 1 (on for [0, 0.5)): exact periodic orbit."""
-    from motronics.contracts.spec.study_spec import TransientStudy  # noqa: PLC0415
+    from motronics.gauss.formulation import TimeWindow  # noqa: PLC0415
     from motronics.gauss.time_integrators import StepTolerance, integrate_transient  # noqa: PLC0415
     from motronics.gauss.time_integrators.periodic import periodic_steady_state, smooth_phase  # noqa: PLC0415
 
@@ -67,7 +67,7 @@ def test_the_steady_state_driver_restarts_off_every_edge_and_lands_the_closed_fo
     assert smooth_phase(1.0, (0.0, 0.5)) == pytest.approx(0.75)  # the middle of a widest gap, never an edge
 
     def march(t0, t1, x, bps, _first):
-        study = TransientStudy(t0=t0, t1=t1, dt=0.01, integrator=integrator)
+        study = TimeWindow(t0=t0, t1=t1, dt=0.01, integrator=integrator)
         return integrate_transient(
             _Square(), study, x, time_breakpoints=bps, step_control=StepTolerance(rtol=1e-8, atol=1e-10)
         )

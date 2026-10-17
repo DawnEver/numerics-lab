@@ -14,9 +14,8 @@ import math
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import TransientStudy
 from motronics.gauss import time_integrators
-from motronics.gauss.formulation import IntegratorKind, SemiDiscreteProblem
+from motronics.gauss.formulation import IntegratorKind, SemiDiscreteProblem, TimeWindow
 from motronics.gauss.time_integrators import (
     INTEGRATOR_REGISTRY,
     BDF1Integrator,
@@ -78,7 +77,7 @@ def test_the_public_march_uses_the_single_step_owner_and_canonical_state(monkeyp
         return original(*args, **kwargs)
 
     monkeypatch.setattr(_step, '_solve_step', observe)
-    study = TransientStudy(t0=0.0, t1=0.2, dt=0.1, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=0.2, dt=0.1, integrator=IntegratorKind.BDF2)
     result = integrate_transient(DecayProblem(1.0), study, np.array([1.0]))
     assert len(calls) == 2
     assert all(isinstance(form, time_integrators.StepForm) for form in calls)
@@ -90,7 +89,7 @@ def test_the_public_march_uses_the_single_step_owner_and_canonical_state(monkeyp
 
 
 def test_event_marches_reach_the_same_step_owner(monkeypatch):
-    study = TransientStudy(t0=0.0, t1=0.2, dt=0.1, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=0.2, dt=0.1, integrator=IntegratorKind.BDF2)
     kwargs = {'time_breakpoints': [0.15]}
     expected = march.integrate_transient(DecayProblem(1.0), study, np.array([1.0]), **kwargs)
     calls = []
@@ -118,7 +117,7 @@ def test_fake_problem_satisfies_protocol() -> None:
 @pytest.mark.parametrize('kind', [IntegratorKind.BDF1, IntegratorKind.BDF2, IntegratorKind.NEWMARK])
 def test_fixed_grid_lands_a_partial_final_step_at_the_declared_end(kind: IntegratorKind) -> None:
     """Every fixed-grid scheme must use the true partial cell, not an approximate step count."""
-    study = TransientStudy(t0=0.0, t1=1.0, dt=0.3, integrator=kind)
+    study = TimeWindow(t0=0.0, t1=1.0, dt=0.3, integrator=kind)
     problem = OscillatorProblem(1.0) if kind == IntegratorKind.NEWMARK else DecayProblem(1.0)
     solution = integrate_transient(problem, study, np.array([1.0]))
     assert solution.times == pytest.approx([0.0, 0.3, 0.6, 0.9, 1.0])
@@ -188,7 +187,7 @@ def test_generalized_alpha_params_standard_forms() -> None:
 
 def _decay_error(kind: IntegratorKind, dt: float, lam: float = 2.0, t1: float = 1.0) -> float:
     """Max abs error of the marched solution vs u(t)=exp(-lambda t) at step size dt."""
-    study = TransientStudy(t0=0.0, t1=t1, dt=dt, integrator=kind)
+    study = TimeWindow(t0=0.0, t1=t1, dt=dt, integrator=kind)
     sol = integrate_transient(DecayProblem(lam), study, u0=np.array([1.0]))
     err = 0.0
     for t, u in zip(sol.times, sol.states, strict=True):
@@ -225,7 +224,7 @@ def test_bdf_error_shrinks_with_dt() -> None:
 def test_backward_euler_reproduces_recurrence() -> None:
     """BDF1 on the decay ODE matches the closed-form backward-Euler recurrence u/(1+lambda dt)."""
     lam, dt = 3.0, 0.05
-    study = TransientStudy(t0=0.0, t1=0.5, dt=dt, integrator=IntegratorKind.BDF1)
+    study = TimeWindow(t0=0.0, t1=0.5, dt=dt, integrator=IntegratorKind.BDF1)
     sol = integrate_transient(DecayProblem(lam), study, u0=np.array([1.0]))
     expected = 1.0
     factor = 1.0 / (1.0 + lam * dt)
@@ -237,7 +236,7 @@ def test_backward_euler_reproduces_recurrence() -> None:
 def test_2x2_decoupled_system() -> None:
     """A 2x2 decoupled decay system marches each component to its own exponential."""
     lam = 1.5
-    study = TransientStudy(t0=0.0, t1=1.0, dt=0.01, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=1.0, dt=0.01, integrator=IntegratorKind.BDF2)
     sol = integrate_transient(DecayProblem(lam, n=2), study, u0=np.array([1.0, -2.0]))
     final = sol.states[-1]
     ref = np.array([1.0, -2.0]) * np.exp(-lam * 1.0)
@@ -247,7 +246,7 @@ def test_2x2_decoupled_system() -> None:
 def test_newmark_oscillator_energy_bounded() -> None:
     """Undamped Newmark on SHM stays bounded and tracks cos(omega t) to leading order."""
     omega, dt = 2.0, 0.005
-    study = TransientStudy(t0=0.0, t1=1.0, dt=dt, integrator=IntegratorKind.NEWMARK)
+    study = TimeWindow(t0=0.0, t1=1.0, dt=dt, integrator=IntegratorKind.NEWMARK)
     sol = integrate_transient(OscillatorProblem(omega), study, u0=np.array([1.0]), v0=np.array([0.0]))
     for t, u in zip(sol.times, sol.states, strict=True):
         assert abs(float(u[0])) <= 1.05  # average-acceleration Newmark conserves energy (no growth)
@@ -286,7 +285,7 @@ def test_an_exhausted_newton_ceiling_labels_the_solution(caplog) -> None:
             return np.array([[weights.alpha1.real - 2.0 * float(u[0]) * weights.alpha0.real]])
 
     problem = _QuadraticDrift()
-    study = TransientStudy(t0=0.0, t1=0.5, dt=0.1, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=0.5, dt=0.1, integrator=IntegratorKind.BDF2)
     with caplog.at_level('WARNING', logger='motronics.gauss.time_integrators'):
         coarse = integrate_transient(problem, study, np.array([1.0]), max_newton=1, tol=1e-12, on_nonconverged='label')
     assert not coarse.converged
@@ -312,7 +311,7 @@ def test_adaptive_stepping_keeps_accuracy_with_fewer_steps_on_the_smooth_tail() 
             return np.array([[weights.alpha1.real + weights.alpha0.real]])
 
     problem = _Decay()
-    study = TransientStudy(t0=0.0, t1=5.0, dt=1e-3, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=5.0, dt=1e-3, integrator=IntegratorKind.BDF2)
     fixed = integrate_transient(problem, study, np.array([1.0]))
     # atol = 1e-6: the predictor discrepancy ~ u'' h^2 puts the controller's equilibrium at
     # h ~ sqrt(atol/u'') ~ 1e-3 -- the fixed march's own scale, so the comparison is fair.
@@ -335,7 +334,7 @@ def test_adaptive_stepping_keeps_accuracy_with_fewer_steps_on_the_smooth_tail() 
 
 def test_adaptive_stepping_rejects_bdf1_with_a_named_error() -> None:
     """The implemented predictor-curvature controller is BDF2-specific."""
-    study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF1)
+    study = TimeWindow(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF1)
 
     class _Decay:
         def residual(self, u, u_dot, u_ddot, t):

@@ -6,8 +6,7 @@ import numpy as np
 import pytest
 from tests.unit.gauss.test_antiperiodic_eec import Affine
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import integrate_transient
 
 
@@ -23,7 +22,7 @@ def test_true_bdf2_periodic_orbit_remains_a_fixed_point_after_eec(sign):
     u0 = np.array([amplitude.real])
     result = integrate_transient(
         Affine(),
-        TransientStudy(0.0, 2 * period + dt, dt),
+        TimeWindow(0.0, 2 * period + dt, dt),
         u0,
         initial_history=(np.array([(amplitude * np.exp(-2j * np.pi * dt)).real]), u0),
         eec_period=period,
@@ -46,7 +45,7 @@ def test_augmented_error_matches_the_independent_boundary_moment_map(sign):
     )
     result = integrate_transient(
         Affine(),
-        TransientStudy(0.0, 2 * period, dt),
+        TimeWindow(0.0, 2 * period, dt),
         history[-1],
         initial_history=history,
         eec_period=period,
@@ -80,7 +79,7 @@ def test_three_physical_cycles_give_tenfold_acceleration_against_the_exact_augme
     )
     result = integrate_transient(
         Affine(),
-        TransientStudy(0.0, 3 * period, dt),
+        TimeWindow(0.0, 3 * period, dt),
         history[-1],
         initial_history=history,
         eec_period=period,
@@ -100,7 +99,7 @@ def test_three_physical_cycles_give_tenfold_acceleration_against_the_exact_augme
 def test_bootstrap_cycle_uses_the_exact_mixed_be_bdf2_boundary_moment(sign):
     dt, period = 0.05, 1.0 if sign == 1 else 0.5
     n = round(period / dt)
-    study = TransientStudy(0.0, period + dt, dt)
+    study = TimeWindow(0.0, period + dt, dt)
     plain = integrate_transient(Affine(), study, np.ones(1))
     corrected = integrate_transient(
         Affine(), study, np.ones(1), eec_period=period, eec_sign=sign, eec_affine_first_order=True
@@ -119,7 +118,7 @@ def test_bdf2_eec_refuses_nonuniform_step_tables():
     with pytest.raises(ValueError, match='uniform BDF2'):
         integrate_transient(
             Affine(),
-            TransientStudy(0.0, 1.0, 0.05),
+            TimeWindow(0.0, 1.0, 0.05),
             np.ones(1),
             step_times=(0.0, 0.1, 0.3, 0.5, 0.75, 1.0),
             eec_period=0.5,
@@ -130,7 +129,7 @@ def test_bdf2_eec_refuses_nonuniform_step_tables():
 def test_bdf2_eec_refuses_an_unaligned_final_endpoint():
     with pytest.raises(ValueError, match='uniform BDF2'):
         integrate_transient(
-            Affine(), TransientStudy(0.0, 0.53, 0.05), np.ones(1), eec_period=0.5, eec_affine_first_order=True
+            Affine(), TimeWindow(0.0, 0.53, 0.05), np.ones(1), eec_period=0.5, eec_affine_first_order=True
         )
 
 
@@ -143,7 +142,7 @@ def test_eec_admission_requires_a_real_interval_with_positive_integer_ticks(peri
     monkeypatch.setattr(np, 'arange', forbid_allocation)
     with pytest.raises(ValueError, match='positive|integer'):
         integrate_transient(
-            Affine(), TransientStudy(0.0, 2.0, 1.0), np.ones(1), eec_period=period, eec_affine_first_order=True
+            Affine(), TimeWindow(0.0, 2.0, 1.0), np.ones(1), eec_period=period, eec_affine_first_order=True
         )
 
 

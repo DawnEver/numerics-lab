@@ -6,8 +6,7 @@ import numpy as np
 import pytest
 from tests.unit.gauss.test_time_integrators import DecayProblem
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import integrate_transient
 from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint, model_digest
 
@@ -60,7 +59,7 @@ def test_checkpoint_callback_receives_each_accepted_step():
     records = []
     result = integrate_transient(
         DecayProblem(1.0),
-        TransientStudy(0.0, 0.3, 0.1),
+        TimeWindow(0.0, 0.3, 0.1),
         np.array([1.0]),
         checkpoint_key='decay',
         on_checkpoint=records.append,
@@ -71,17 +70,17 @@ def test_checkpoint_callback_receives_each_accepted_step():
 
 def test_bdf2_restart_matches_an_uninterrupted_march():
     problem = DecayProblem(1.0)
-    whole = integrate_transient(problem, TransientStudy(0.0, 1.0, 0.1), np.array([1.0]))
+    whole = integrate_transient(problem, TimeWindow(0.0, 1.0, 0.1), np.array([1.0]))
     first = integrate_transient(
         problem,
-        TransientStudy(0.0, 0.5, 0.1),
+        TimeWindow(0.0, 0.5, 0.1),
         np.array([1.0]),
         checkpoint_key='decay',
     )
     restored = TransientCheckpoint.from_mapping(first.checkpoint.to_mapping())
     last = integrate_transient(
         problem,
-        TransientStudy(0.5, 1.0, 0.1),
+        TimeWindow(0.5, 1.0, 0.1),
         first.states[-1],
         restart=restored,
         checkpoint_key='decay',
@@ -93,16 +92,12 @@ def test_fixed_json_restart_preserves_absolute_parent_products_exactly():
     dt = 0.25e-6
     split = 10 * dt
     end = 20 * dt
-    whole = integrate_transient(
-        DecayProblem(1.0), TransientStudy(0.0, end, dt), np.array([1.0]), checkpoint_key='decay'
-    )
-    first = integrate_transient(
-        DecayProblem(1.0), TransientStudy(0.0, split, dt), np.array([1.0]), checkpoint_key='decay'
-    )
+    whole = integrate_transient(DecayProblem(1.0), TimeWindow(0.0, end, dt), np.array([1.0]), checkpoint_key='decay')
+    first = integrate_transient(DecayProblem(1.0), TimeWindow(0.0, split, dt), np.array([1.0]), checkpoint_key='decay')
     restored = TransientCheckpoint.from_mapping(json.loads(json.dumps(first.checkpoint.to_mapping())))
     resumed = integrate_transient(
         DecayProblem(1.0),
-        TransientStudy(split, end, dt),
+        TimeWindow(split, end, dt),
         first.states[-1],
         checkpoint_key='decay',
         restart=restored,
@@ -118,7 +113,7 @@ def test_restart_refuses_a_different_integrator():
     with pytest.raises(ValueError, match='does not match'):
         integrate_transient(
             DecayProblem(1.0),
-            TransientStudy(0.2, 0.4, 0.1, integrator=IntegratorKind.BDF1),
+            TimeWindow(0.2, 0.4, 0.1, integrator=IntegratorKind.BDF1),
             np.array([0.9]),
             restart=record,
             checkpoint_key='decay',

@@ -6,8 +6,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import get_integrator, integrate_transient
 from motronics.gauss.time_integrators import march as march_runtime
 from motronics.gauss.time_integrators._landing import AcceptedProjectionResult
@@ -29,7 +28,7 @@ def test_read_only_landing_observer_preserves_actual_rate_scheme_without_restart
 
     solution = integrate_transient(
         problem,
-        TransientStudy(0.0, 0.2, 0.1, kind),
+        TimeWindow(0.0, 0.2, 0.1, kind),
         np.zeros(1),
         v0=np.ones(1),
         on_landing=observe,
@@ -64,7 +63,7 @@ def test_event_only_owner_projects_actual_right_state_preserving_storage_and_inc
 
     solution = integrate_transient(
         problem,
-        TransientStudy(0.0, 0.3, 0.1, integrator),
+        TimeWindow(0.0, 0.3, 0.1, integrator),
         np.array([0.4, 0.0]),
         event_fns=(lambda _state, time: time - 0.15,),
         on_event=event,
@@ -88,7 +87,7 @@ def test_projection_still_requires_actual_mutation_owner(owner):
     with pytest.raises(ValueError, match='accepted state projection requires'):
         integrate_transient(
             _Forced(),
-            TransientStudy(0.0, 0.3, 0.1, IntegratorKind.BDF1),
+            TimeWindow(0.0, 0.3, 0.1, IntegratorKind.BDF1),
             np.zeros(1),
             project_accepted_state=lambda _time, state: state.copy(),
             **options,
@@ -112,7 +111,7 @@ def test_unknown_integrator_without_projected_pair_authority_refuses_actual_outg
     with pytest.raises(TypeError, match='actual integrator must own explicit projected derivative restart'):
         integrate_transient(
             _Forced(),
-            TransientStudy(0.0, 0.3, 0.1),
+            TimeWindow(0.0, 0.3, 0.1),
             np.zeros(1),
             on_accept=lambda time, _state: time == 0.2,
             project_accepted_state=lambda _time, state: AcceptedProjectionResult(state, np.array([3.0])),
@@ -135,7 +134,7 @@ def test_trbdf2_actual_outgoing_rate_survives_macro_boundary_checkpoint():
     }
     first = integrate_transient(
         problem,
-        TransientStudy(0.0, 0.2, 0.1, IntegratorKind.TR_BDF2),
+        TimeWindow(0.0, 0.2, 0.1, IntegratorKind.TR_BDF2),
         np.zeros(1),
         **options,
     )
@@ -143,7 +142,7 @@ def test_trbdf2_actual_outgoing_rate_survives_macro_boundary_checkpoint():
     np.testing.assert_array_equal(first.final_integrator_state.v, [3.0])
     resumed = integrate_transient(
         problem,
-        TransientStudy(0.2, 0.4, 0.1, IntegratorKind.TR_BDF2),
+        TimeWindow(0.2, 0.4, 0.1, IntegratorKind.TR_BDF2),
         np.zeros(1),
         restart=saved,
         checkpoint_key='actual-trbdf2-pair',
@@ -172,7 +171,7 @@ def test_second_order_checkpoint_retains_actual_projected_derivative_history(kin
 
     first = integrate_transient(
         problem,
-        TransientStudy(0.0, 0.1, 0.1, kind),
+        TimeWindow(0.0, 0.1, 0.1, kind),
         np.array([0.4]),
         v0=np.array([-2.0]),
         a0=np.array([-3.0]),
@@ -184,7 +183,7 @@ def test_second_order_checkpoint_retains_actual_projected_derivative_history(kin
     assert saved.velocity == (2.0,) and saved.acceleration == (4.0,)
     resumed = integrate_transient(
         problem,
-        TransientStudy(0.1, 0.2, 0.1, kind),
+        TimeWindow(0.1, 0.2, 0.1, kind),
         np.zeros(1),
         restart=saved,
         checkpoint_key='actual-second-order-pair',
@@ -247,7 +246,7 @@ def test_checkpoint_after_actual_landing_restores_right_law_and_bootstrap_withou
 
         return integrate_transient(
             owner,
-            TransientStudy(t0, t1, 0.1, IntegratorKind.BDF2),
+            TimeWindow(t0, t1, 0.1, IntegratorKind.BDF2),
             np.zeros(1),
             on_landing=landing,
             checkpoint_key='actual-owned-scheduled-law',
@@ -280,7 +279,7 @@ def test_incoming_step_uses_owned_endpoint_law_without_perturbing_time():
 
     solution = integrate_transient(
         OwnedEndpoint(),
-        TransientStudy(t0=0.0, t1=0.2, dt=0.1, integrator=IntegratorKind.BDF1),
+        TimeWindow(t0=0.0, t1=0.2, dt=0.1, integrator=IntegratorKind.BDF1),
         np.zeros(1),
     )
     assert times == [0.1, 0.2]
@@ -313,7 +312,7 @@ def test_right_state_projection_preserves_left_rate_and_bootstraps_from_right(ad
 
     solution = _march(eventful, adaptive)(
         problem,
-        TransientStudy(t0=0.0, t1=0.2, dt=0.1, integrator=IntegratorKind.BDF2),
+        TimeWindow(t0=0.0, t1=0.2, dt=0.1, integrator=IntegratorKind.BDF2),
         np.zeros(2),
         on_accept=observe,
         project_accepted_state=project,
@@ -340,7 +339,7 @@ def test_live_breakpoint_created_on_accept_is_not_skipped(adaptive, eventful):
 
     solution = _march(eventful, adaptive)(
         _Forced(),
-        TransientStudy(t0=0.0, t1=0.1, dt=0.1, integrator=IntegratorKind.BDF2),
+        TimeWindow(t0=0.0, t1=0.1, dt=0.1, integrator=IntegratorKind.BDF2),
         np.zeros(1),
         on_accept=observe,
         next_breakpoint=lambda time: next((value for value in deadlines if value > time), None),
@@ -356,7 +355,7 @@ def test_live_breakpoint_rejects_nonfuture_or_invalid_owner_time(deadline):
     with pytest.raises(ValueError, match='strictly future'):
         integrate_transient(
             _Forced(),
-            TransientStudy(t0=0.0, t1=0.1, dt=0.1, integrator=IntegratorKind.BDF1),
+            TimeWindow(t0=0.0, t1=0.1, dt=0.1, integrator=IntegratorKind.BDF1),
             np.zeros(1),
             next_breakpoint=lambda _time: deadline,
         )
@@ -376,7 +375,7 @@ def test_landing_dispatches_only_committed_states_and_restarts_history():
 
     solution = integrate_transient(
         problem,
-        TransientStudy(t0=0.0, t1=0.4, dt=0.1, integrator=IntegratorKind.BDF2),
+        TimeWindow(t0=0.0, t1=0.4, dt=0.1, integrator=IntegratorKind.BDF2),
         np.zeros(1),
         on_landing=landing,
     )
@@ -392,7 +391,7 @@ def test_invalid_landing_identifiers_are_not_published(indices):
     with pytest.raises(ValueError, match='event identifiers'):
         integrate_transient(
             _Forced(),
-            TransientStudy(t0=0.0, t1=0.1, dt=0.1, integrator=IntegratorKind.BDF1),
+            TimeWindow(t0=0.0, t1=0.1, dt=0.1, integrator=IntegratorKind.BDF1),
             np.zeros(1),
             on_landing=lambda _time, _state: indices,
         )
@@ -408,7 +407,7 @@ def test_accepted_observer_gets_initial_and_canonical_states_not_event_probes(ev
         observed.append(time)
         return False
 
-    study = TransientStudy(t0=0.0, t1=0.4, dt=0.1, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=0.4, dt=0.1, integrator=IntegratorKind.BDF2)
     if eventful:
         solution = integrate_transient(
             problem,
@@ -436,7 +435,7 @@ def test_accepted_law_change_restarts_its_actual_history(eventful):
 
     solution = _march(eventful)(
         problem,
-        TransientStudy(t0=0.0, t1=0.4, dt=0.1, integrator=IntegratorKind.BDF2),
+        TimeWindow(t0=0.0, t1=0.4, dt=0.1, integrator=IntegratorKind.BDF2),
         np.zeros(1),
         on_accept=observe,
     )
@@ -462,7 +461,7 @@ def test_law_change_checkpoint_retains_real_step_spacing_and_bootstraps_after_re
         options |= {'curvature_atol': 1e-6, 'h_min': 0.1, 'h_max': 0.1}
     first = integrate_transient(
         problem,
-        TransientStudy(t0=0.0, t1=0.2, dt=0.1, integrator=IntegratorKind.BDF2),
+        TimeWindow(t0=0.0, t1=0.2, dt=0.1, integrator=IntegratorKind.BDF2),
         np.zeros(1),
         on_accept=observe,
         **options,
@@ -474,7 +473,7 @@ def test_law_change_checkpoint_retains_real_step_spacing_and_bootstraps_after_re
     assert len(saved.states) == 1
     resumed = integrate_transient(
         problem,
-        TransientStudy(t0=0.2, t1=0.4, dt=0.1, integrator=IntegratorKind.BDF2),
+        TimeWindow(t0=0.2, t1=0.4, dt=0.1, integrator=IntegratorKind.BDF2),
         np.zeros(1),
         restart=saved,
         **options,
@@ -500,7 +499,7 @@ def test_refined_midpoint_observation_invalidates_the_speculative_second_half():
 
     solution = integrate_transient(
         problem,
-        TransientStudy(t0=0.0, t1=0.2, dt=0.2, integrator=IntegratorKind.BDF2),
+        TimeWindow(t0=0.0, t1=0.2, dt=0.2, integrator=IntegratorKind.BDF2),
         np.zeros(1),
         refine=0.01,
         on_accept=observe,

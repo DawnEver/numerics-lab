@@ -3,8 +3,7 @@
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.modal_transient import integrate_modal_transient
 
 
@@ -15,7 +14,7 @@ def test_truncated_semidefinite_pencil_retains_free_translation_at_every_operato
         np.eye(3) * scale,
         np.zeros((3, 3)),
         np.array([2.0, 0.0, 0.0]) * scale,
-        TransientStudy(0.3, 0.4, 0.001, IntegratorKind.NEWMARK),
+        TimeWindow(0.3, 0.4, 0.001, IntegratorKind.NEWMARK),
         n_modes=1,
         v0=np.array([0.2, 0.0, 0.0]),
     )
@@ -33,7 +32,7 @@ def test_roundoff_negative_rigid_eigenvalue_keeps_full_projected_damping():
         np.eye(2),
         np.array([[0.2, 0.1], [0.1, 0.3]]),
         [1.0, 0.0],
-        TransientStudy(0.0, 0.1, 0.001, IntegratorKind.NEWMARK),
+        TimeWindow(0.0, 0.1, 0.001, IntegratorKind.NEWMARK),
         n_modes=2,
     )
     assert result.eigenvalues[0] == 0.0
@@ -48,6 +47,6 @@ def test_materially_negative_stiffness_is_not_misreported_as_a_rigid_mode():
             np.eye(3),
             np.zeros((3, 3)),
             np.zeros(3),
-            TransientStudy(0.0, 0.1, 0.001, IntegratorKind.NEWMARK),
+            TimeWindow(0.0, 0.1, 0.001, IntegratorKind.NEWMARK),
             n_modes=1,
         )

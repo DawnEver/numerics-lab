@@ -25,8 +25,7 @@ import numpy as np
 import pytest
 from tests.unit.gauss._helpers import _RampWithToggle
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import integrate_transient
 
 
@@ -34,7 +33,7 @@ from motronics.gauss.time_integrators import integrate_transient
 def test_event_bracket_width_must_be_finite_and_positive(time_tol: float) -> None:
     """A zero-width event bracket cannot terminate a switched field-circuit march."""
     problem = _RampWithToggle(level=1.0)
-    study = TransientStudy(t0=0.0, t1=2.0, dt=0.3, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=2.0, dt=0.3, integrator=IntegratorKind.BDF2)
     with pytest.raises(ValueError, match='time_tol.*finite and positive'):
         integrate_transient(problem, study, np.array([0.0]), event_fns=(problem.event_fn,), time_tol=time_tol)
 
@@ -42,7 +41,7 @@ def test_event_bracket_width_must_be_finite_and_positive(time_tol: float) -> Non
 def test_a_march_without_events_overshoots_the_turning_level() -> None:
     """The baseline the locator must beat: on a fixed grid the ramp crosses ``level`` mid-cell."""
     problem = _RampWithToggle(level=1.0)
-    study = TransientStudy(t0=0.0, t1=2.0, dt=0.3, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=2.0, dt=0.3, integrator=IntegratorKind.BDF2)
     solution = integrate_transient(problem, study, np.array([0.0]))
     assert max(float(u[0]) for u in solution.states) > problem.level, (
         'the grid does not land on the event -- a plain march sails past the turning point'
@@ -52,7 +51,7 @@ def test_a_march_without_events_overshoots_the_turning_level() -> None:
 def test_the_march_turns_AT_the_located_event_not_at_the_next_grid_point() -> None:
     """Rollback + restart: the peak lands on ``level`` to the locator's tolerance, not on the grid."""
     problem = _RampWithToggle(level=1.0)
-    study = TransientStudy(t0=0.0, t1=2.0, dt=0.3, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=2.0, dt=0.3, integrator=IntegratorKind.BDF2)
     solution = integrate_transient(
         problem,
         study,
@@ -81,7 +80,7 @@ def test_the_march_turns_AT_the_located_event_not_at_the_next_grid_point() -> No
 def test_the_event_time_is_located_far_below_the_step_size() -> None:
     """The locator is a ROOT-FIND, not a grid refinement: dt=0.3, crossing found to ~1e-9."""
     problem = _RampWithToggle(level=1.0)
-    study = TransientStudy(t0=0.0, t1=1.5, dt=0.3, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=1.5, dt=0.3, integrator=IntegratorKind.BDF2)
     solution = integrate_transient(
         problem,
         study,
@@ -97,7 +96,7 @@ def test_the_event_time_is_located_far_below_the_step_size() -> None:
 def test_a_circuit_with_no_event_functions_marches_identically_to_the_plain_driver() -> None:
     """The events path must not tax or perturb a march with nothing to locate."""
     problem = _RampWithToggle(level=1.0)
-    study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
     plain = integrate_transient(problem, study, np.array([0.0]))
     eventful = integrate_transient(problem, study, np.array([0.0]))
     assert eventful.events == []
@@ -109,7 +108,7 @@ def test_a_circuit_with_no_event_functions_marches_identically_to_the_plain_driv
 def test_an_event_landing_exactly_on_a_grid_point_is_still_handled_once() -> None:
     """``t* = t_target`` exactly: no bisection, no double-toggle, no zero-length step."""
     problem = _RampWithToggle(level=0.6)  # crossed exactly at a multiple of dt
-    study = TransientStudy(t0=0.0, t1=1.2, dt=0.3, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=1.2, dt=0.3, integrator=IntegratorKind.BDF2)
     solution = integrate_transient(
         problem,
         study,
@@ -165,7 +164,7 @@ def test_two_events_crossing_at_the_same_instant_fire_together() -> None:
             self.flag_b = True
 
     problem = _TwinIndependentToggles()
-    study = TransientStudy(t0=0.0, t1=1.0, dt=1.0, integrator=IntegratorKind.BDF2)  # ONE cell, both root at 0.2
+    study = TimeWindow(t0=0.0, t1=1.0, dt=1.0, integrator=IntegratorKind.BDF2)  # ONE cell, both root at 0.2
     solution = integrate_transient(
         problem,
         study,
@@ -193,7 +192,7 @@ def test_two_events_in_one_step_are_handled_earliest_first() -> None:
 
     problem = _TwoLevels()
     order: list[int] = []
-    study = TransientStudy(t0=0.0, t1=1.0, dt=1.0, integrator=IntegratorKind.BDF2)  # ONE cell, both crossings inside
+    study = TimeWindow(t0=0.0, t1=1.0, dt=1.0, integrator=IntegratorKind.BDF2)  # ONE cell, both crossings inside
     solution = integrate_transient(
         problem,
         study,
@@ -209,7 +208,7 @@ def test_two_events_in_one_step_are_handled_earliest_first() -> None:
 def test_a_checkpoint_rolls_the_solution_back_without_aliasing() -> None:
     """States appended past the event during probing are retracted, not left in the output."""
     problem = _RampWithToggle(level=1.0)
-    study = TransientStudy(t0=0.0, t1=2.0, dt=0.3, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=2.0, dt=0.3, integrator=IntegratorKind.BDF2)
     solution = integrate_transient(
         problem,
         study,
@@ -248,7 +247,7 @@ def test_a_pure_time_sawtooth_event_fires_every_step() -> None:
             self.next += self.dt
 
     clock = _Clock(0.3)
-    study = TransientStudy(t0=0.0, t1=0.9, dt=0.3, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=0.9, dt=0.3, integrator=IntegratorKind.BDF2)
     solution = integrate_transient(
         problem,
         study,
@@ -262,7 +261,7 @@ def test_a_pure_time_sawtooth_event_fires_every_step() -> None:
 def test_a_second_crossing_after_the_toggle_does_not_retrigger() -> None:
     """Hysteresis-free but state-flipped: the same fn must not fire again on the way back down."""
     problem = _RampWithToggle(level=1.0)
-    study = TransientStudy(t0=0.0, t1=3.0, dt=0.3, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=3.0, dt=0.3, integrator=IntegratorKind.BDF2)
     integrate_transient(
         problem,
         study,
@@ -275,7 +274,7 @@ def test_a_second_crossing_after_the_toggle_does_not_retrigger() -> None:
 
 def test_an_event_function_that_never_crosses_costs_no_extra_points() -> None:
     problem = _RampWithToggle(level=99.0)
-    study = TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2)
     solution = integrate_transient(
         problem,
         study,
@@ -290,7 +289,7 @@ def test_an_event_function_that_never_crosses_costs_no_extra_points() -> None:
 def test_an_event_within_time_tol_of_the_checkpoint_is_handled_there_not_bisected_forever() -> None:
     """A crossing closer to the step start than the locator tolerance: no zero-length steps, no hang."""
     problem = _RampWithToggle(level=1.0e-4)
-    study = TransientStudy(t0=0.0, t1=1.0, dt=0.3, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=1.0, dt=0.3, integrator=IntegratorKind.BDF2)
     solution = integrate_transient(
         problem,
         study,
@@ -327,7 +326,7 @@ def test_a_crossing_is_located_in_few_re_steps_not_one_per_halving() -> None:
     converge to the SAME bracket width the bisection did.
     """
     problem = _CountingRamp(level=0.5)
-    study = TransientStudy(t0=0.0, t1=0.9, dt=0.3, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=0.9, dt=0.3, integrator=IntegratorKind.BDF2)
     solution = integrate_transient(
         problem,
         study,

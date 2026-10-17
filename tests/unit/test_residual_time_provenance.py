@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import TransientStudy
+from motronics.gauss.formulation import TimeWindow
 from motronics.gauss.time_integrators import _step, integrate_transient
 from motronics.gauss.time_integrators.initial import consistent_initial_condition
 from motronics.gauss.time_integrators.march import StepNotConverged
@@ -21,7 +21,7 @@ class _Jump:
 def test_source_edge_records_left_residual_time_and_exact_clock():
     result = integrate_transient(
         _Jump(),
-        TransientStudy(t0=0.0, t1=1.0, dt=0.25, integrator='bdf1'),
+        TimeWindow(t0=0.0, t1=1.0, dt=0.25, integrator='bdf1'),
         np.zeros(1),
         time_breakpoints=(0.5,),
     )
@@ -49,7 +49,7 @@ def test_source_transition_preserves_dynamic_state_and_records_preprojection_evi
 
     result = integrate_transient(
         problem,
-        TransientStudy(t0=0.0, t1=1.0, dt=0.25, integrator='bdf1'),
+        TimeWindow(t0=0.0, t1=1.0, dt=0.25, integrator='bdf1'),
         np.array([0.0, 1.0]),
         time_breakpoints=(0.5,),
         on_breakpoint=reinitialize,
@@ -64,7 +64,7 @@ def test_source_transition_preserves_dynamic_state_and_records_preprojection_evi
 def test_sampled_composition_preserves_each_segments_residual_time_evidence():
     result = integrate_sampled(
         _Jump(),
-        TransientStudy(t0=0.0, t1=1.0, dt=0.125, integrator='bdf1'),
+        TimeWindow(t0=0.0, t1=1.0, dt=0.125, integrator='bdf1'),
         np.zeros(1),
         (SampledTask(0.25, lambda _t, _u: None),),
     )
@@ -84,7 +84,7 @@ def test_a_rejected_source_edge_cannot_advance_its_physical_handler(monkeypatch)
     with pytest.raises(StepNotConverged) as caught:
         integrate_transient(
             _Jump(),
-            TransientStudy(t0=0.0, t1=1.0, dt=0.5, integrator='bdf1'),
+            TimeWindow(t0=0.0, t1=1.0, dt=0.5, integrator='bdf1'),
             np.zeros(1),
             time_breakpoints=(0.5,),
             on_breakpoint=lambda t, u: transitions.append((t, u.copy())),
@@ -101,7 +101,7 @@ def test_a_nonfinite_source_transition_is_refused_instead_of_returned():
     with pytest.raises(ValueError, match='breakpoint handler.*non-finite'):
         integrate_transient(
             _Jump(),
-            TransientStudy(t0=0.0, t1=1.0, dt=0.5, integrator='bdf1'),
+            TimeWindow(t0=0.0, t1=1.0, dt=0.5, integrator='bdf1'),
             np.zeros(1),
             time_breakpoints=(0.5,),
             on_breakpoint=invalid,

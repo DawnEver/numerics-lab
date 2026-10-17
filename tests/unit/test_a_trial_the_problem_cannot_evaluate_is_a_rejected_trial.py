@@ -13,8 +13,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import TrialNotEvaluable, integrate_transient
 
 
@@ -33,7 +32,7 @@ class _GuardedRoot:
         return np.atleast_2d(0.2 * weights.alpha0.real)
 
 
-_STUDY = TransientStudy(t0=0.0, t1=0.3, dt=0.1, integrator=IntegratorKind.BDF2)
+_STUDY = TimeWindow(t0=0.0, t1=0.3, dt=0.1, integrator=IntegratorKind.BDF2)
 
 
 def test_an_unevaluable_trial_is_halved_and_the_march_reaches_the_root() -> None:

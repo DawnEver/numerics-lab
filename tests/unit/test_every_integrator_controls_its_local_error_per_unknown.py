@@ -19,8 +19,7 @@ import math
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import StepTolerance, integrate_transient
 from motronics.gauss.time_integrators._integrators import get_integrator
 
@@ -80,7 +79,7 @@ def _run(kind, rtol, atol=1e-12, dt=0.5, t1=4.0):
     if kind in _SECOND_ORDER:
         sol = integrate_transient(
             _Oscillator(),
-            TransientStudy(t0=0.0, t1=t1, dt=dt, integrator=kind),
+            TimeWindow(t0=0.0, t1=t1, dt=dt, integrator=kind),
             np.array([1.0]),
             step_control=StepTolerance(rtol=rtol, atol=atol),
         )
@@ -88,7 +87,7 @@ def _run(kind, rtol, atol=1e-12, dt=0.5, t1=4.0):
     else:
         sol = integrate_transient(
             _Decay(),
-            TransientStudy(t0=0.0, t1=t1, dt=dt, integrator=kind),
+            TimeWindow(t0=0.0, t1=t1, dt=dt, integrator=kind),
             np.ones(2),
             step_control=StepTolerance(rtol=rtol, atol=atol),
         )
@@ -124,9 +123,7 @@ def test_a_per_unknown_atol_is_obeyed_unknown_by_unknown() -> None:
 
 
 def test_planted_control_without_step_control_the_march_is_the_dt_grid() -> None:
-    sol = integrate_transient(
-        _Decay(), TransientStudy(t0=0.0, t1=4.0, dt=0.5, integrator=IntegratorKind.BDF2), np.ones(2)
-    )
+    sol = integrate_transient(_Decay(), TimeWindow(t0=0.0, t1=4.0, dt=0.5, integrator=IntegratorKind.BDF2), np.ones(2))
     np.testing.assert_allclose(sol.times, np.arange(0.0, 4.01, 0.5))
 
 
@@ -143,7 +140,7 @@ def test_event_location_tolerance_cannot_prevent_lte_step_reduction() -> None:
 
     sol = integrate_transient(
         CountedDecay(),
-        TransientStudy(t0=0.0, t1=0.01, dt=0.01),
+        TimeWindow(t0=0.0, t1=0.01, dt=0.01),
         np.ones(2),
         time_tol=0.01,
         step_control=StepTolerance(rtol=1e-5, atol=1e-10),
@@ -166,7 +163,7 @@ def test_an_unresolvable_step_raises_at_h_min_with_the_state_reached() -> None:
     with pytest.raises(RuntimeError, match='still .* over its local-error tolerance at h_min'):
         integrate_transient(
             _UndeclaredStep(),
-            TransientStudy(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2),
+            TimeWindow(t0=0.0, t1=1.0, dt=0.1, integrator=IntegratorKind.BDF2),
             np.zeros(1),
             step_control=StepTolerance(rtol=1e-8, atol=1e-10, h_min=1e-3),
         )

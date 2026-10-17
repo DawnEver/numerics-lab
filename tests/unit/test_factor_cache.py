@@ -19,8 +19,7 @@ import pytest
 from numpy.typing import NDArray
 from scipy.sparse import csr_matrix
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import DerivativeWeights, IntegratorKind
+from motronics.gauss.formulation import DerivativeWeights, IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import factor_reuse, integrate_transient
 from motronics.gauss.time_integrators.factor_reuse import FactorCache
 from motronics.gauss.time_integrators.march import _default_solve
@@ -56,8 +55,8 @@ class _NoKeySpring(_SpringBase):
     """The same physics WITHOUT the reuse seam -- the pre-W6 problem shape (hamilton today)."""
 
 
-def _study(dt: float = 0.05, t1: float = 1.0, integrator=IntegratorKind.BDF2) -> TransientStudy:
-    return TransientStudy(t0=0.0, t1=t1, dt=dt, integrator=integrator)
+def _study(dt: float = 0.05, t1: float = 1.0, integrator=IntegratorKind.BDF2) -> TimeWindow:
+    return TimeWindow(t0=0.0, t1=t1, dt=dt, integrator=integrator)
 
 
 def _march(problem, study, **kwargs):

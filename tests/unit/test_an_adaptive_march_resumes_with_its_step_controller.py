@@ -13,8 +13,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import StepTolerance, integrate_transient
 from motronics.gauss.time_integrators.checkpoint import (
     TransientCheckpoint,
@@ -46,7 +45,7 @@ class _Killed(RuntimeError):
 def _march(t0, integrator, *, tol=_TOL, **checkpoint):
     return integrate_transient(
         _Duffing(),
-        TransientStudy(t0=t0, t1=6.0, dt=0.2, integrator=integrator),
+        TimeWindow(t0=t0, t1=6.0, dt=0.2, integrator=integrator),
         np.array([0.5, 0.0]),
         max_newton=30,
         tol=1e-12,

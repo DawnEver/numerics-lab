@@ -14,8 +14,7 @@ import json
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import Hold, SampledTask, integrate_explicit_sampled, integrate_sampled
 from motronics.gauss.time_integrators.checkpoint import read_checkpoint_file, write_checkpoint_file
 from motronics.gauss.time_integrators.waveform_relaxation import waveform_relaxation
@@ -73,7 +72,7 @@ def _explicit(pi, t0, u0, **checkpoint):
 def _implicit(pi, t0, u0, **checkpoint):
     return integrate_sampled(
         _Plant(pi.out),
-        TransientStudy(t0=t0, t1=_T1, dt=_DT, integrator=IntegratorKind.BDF2),
+        TimeWindow(t0=t0, t1=_T1, dt=_DT, integrator=IntegratorKind.BDF2),
         u0,
         [SampledTask(_TS, pi.update)],
         task_history=pi,
@@ -158,7 +157,7 @@ def test_a_checkpointed_march_with_tasks_but_no_task_history_refuses(name):
         else:
             integrate_sampled(
                 _Plant(pi.out),
-                TransientStudy(t0=0.0, t1=_T1, dt=_DT, integrator=IntegratorKind.BDF1),
+                TimeWindow(t0=0.0, t1=_T1, dt=_DT, integrator=IntegratorKind.BDF1),
                 np.zeros(1),
                 [SampledTask(_TS, pi.update)],
                 checkpoint_key=_KEY,

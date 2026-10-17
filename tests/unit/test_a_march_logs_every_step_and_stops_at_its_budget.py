@@ -13,8 +13,7 @@ import json
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import BudgetExceeded, RunBudget, StepTolerance, integrate_transient
 
 
@@ -36,7 +35,7 @@ class _Ramp:
         return np.atleast_2d(weights.alpha1.real)
 
 
-_STUDY = TransientStudy(t0=0.0, t1=0.5, dt=0.1, integrator=IntegratorKind.BDF2)
+_STUDY = TimeWindow(t0=0.0, t1=0.5, dt=0.1, integrator=IntegratorKind.BDF2)
 
 
 def _records(stream: io.StringIO) -> list[dict]:

@@ -12,8 +12,7 @@ import math
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import (
     BudgetExceeded,
     Hold,
@@ -41,7 +40,7 @@ def test_segment_step_limits_resolve_nonuniform_intervals_without_changing_clock
 
     sol = integrate_sampled(
         _RC(lambda _t: np.ones(1)),
-        TransientStudy(t0=0.0, t1=0.125, dt=0.02, integrator=IntegratorKind.BDF1),
+        TimeWindow(t0=0.0, t1=0.125, dt=0.02, integrator=IntegratorKind.BDF1),
         np.zeros(1),
         [ScheduledTask([0.0, 0.025, 0.075], lambda t, _u: fired.append(t))],
         segment_step_limit=limit,
@@ -59,7 +58,7 @@ def test_segment_step_limits_refuse_invalid_resolution(limit):
     with pytest.raises(ValueError, match='segment step limit'):
         integrate_sampled(
             _RC(lambda _t: np.ones(1)),
-            TransientStudy(t0=0.0, t1=0.1, dt=0.01),
+            TimeWindow(t0=0.0, t1=0.1, dt=0.01),
             np.zeros(1),
             [],
             segment_step_limit=lambda _a, _b: limit,
@@ -78,7 +77,7 @@ def test_an_explicit_nonuniform_clock_holds_between_its_actual_hits() -> None:
     grid[:] = 99.0  # The schedule owns its declaration, not a caller's mutable buffer.
     solution = integrate_sampled(
         _RC(lambda _t: np.array([hold.value])),
-        TransientStudy(t0=0.0, t1=0.125, dt=0.01, integrator=IntegratorKind.TR_BDF2),
+        TimeWindow(t0=0.0, t1=0.125, dt=0.01, integrator=IntegratorKind.TR_BDF2),
         np.zeros(1),
         [task],
         step_control=StepTolerance(rtol=1e-12, atol=1e-14),
@@ -106,7 +105,7 @@ def test_explicit_and_periodic_tasks_share_priority_and_exact_window() -> None:
     ]
     integrate_sampled(
         _RC(lambda _t: np.zeros(1)),
-        TransientStudy(t0=0.05, t1=0.1, dt=0.01),
+        TimeWindow(t0=0.05, t1=0.1, dt=0.01),
         np.zeros(1),
         tasks,
     )
@@ -142,7 +141,7 @@ def test_the_plant_sees_the_held_value_and_matches_the_exact_zoh_answer() -> Non
     def sample(t, _u):
         hold.value = math.sin(_W * t)
 
-    study = TransientStudy(t0=0.0, t1=1.0, dt=_TS, integrator=IntegratorKind.TR_BDF2)
+    study = TimeWindow(t0=0.0, t1=1.0, dt=_TS, integrator=IntegratorKind.TR_BDF2)
     tol = StepTolerance(rtol=1e-9, atol=1e-11)
     sol = integrate_sampled(
         _RC(lambda _t: np.array([hold.value])), study, np.zeros(1), [SampledTask(_TS, sample)], step_control=tol
@@ -165,7 +164,7 @@ def test_an_integer_ratio_rate_transition_reads_the_fast_value_of_its_own_instan
         seen.append((t, rt.target.value))
 
     tasks = [rt.task(), SampledTask(3.0, slow), SampledTask(1.0, fast)]
-    integrate_sampled(_RC(lambda _t: np.zeros(1)), TransientStudy(t0=0.0, t1=9.0, dt=1.0), np.zeros(1), tasks)
+    integrate_sampled(_RC(lambda _t: np.zeros(1)), TimeWindow(t0=0.0, t1=9.0, dt=1.0), np.zeros(1), tasks)
     # fastest clock first; same-clock tasks in declaration order (the latch, then its reader)
     assert seen == [(0.0, 0.0), (3.0, 3.0), (6.0, 6.0)]
 
@@ -176,14 +175,14 @@ def test_a_declared_causal_priority_precedes_fastest_clock_order() -> None:
         SampledTask(1.0, lambda t, _u: fired.append(('inner', t))),
         SampledTask(2.0, lambda t, _u: fired.append(('outer', t)), priority=-1),
     ]
-    integrate_sampled(_RC(lambda _t: np.zeros(1)), TransientStudy(t0=0.0, t1=3.0, dt=0.1), np.zeros(1), tasks)
+    integrate_sampled(_RC(lambda _t: np.zeros(1)), TimeWindow(t0=0.0, t1=3.0, dt=0.1), np.zeros(1), tasks)
     assert fired == [('outer', 0.0), ('inner', 0.0), ('inner', 1.0), ('outer', 2.0), ('inner', 2.0)]
 
 
 def test_a_non_integer_ratio_shares_one_grid() -> None:
     fired: dict[float, list[float]] = {2.0: [], 3.0: []}
     tasks = [SampledTask(p, lambda t, _u, p=p: fired[p].append(t)) for p in (2.0, 3.0)]
-    sol = integrate_sampled(_RC(lambda _t: np.zeros(1)), TransientStudy(t0=0.0, t1=7.0, dt=1.0), np.zeros(1), tasks)
+    sol = integrate_sampled(_RC(lambda _t: np.zeros(1)), TimeWindow(t0=0.0, t1=7.0, dt=1.0), np.zeros(1), tasks)
     assert fired[2.0] == [0.0, 2.0, 4.0, 6.0]
     assert fired[3.0] == [0.0, 3.0, 6.0]
     assert {0.0, 2.0, 3.0, 4.0, 6.0, 7.0} <= set(np.round(sol.times, 12))
@@ -195,7 +194,7 @@ def test_float_roundoff_cannot_fire_a_coincident_clock_twice() -> None:
         SampledTask(0.1, lambda t, _u: fast.append(t)),
         SampledTask(0.3, lambda t, _u: slow.append(t)),
     ]
-    integrate_sampled(_RC(lambda _t: np.zeros(1)), TransientStudy(t0=0.0, t1=0.7, dt=0.1), np.zeros(1), tasks)
+    integrate_sampled(_RC(lambda _t: np.zeros(1)), TimeWindow(t0=0.0, t1=0.7, dt=0.1), np.zeros(1), tasks)
     np.testing.assert_allclose(fast, np.arange(7) * 0.1, atol=1e-15, rtol=0)
     np.testing.assert_allclose(slow, [0.0, 0.3, 0.6], atol=1e-15, rtol=0)
 
@@ -207,7 +206,7 @@ def test_close_but_distinct_clock_offsets_are_not_merged() -> None:
         SampledTask(0.3, lambda t, _u: first.append(t)),
         SampledTask(0.3, lambda t, _u: delayed.append(t), offset=offset),
     ]
-    sol = integrate_sampled(_RC(lambda _t: np.zeros(1)), TransientStudy(t0=0.0, t1=0.4, dt=0.1), np.zeros(1), tasks)
+    sol = integrate_sampled(_RC(lambda _t: np.zeros(1)), TimeWindow(t0=0.0, t1=0.4, dt=0.1), np.zeros(1), tasks)
     np.testing.assert_array_equal(first, [0.0, 0.3])
     np.testing.assert_array_equal(delayed, [offset, 0.3 + offset])
     assert offset in sol.times and 0.3 + offset in sol.times
@@ -217,7 +216,7 @@ def test_a_clock_does_not_fire_before_its_activation_offset() -> None:
     fired = []
     sol = integrate_sampled(
         _RC(lambda _t: np.zeros(1)),
-        TransientStudy(t0=0.0, t1=0.4, dt=0.1),
+        TimeWindow(t0=0.0, t1=0.4, dt=0.1),
         np.zeros(1),
         [SampledTask(0.1, lambda t, _u: fired.append(t), offset=0.2)],
     )
@@ -294,7 +293,7 @@ def test_a_nonzero_study_start_cannot_schedule_a_task_in_its_past() -> None:
     fired = []
     sol = integrate_sampled(
         _RC(lambda _t: np.zeros(1)),
-        TransientStudy(t0=start, t1=0.3, dt=0.01),
+        TimeWindow(t0=start, t1=0.3, dt=0.01),
         np.zeros(1),
         [SampledTask(0.1, lambda t, _u: fired.append(t))],
     )
@@ -313,7 +312,7 @@ def test_sample_hits_preserve_continuous_velocity_and_acceleration(kind) -> None
 
     sol = integrate_sampled(
         Oscillator(),
-        TransientStudy(t0=0.0, t1=1.0, dt=0.001, integrator=kind),
+        TimeWindow(t0=0.0, t1=1.0, dt=0.001, integrator=kind),
         np.ones(1),
         [SampledTask(0.1, lambda _t, _u: None)],
         v0=np.zeros(1),
@@ -334,7 +333,7 @@ def test_the_budget_covers_all_segments_and_discrete_task_time(monkeypatch) -> N
     with pytest.raises(BudgetExceeded, match='wall') as info:
         integrate_sampled(
             _RC(lambda _t: np.zeros(1)),
-            TransientStudy(t0=0.0, t1=0.5, dt=0.1),
+            TimeWindow(t0=0.0, t1=0.5, dt=0.1),
             np.zeros(1),
             [SampledTask(0.1, costly_sample)],
             budget=RunBudget(wall_seconds=1.0),
@@ -364,7 +363,7 @@ def test_consistent_sample_restart_recomputes_the_rate_after_the_hold_changes(mo
     monkeypatch.setattr(multirate, 'integrate_transient', record)
     sol = integrate_sampled(
         Plant(),
-        TransientStudy(t0=0.0, t1=0.25, dt=0.01, integrator=IntegratorKind.TR_BDF2),
+        TimeWindow(t0=0.0, t1=0.25, dt=0.01, integrator=IntegratorKind.TR_BDF2),
         np.zeros(1),
         [SampledTask(0.1, lambda t, _u: setattr(drive, 'value', 1.0 + t))],
         consistent_start=True,
@@ -382,7 +381,7 @@ def test_first_order_initialization_refuses_second_order_before_firing_tasks(kin
     with pytest.raises(ValueError, match='first-order'):
         integrate_sampled(
             None,
-            TransientStudy(t0=0.0, t1=0.1, dt=0.01, integrator=kind),
+            TimeWindow(t0=0.0, t1=0.1, dt=0.01, integrator=kind),
             np.zeros(1),
             [SampledTask(0.1, lambda _t, _u: fired.append(True))],
             consistent_start=True,
@@ -409,7 +408,7 @@ def test_a_consistent_sample_restart_re_solves_the_algebraic_state_a_held_input_
     state = np.zeros(2)
     sol = integrate_sampled(
         Plant(),
-        TransientStudy(t0=0.0, t1=0.2, dt=0.01, integrator=IntegratorKind.TR_BDF2),
+        TimeWindow(t0=0.0, t1=0.2, dt=0.01, integrator=IntegratorKind.TR_BDF2),
         state,
         [ScheduledTask([0.0, 0.1], lambda t, _u: held.__setitem__(0, 1.0 + 10.0 * t))],
         consistent_start=True,

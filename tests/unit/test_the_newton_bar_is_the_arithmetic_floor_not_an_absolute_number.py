@@ -29,8 +29,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import integrate_transient
 from motronics.gauss.time_integrators._forms import residual_floor
 from motronics.laplace.circuit.core.build import CircuitBuilder
@@ -54,7 +53,7 @@ def _linear_rl(volts: float):
 
 
 def _march(volts: float):
-    study = TransientStudy(t0=0.0, t1=2e-3, dt=1e-5, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=2e-3, dt=1e-5, integrator=IntegratorKind.BDF2)
     return _linear_rl(volts).solve_transient(study)
 
 
@@ -151,7 +150,7 @@ class _RootlessProblem:
 @pytest.mark.parametrize('offset', [1.0, 1.0e4, 1.0e8])
 def test_a_planted_divergence_still_reports_not_converged_at_every_scale(offset: float) -> None:
     """The bar must REFUSE, at every scale, and the refusal must be far above the floor."""
-    study = TransientStudy(t0=0.0, t1=5e-3, dt=1e-3, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=5e-3, dt=1e-3, integrator=IntegratorKind.BDF2)
     sol = integrate_transient(_RootlessProblem(offset), study, np.array([1.0]), max_newton=12, on_nonconverged='label')
     assert sol.nonconverged_times, (
         f'offset {offset:.0e}: a residual bounded below by {offset:.0e} was labelled converged '
@@ -169,7 +168,7 @@ def test_the_planted_stall_is_orders_above_its_own_floor() -> None:
     orders above the floor that would have excused it, so the fix has margin on both sides.
     """
     offset = 1.0e4
-    study = TransientStudy(t0=0.0, t1=5e-3, dt=1e-3, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=5e-3, dt=1e-3, integrator=IntegratorKind.BDF2)
     problem = _RootlessProblem(offset)
     sol = integrate_transient(problem, study, np.array([1.0]), max_newton=12, on_nonconverged='label')
     worst_u = np.array([max(abs(float(x[0])) for x in sol.states)])
@@ -258,7 +257,7 @@ def test_a_step_stalled_at_its_floor_stops_rather_than_exhausting_the_ceiling() 
     passed. Iterating on a residual that is already rounding changes nothing it can mean.
     """
     problem = _RootAtTheFloor(1.0e4)
-    study = TransientStudy(t0=0.0, t1=1e-3, dt=1e-3, integrator=IntegratorKind.BDF1)
+    study = TimeWindow(t0=0.0, t1=1e-3, dt=1e-3, integrator=IntegratorKind.BDF1)
     sol = integrate_transient(problem, study, np.array([0.0]), max_newton=50, tol=0.0)
     assert sol.floor_converged_times == [1e-3]
     assert sol.nonconverged_times == []

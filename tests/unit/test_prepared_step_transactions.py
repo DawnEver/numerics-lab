@@ -6,8 +6,7 @@ from dataclasses import dataclass, replace
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import (
     BDF1Integrator,
     GeneralizedAlphaIntegrator,
@@ -225,7 +224,7 @@ def test_prepared_cut_retains_actual_stage_clock_and_explicit_endpoint_side(kind
 @pytest.mark.parametrize('kind', [IntegratorKind.BDF1, IntegratorKind.BDF2, IntegratorKind.TR_BDF2])
 def test_prepared_stages_match_independent_full_system(kind):
     owner = PreparedOwner()
-    study = TransientStudy(0.0, 0.7, 0.1, kind)
+    study = TimeWindow(0.0, 0.7, 0.1, kind)
     kwargs = {'max_newton': 3, 'step_times': [0.0, 0.1, 0.23, 0.3, 0.55, 0.7]}
     actual = integrate_transient(owner, study, np.zeros(1), v0=np.ones(1), **kwargs)
     expected = integrate_transient(FullProblem(), study, np.zeros(2), v0=np.array([1.0, 0.0]), **kwargs)
@@ -254,12 +253,12 @@ def test_copied_numerical_state_carries_explicit_speculative_parent():
 @pytest.mark.parametrize('kind', [IntegratorKind.BDF2, IntegratorKind.TR_BDF2])
 def test_checkpoint_restores_actual_hidden_history_not_an_opaque_token(kind):
     owner = PreparedOwner()
-    study = TransientStudy(0.0, 0.8, 0.1, kind)
+    study = TimeWindow(0.0, 0.8, 0.1, kind)
     whole = integrate_transient(owner, study, np.zeros(1), v0=np.ones(1), max_newton=3)
     first_owner = PreparedOwner()
     first = integrate_transient(
         first_owner,
-        TransientStudy(0.0, 0.4, 0.1, kind),
+        TimeWindow(0.0, 0.4, 0.1, kind),
         np.zeros(1),
         v0=np.ones(1),
         max_newton=3,
@@ -271,7 +270,7 @@ def test_checkpoint_restores_actual_hidden_history_not_an_opaque_token(kind):
     resumed_owner = PreparedOwner()
     resumed = integrate_transient(
         resumed_owner,
-        TransientStudy(0.4, 0.8, 0.1, kind),
+        TimeWindow(0.4, 0.8, 0.1, kind),
         np.zeros(1),
         restart=checkpoint,
         checkpoint_key='prepared-inner',
@@ -291,7 +290,7 @@ def test_checkpoint_restores_actual_hidden_history_not_an_opaque_token(kind):
 
 def test_event_probes_never_commit_and_real_restart_preserves_hidden_state():
     owner, full = PreparedOwner(), FullProblem()
-    study = TransientStudy(0.0, 0.8, 0.2, IntegratorKind.BDF2)
+    study = TimeWindow(0.0, 0.8, 0.2, IntegratorKind.BDF2)
 
     def event(_u, t):
         return t - 0.31
@@ -326,7 +325,7 @@ def test_refinement_accepts_earlier_midpoint_after_later_speculative_probe():
     owner = PreparedOwner()
     actual = integrate_transient(
         owner,
-        TransientStudy(0.0, 0.4, 0.2),
+        TimeWindow(0.0, 0.4, 0.2),
         np.zeros(1),
         max_newton=3,
         refine=1e-8,
@@ -358,7 +357,7 @@ def test_second_tr_stage_exception_discards_first_stage_without_a_commit():
 
     owner = FailingOwner()
     with pytest.raises(ArithmeticError):
-        integrate_transient(owner, TransientStudy(0.0, 0.2, 0.2, IntegratorKind.TR_BDF2), np.zeros(1), max_newton=3)
+        integrate_transient(owner, TimeWindow(0.0, 0.2, 0.2, IntegratorKind.TR_BDF2), np.zeros(1), max_newton=3)
     assert owner.attempts[0].aborted and len(owner.attempts[0].selected) == 1
     assert owner.inner is None and not owner.accepted and not owner.material_commits
 
@@ -385,7 +384,7 @@ def test_nonconverged_macro_candidate_is_rejected_when_march_raises():
 
     owner = FailingOwner()
     with pytest.raises(StepNotConverged):
-        integrate_transient(owner, TransientStudy(0.0, 0.2, 0.2), np.zeros(1), max_newton=2)
+        integrate_transient(owner, TimeWindow(0.0, 0.2, 0.2), np.zeros(1), max_newton=2)
     assert len(owner.rejected) == 1 and not owner.accepted and not owner.material_commits
     assert owner.inner is None
 
@@ -436,7 +435,7 @@ def test_checkpoint_refuses_prepared_owner_without_real_committed_history():
     with pytest.raises(ValueError, match='committed hidden-history owner'):
         integrate_transient(
             StatelessPrepared(),
-            TransientStudy(0.0, 0.2, 0.2),
+            TimeWindow(0.0, 0.2, 0.2),
             np.zeros(1),
             checkpoint_key='missing',
         )
@@ -452,7 +451,7 @@ def test_bootstrap_halfstep_remarches_after_actual_midpoint_material_commit():
     owner = ChangingOwner()
     actual = integrate_transient(
         owner,
-        TransientStudy(0.0, 0.2, 0.2, IntegratorKind.BDF1),
+        TimeWindow(0.0, 0.2, 0.2, IntegratorKind.BDF1),
         np.zeros(1),
         max_newton=3,
         step_control=StepTolerance(atol=1.0, rtol=1.0),
@@ -473,7 +472,7 @@ def test_bootstrap_halfstep_remarches_after_actual_midpoint_material_commit():
 
 def test_scheduled_source_cut_restarts_actual_hidden_history_at_conserved_state():
     owner, full = PreparedOwner(), FullProblem()
-    study = TransientStudy(0.0, 0.6, 0.2, IntegratorKind.BDF2)
+    study = TimeWindow(0.0, 0.6, 0.2, IntegratorKind.BDF2)
     common = {'time_breakpoints': (0.31,), 'max_newton': 3}
     actual = integrate_transient(
         owner,
@@ -540,7 +539,7 @@ def test_reused_candidate_handles_refuse_and_abort_without_alias_commits(reuse):
     owner = ReusingOwner()
     kwargs = {'refine': 1e-8, 'h_min': 0.05} if reuse == 'pending' else {}
     with pytest.raises(ValueError, match='fresh.*candidate'):
-        integrate_transient(owner, TransientStudy(0.0, 0.6, 0.2), np.zeros(1), max_newton=3, **kwargs)
+        integrate_transient(owner, TimeWindow(0.0, 0.6, 0.2), np.zeros(1), max_newton=3, **kwargs)
     assert owner.attempts[-1].aborted
     assert len(owner.accepted) == len(owner.material_commits)
     assert not any(token in owner.rejected for token in owner.accepted)
@@ -564,7 +563,7 @@ def test_uniform_eec_owns_actual_canonical_endpoint_and_full_step_spacing(kind):
     endpoint = 7 * dt
     result = integrate_transient(
         clock,
-        TransientStudy(0.0, 0.35, dt, kind),
+        TimeWindow(0.0, 0.35, dt, kind),
         np.zeros(1),
         max_newton=3,
         eec_period=1.0,
@@ -580,7 +579,7 @@ def test_uniform_eec_owns_actual_canonical_endpoint_and_full_step_spacing(kind):
         assert t in [tick * dt for tick in range(1, 8)]
         expected = 1 / dt if kind is IntegratorKind.BDF1 or t == dt else 1.5 / dt
         assert slope == expected
-    normal = integrate_transient(UniformClock(), TransientStudy(0.0, 0.35, dt, kind), np.zeros(1), max_newton=3)
+    normal = integrate_transient(UniformClock(), TimeWindow(0.0, 0.35, dt, kind), np.zeros(1), max_newton=3)
     assert normal.times[-1] == 0.35 and normal.times[-1] != endpoint
     offgrid = endpoint
     for _ in range(5):
@@ -588,7 +587,7 @@ def test_uniform_eec_owns_actual_canonical_endpoint_and_full_step_spacing(kind):
     with pytest.raises(ValueError, match='uniform'):
         integrate_transient(
             UniformClock(),
-            TransientStudy(0.0, offgrid, dt, kind),
+            TimeWindow(0.0, offgrid, dt, kind),
             np.zeros(1),
             eec_period=1.0,
             eec_affine_first_order=True,
@@ -605,7 +604,7 @@ def test_source_breakpoint_retains_explicit_outgoing_rate():
 
     result = integrate_transient(
         Ramp(),
-        TransientStudy(0.0, 0.2, 0.1, IntegratorKind.TRAPEZOID),
+        TimeWindow(0.0, 0.2, 0.1, IntegratorKind.TRAPEZOID),
         np.zeros(1),
         v0=np.ones(1),
         time_breakpoints=(0.1,),
@@ -642,7 +641,7 @@ def test_event_without_outgoing_rate_uses_actual_tr_startup_not_incoming_slope(o
 
     result = integrate_transient(
         problem,
-        TransientStudy(0.0, 0.2, 0.1, IntegratorKind.TRAPEZOID),
+        TimeWindow(0.0, 0.2, 0.1, IntegratorKind.TRAPEZOID),
         np.zeros(1),
         v0=np.ones(1),
         event_fns=(lambda _u, t: t - 0.1,),
@@ -659,7 +658,7 @@ def test_event_projection_restarts_actual_hidden_owner_once():
     owner = PreparedOwner()
     integrate_transient(
         owner,
-        TransientStudy(0.0, 0.5, 0.2),
+        TimeWindow(0.0, 0.5, 0.2),
         np.zeros(1),
         max_newton=3,
         event_fns=(lambda _u, t: t - 0.31,),

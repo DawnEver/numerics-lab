@@ -3,8 +3,7 @@
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import EventSurface, integrate_transient
 
 
@@ -31,7 +30,7 @@ def test_event_probes_never_commit_and_handler_reads_the_actual_landing_history(
 
     solution = integrate_transient(
         problem,
-        TransientStudy(0, 1, 0.3, IntegratorKind.BDF2),
+        TimeWindow(0, 1, 0.3, IntegratorKind.BDF2),
         np.array([0.0]),
         event_fns=(EventSurface(lambda state, _time: float(state[0]) - 0.5, 1),),
         on_event=handle,

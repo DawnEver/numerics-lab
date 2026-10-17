@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import TransientStudy
+from motronics.gauss.formulation import TimeWindow
 from motronics.gauss.time_integrators import integrate_transient
 
 
@@ -22,7 +22,7 @@ def test_adjacent_observation_preserves_exact_breakpoint_callback_and_provenance
     callbacks = []
     result = integrate_transient(
         _Ramp(),
-        TransientStudy(t0=0.0, t1=0.5, dt=0.5, integrator='bdf1'),
+        TimeWindow(t0=0.0, t1=0.5, dt=0.5, integrator='bdf1'),
         np.zeros(1),
         time_breakpoints=(edge,),
         observation_times=(observation, 0.5),

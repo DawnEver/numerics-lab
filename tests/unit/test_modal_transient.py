@@ -3,8 +3,7 @@
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.modal_transient import integrate_modal_transient
 from motronics.gauss.time_integrators import integrate_transient
 
@@ -26,7 +25,7 @@ def test_full_basis_preserves_nonproportional_damping_and_dynamic_force():
         def jacobian(self, u, u_dot, u_ddot, t, weights):
             return weights.alpha0.real * k + weights.alpha1.real * c + weights.alpha2.real * m
 
-    study = TransientStudy(0.3, 0.8, 0.001, IntegratorKind.NEWMARK)
+    study = TimeWindow(0.3, 0.8, 0.001, IntegratorKind.NEWMARK)
     u0, v0 = np.array([0.2, -0.1]), np.array([0.1, 0.3])
     a0 = np.linalg.solve(m, force(study.t0) - k @ u0 - c @ v0)
     direct = integrate_transient(DirectProblem(), study, u0, v0=v0, a0=a0)
@@ -35,7 +34,7 @@ def test_full_basis_preserves_nonproportional_damping_and_dynamic_force():
 
 
 def test_callable_force_keeps_absolute_time_and_phase():
-    study = TransientStudy(0.3, 0.8, 0.001, IntegratorKind.NEWMARK)
+    study = TimeWindow(0.3, 0.8, 0.001, IntegratorKind.NEWMARK)
     amplitude, omega, phase = 0.5, 2.0, 0.4
     result = integrate_modal_transient(
         [[18.0]],
@@ -57,7 +56,7 @@ def test_dynamic_truncation_error_includes_load_after_initial_time():
         np.eye(2),
         np.zeros((2, 2)),
         lambda t: np.array([0.0, t]),
-        TransientStudy(0.0, 0.1, 0.01, IntegratorKind.NEWMARK),
+        TimeWindow(0.0, 0.1, 0.01, IntegratorKind.NEWMARK),
         n_modes=1,
     )
     assert result.load_projection_error == pytest.approx(1.0)
@@ -70,13 +69,13 @@ def test_nonfinite_callable_load_is_refused_at_evaluation_time():
             [[1.0]],
             [[0.0]],
             lambda t: np.array([0.0 if t == 0 else np.nan]),
-            TransientStudy(0.0, 0.1, 0.01, IntegratorKind.NEWMARK),
+            TimeWindow(0.0, 0.1, 0.01, IntegratorKind.NEWMARK),
             n_modes=1,
         )
 
 
 def test_all_modes_reproduce_a_decoupled_oscillator():
-    study = TransientStudy(0.0, 0.5, 0.0005, IntegratorKind.NEWMARK)
+    study = TimeWindow(0.0, 0.5, 0.0005, IntegratorKind.NEWMARK)
     result = integrate_modal_transient(
         np.diag([4.0, 18.0]), np.diag([1.0, 2.0]), np.zeros((2, 2)), np.zeros(2), study, n_modes=2, u0=np.ones(2)
     )
@@ -90,7 +89,7 @@ def test_truncated_modes_report_projection_loss():
         np.diag([1.0, 2.0, 3.0]),
         np.zeros((3, 3)),
         np.zeros(3),
-        TransientStudy(0.0, 0.1, 0.001, IntegratorKind.NEWMARK),
+        TimeWindow(0.0, 0.1, 0.001, IntegratorKind.NEWMARK),
         n_modes=1,
         u0=np.array([1.0, 1.0, 0.0]),
     )
@@ -104,7 +103,7 @@ def test_modal_damping_ratio_is_applied_in_mass_normalized_coordinates():
         np.array([[1.0]]),
         np.zeros((1, 1)),
         np.zeros(1),
-        TransientStudy(0.0, 0.5, 0.001, IntegratorKind.NEWMARK),
+        TimeWindow(0.0, 0.5, 0.001, IntegratorKind.NEWMARK),
         n_modes=1,
         u0=np.ones(1),
         damping_ratios=(1.0,),
@@ -119,7 +118,7 @@ def test_damping_definition_is_not_silently_double_counted():
             np.eye(1),
             np.eye(1),
             np.zeros(1),
-            TransientStudy(0.0, 1.0, 0.01, IntegratorKind.NEWMARK),
+            TimeWindow(0.0, 1.0, 0.01, IntegratorKind.NEWMARK),
             n_modes=1,
             damping_ratios=(0.1,),
         )
@@ -132,7 +131,7 @@ def test_modal_mass_must_be_positive_on_discarded_modes_too():
             np.diag([1.0, 2.0, -1.0]),
             np.zeros((3, 3)),
             np.zeros(3),
-            TransientStudy(0.0, 1.0, 0.01, IntegratorKind.NEWMARK),
+            TimeWindow(0.0, 1.0, 0.01, IntegratorKind.NEWMARK),
             n_modes=1,
         )
 
@@ -143,7 +142,7 @@ def test_velocity_truncation_is_measured_when_displacement_is_zero():
         np.eye(3),
         np.zeros((3, 3)),
         np.zeros(3),
-        TransientStudy(0.0, 0.1, 0.001, IntegratorKind.NEWMARK),
+        TimeWindow(0.0, 0.1, 0.001, IntegratorKind.NEWMARK),
         n_modes=1,
         v0=np.array([0.0, 1.0, 0.0]),
     )

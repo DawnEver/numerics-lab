@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 import motronics.gauss.time_integrators as runtime
-from motronics.contracts.spec.study_spec import TransientStudy
+from motronics.gauss.formulation import TimeWindow
 from motronics.gauss.time_integrators import _step
 
 
@@ -30,7 +30,7 @@ def test_adaptive_growth_uses_the_quadratic_predictor_discrepancy(monkeypatch):
     dt, atol = 0.1, 0.04
     solution = runtime.integrate_transient(
         QuadraticTrajectory(),
-        TransientStudy(0.0, 0.6, dt),
+        TimeWindow(0.0, 0.6, dt),
         np.zeros(1),
         initial_history=(np.array([dt * dt]), np.zeros(1)),
         curvature_atol=atol,
@@ -58,7 +58,7 @@ def test_quantized_adaptive_retries_keep_absolute_ticks_and_label_unmet_floor(mo
     origin, quantum = 0.37, 0.1
     solution = runtime.integrate_transient(
         QuadraticTrajectory(),
-        TransientStudy(origin, origin + 0.8, 0.2),
+        TimeWindow(origin, origin + 0.8, 0.2),
         np.array([origin**2]),
         initial_history=(np.array([(origin - 0.2) ** 2]), np.array([origin**2])),
         curvature_atol=0.001,
@@ -90,7 +90,7 @@ def test_quantized_floor_uses_ticks_not_subtraction_roundoff(monkeypatch):
     assert (origin + quantum) - origin > quantum
     solution = runtime.integrate_transient(
         QuadraticTrajectory(),
-        TransientStudy(origin, origin + 4 * quantum, quantum),
+        TimeWindow(origin, origin + 4 * quantum, quantum),
         np.array([origin**2]),
         initial_history=(np.array([(origin - quantum) ** 2]), np.array([origin**2])),
         curvature_atol=1e-30,
@@ -108,7 +108,7 @@ def test_quantized_adaptive_rejects_a_fractional_final_tick():
     with pytest.raises(ValueError, match='lattice'):
         runtime.integrate_transient(
             QuadraticTrajectory(),
-            TransientStudy(0.37, 0.72, 0.1),
+            TimeWindow(0.37, 0.72, 0.1),
             np.array([0.37**2]),
             curvature_atol=1e-6,
             timestep_quantum=0.1,
@@ -126,14 +126,14 @@ def test_quantized_adaptive_restart_retains_original_clock_and_history():
     }
     first = runtime.integrate_transient(
         QuadraticTrajectory(),
-        TransientStudy(origin, origin + 0.4, quantum),
+        TimeWindow(origin, origin + 0.4, quantum),
         np.array([origin**2]),
         initial_history=(np.array([(origin - quantum) ** 2]), np.array([origin**2])),
         **options,
     )
     resumed = runtime.integrate_transient(
         QuadraticTrajectory(),
-        TransientStudy(origin + 0.4, origin + 0.8, quantum),
+        TimeWindow(origin + 0.4, origin + 0.8, quantum),
         first.states[-1],
         restart=first.checkpoint,
         **options,
@@ -150,7 +150,7 @@ def test_accepted_quadratic_steps_obey_the_curvature_bar_without_an_lte_claim(dt
     atol = 0.015
     solution = runtime.integrate_transient(
         QuadraticTrajectory(),
-        TransientStudy(0.0, 0.6, dt),
+        TimeWindow(0.0, 0.6, dt),
         np.zeros(1),
         initial_history=(np.array([dt * dt]), np.zeros(1)),
         curvature_atol=atol,

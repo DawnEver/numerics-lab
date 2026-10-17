@@ -15,8 +15,7 @@ import numpy as np
 import pytest
 from scipy.linalg import expm
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import INTEGRATOR_REGISTRY, _step, integrate_transient
 
 
@@ -76,7 +75,7 @@ _CIRCUITS = {'rc': _rc, 'rl': _rl, 'rlc': _rlc}
 
 def _error(kind: IntegratorKind, circuit: str, dt: float) -> float:
     problem, u0, exact = _CIRCUITS[circuit]()
-    sol = integrate_transient(problem, TransientStudy(t0=0.0, t1=0.5, dt=dt, integrator=kind), u0)
+    sol = integrate_transient(problem, TimeWindow(t0=0.0, t1=0.5, dt=dt, integrator=kind), u0)
     return max(float(np.max(np.abs(u - exact(t)))) for t, u in zip(sol.times, sol.states, strict=True))
 
 
@@ -110,7 +109,7 @@ def test_tr_bdf2_is_l_stable_where_the_trapezoid_rings() -> None:
 
     def ratio(kind):
         sol = integrate_transient(
-            problem, TransientStudy(t0=0.0, t1=5.0, dt=1.0, integrator=kind), np.array([1.0]), v0=np.array([-1.0e4])
+            problem, TimeWindow(t0=0.0, t1=5.0, dt=1.0, integrator=kind), np.array([1.0]), v0=np.array([-1.0e4])
         )
         return float(sol.states[-1][0] / sol.states[-2][0])
 
@@ -129,6 +128,6 @@ def test_tr_bdf2_takes_two_solves_per_step_with_one_jacobian_weight(monkeypatch)
     monkeypatch.setattr(_step, '_solve_step', observe)
     problem, u0, _exact = _rl()
     v0 = np.array([1.0 / _L])
-    integrate_transient(problem, TransientStudy(t0=0.0, t1=0.4, dt=0.1, integrator=IntegratorKind.TR_BDF2), u0, v0=v0)
+    integrate_transient(problem, TimeWindow(t0=0.0, t1=0.4, dt=0.1, integrator=IntegratorKind.TR_BDF2), u0, v0=v0)
     assert len(weights) == 8
     assert np.allclose(weights, (2.0 + 2.0**0.5) / 0.1)

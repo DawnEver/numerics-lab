@@ -7,8 +7,7 @@ import numpy as np
 import pytest
 from tests.unit.gauss._helpers import _RampWithToggle
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import _step as _step_mod
 
 
@@ -43,7 +42,7 @@ def test_a_mutating_handler_retains_the_original_residual_side_once(kind):
 
     solved = events.integrate_transient(
         problem,
-        TransientStudy(t0=0.0, t1=0.5, dt=0.4, integrator=kind),
+        TimeWindow(t0=0.0, t1=0.5, dt=0.4, integrator=kind),
         np.zeros(1),
         max_newton=2,
         event_fns=(problem.event_fn, problem.event_fn),
@@ -63,7 +62,7 @@ def test_a_mutating_handler_retains_the_original_residual_side_once(kind):
 @pytest.mark.parametrize('cache_bytes', [0, 64 * 1024**2])
 def test_coincident_observers_reuse_exact_trial_but_preserve_states_rates_and_callbacks(monkeypatch, kind, cache_bytes):
     events = import_module('motronics.gauss.time_integrators.march')
-    study = TransientStudy(t0=0.0, t1=1.0, dt=0.4, integrator=kind)
+    study = TimeWindow(t0=0.0, t1=1.0, dt=0.4, integrator=kind)
 
     def march(count):
         problem = _RampWithToggle(0.3)
@@ -124,7 +123,7 @@ def test_coincident_observers_reuse_exact_trial_but_preserve_states_rates_and_ca
 def test_a_failed_trial_is_retried_not_exact_memoized(monkeypatch):
     events = import_module('motronics.gauss.time_integrators.march')
     problem = _RampWithToggle(0.3)
-    study = TransientStudy(t0=0.0, t1=0.4, dt=0.4, integrator=IntegratorKind.BDF1)
+    study = TimeWindow(t0=0.0, t1=0.4, dt=0.4, integrator=IntegratorKind.BDF1)
     original_step, original_locator = _step_mod._solve_step, events._locate_bracket
     inside_probe = False
     failed_time = None
@@ -172,7 +171,7 @@ def test_a_failed_trial_is_retried_not_exact_memoized(monkeypatch):
 def test_same_time_after_a_physical_handler_has_a_new_checkpoint_and_rate(monkeypatch, kind):
     events = import_module('motronics.gauss.time_integrators.march')
     problem = _RampWithToggle(0.25)
-    study = TransientStudy(t0=0.0, t1=1.0, dt=1.0, integrator=kind)
+    study = TimeWindow(t0=0.0, t1=1.0, dt=1.0, integrator=kind)
     original_locator = events._locate_bracket
     half_time_states = []
     handled = []

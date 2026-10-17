@@ -5,8 +5,7 @@ import pytest
 from tests.unit.gauss._helpers import _RampWithToggle
 from tests.unit.gauss.test_time_integrators import DecayProblem
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import integrate_transient
 
 
@@ -14,7 +13,7 @@ from motronics.gauss.time_integrators import integrate_transient
 def test_bdf2_rates_match_the_actual_equation_on_nonuniform_accepted_steps(adaptive):
     solution = integrate_transient(
         DecayProblem(2.0),
-        TransientStudy(t0=0.0, t1=0.37, dt=0.1, integrator=IntegratorKind.BDF2),
+        TimeWindow(t0=0.0, t1=0.37, dt=0.1, integrator=IntegratorKind.BDF2),
         np.array([1.0]),
         adaptive=adaptive,
     )
@@ -29,7 +28,7 @@ def test_event_probes_are_not_published_and_the_rate_keeps_its_restart():
     problem = _RampWithToggle(level=0.37)
     solution = integrate_transient(
         problem,
-        TransientStudy(t0=0.0, t1=1.0, dt=0.2, integrator=IntegratorKind.BDF2),
+        TimeWindow(t0=0.0, t1=1.0, dt=0.2, integrator=IntegratorKind.BDF2),
         np.array([0.0]),
         event_fns=[problem.event_fn],
         on_event=lambda _k, _t, _u: problem.toggle(),

@@ -14,8 +14,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import integrate_transient
 
 
@@ -70,7 +69,7 @@ def test_the_eventful_march_REJECTS_a_step_its_newton_could_not_take() -> None:
     size ever came into it -- leaving the test green with the feature under test never exercised.
     """
     dt, t1 = 1.0e-3, 2.0e-2
-    study = TransientStudy(t0=0.0, t1=t1, dt=dt, integrator=IntegratorKind.BDF1)
+    study = TimeWindow(t0=0.0, t1=t1, dt=dt, integrator=IntegratorKind.BDF1)
     common = {
         'event_fns': (_SharpLayer.never,),
         'max_newton': 6,
@@ -120,7 +119,7 @@ def test_a_step_rejected_and_then_re_landed_converged_is_not_labelled_non_conver
     -- so the run was labelled `coarse` with every landed step solved.
     """
     dt = 0.1
-    study = TransientStudy(t0=0.0, t1=0.3, dt=dt, integrator=IntegratorKind.BDF1)
+    study = TimeWindow(t0=0.0, t1=0.3, dt=dt, integrator=IntegratorKind.BDF1)
     common = {
         'event_fns': (_SharpLayer.never,),
         'max_newton': 4,
@@ -165,7 +164,7 @@ def test_an_event_inside_a_quadratic_ramp_costs_no_accuracy_at_all() -> None:
             return -1.0 if self.fired else float(u[0]) - 0.32
 
     problem = _Quadratic()
-    study = TransientStudy(t0=0.0, t1=2.0, dt=0.3, integrator=IntegratorKind.BDF2)
+    study = TimeWindow(t0=0.0, t1=2.0, dt=0.3, integrator=IntegratorKind.BDF2)
     # The form itself, on an exact history, steps a quadratic exactly (direct check, u(0.75)).
     from motronics.gauss.time_integrators._forms import IntegratorState
     from motronics.gauss.time_integrators._integrators import _bdf2_variable_form

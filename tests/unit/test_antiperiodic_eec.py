@@ -3,8 +3,7 @@
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import integrate_transient
 from motronics.gauss.time_integrators.periodic import explicit_error_correction
 
@@ -35,7 +34,7 @@ def test_analytic_discrete_antiperiodic_state_is_a_correction_fixed_point():
 
 
 def test_half_period_jump_is_not_reported_as_a_physical_endpoint():
-    study = TransientStudy(0.0, 0.55, 0.05, IntegratorKind.BDF1)
+    study = TimeWindow(0.0, 0.55, 0.05, IntegratorKind.BDF1)
     plain = integrate_transient(Affine(), study, np.ones(1), max_newton=20)
     corrected = integrate_transient(
         Affine(), study, np.ones(1), max_newton=20, eec_period=0.5, eec_sign=-1, eec_affine_first_order=True
@@ -49,14 +48,14 @@ def test_half_period_jump_is_not_reported_as_a_physical_endpoint():
 
 def test_half_period_bdf2_eec_accepts_a_uniform_history_projection():
     result = integrate_transient(
-        Affine(), TransientStudy(0.0, 1.0, 0.05), np.ones(1), eec_period=0.5, eec_sign=-1, eec_affine_first_order=True
+        Affine(), TimeWindow(0.0, 1.0, 0.05), np.ones(1), eec_period=0.5, eec_sign=-1, eec_affine_first_order=True
     )
     assert result.converged
 
 
 def test_forced_antiperiodic_march_accelerates_the_actual_discrete_solution():
     dt = 0.05
-    study = TransientStudy(0.0, 1.5, dt, IntegratorKind.BDF1)
+    study = TimeWindow(0.0, 1.5, dt, IntegratorKind.BDF1)
     phasor = 1 / (Affine.stiffness + Affine.mass * (1 - np.exp(-2j * np.pi * dt)) / dt)
     seed = np.array([phasor.real + 1.0])
     plain = integrate_transient(Affine(), study, seed, max_newton=20)

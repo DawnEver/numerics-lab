@@ -5,8 +5,7 @@ import json
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import EventSurface, StepNotConverged, _step, integrate_transient
 from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint
 
@@ -52,7 +51,7 @@ def test_exact_clock_landing_after_state_event_is_committed_before_checkpoint():
 
     whole = integrate_transient(
         problem,
-        TransientStudy(0, 1, 0.3, IntegratorKind.BDF2),
+        TimeWindow(0, 1, 0.3, IntegratorKind.BDF2),
         np.zeros(1),
         event_fns=(EventSurface(problem.observe, 1),),
         on_event=problem.handle,
@@ -76,7 +75,7 @@ def test_fresh_json_resume_after_event_keeps_right_history_and_unfinished_cell()
     captured = []
     whole = integrate_transient(
         original,
-        TransientStudy(0, 1, 0.3, IntegratorKind.BDF2),
+        TimeWindow(0, 1, 0.3, IntegratorKind.BDF2),
         np.array([0.0]),
         event_fns=(EventSurface(original.observe, 1),),
         on_event=original.handle,
@@ -92,7 +91,7 @@ def test_fresh_json_resume_after_event_keeps_right_history_and_unfinished_cell()
     fresh = _StoredRamp()
     resumed = integrate_transient(
         fresh,
-        TransientStudy(event_time, 1, 0.3, IntegratorKind.BDF2),
+        TimeWindow(event_time, 1, 0.3, IntegratorKind.BDF2),
         np.array(checkpoint.states[-1]),
         event_fns=(EventSurface(fresh.observe, 1),),
         on_event=fresh.handle,
@@ -118,7 +117,7 @@ def test_exhausted_step_cannot_be_persisted_as_accepted_locator_history():
     with pytest.raises(StepNotConverged):
         integrate_transient(
             Unreachable(),
-            TransientStudy(0, 1, 0.1, IntegratorKind.BDF1),
+            TimeWindow(0, 1, 0.1, IntegratorKind.BDF1),
             np.array([0.0]),
             checkpoint_key='unreachable',
             on_checkpoint=captured.append,
@@ -131,7 +130,7 @@ def test_live_locator_and_persisted_cursor_share_the_same_strict_step_policy(con
     with pytest.raises(ValueError, match='event checkpoint'):
         integrate_transient(
             _StoredRamp(),
-            TransientStudy(0, 1, 0.1, IntegratorKind.BDF1),
+            TimeWindow(0, 1, 0.1, IntegratorKind.BDF1),
             np.array([0.0]),
             **controls,
         )
@@ -149,7 +148,7 @@ def test_actual_event_step_and_checkpoint_preserve_the_declared_history_line_sea
     monkeypatch.setattr(_step, '_solve_step', observe)
     solution = integrate_transient(
         _StoredRamp(),
-        TransientStudy(0, 0.2, 0.1, IntegratorKind.BDF2),
+        TimeWindow(0, 0.2, 0.1, IntegratorKind.BDF2),
         np.array([0.0]),
         line_search=strategy,
         checkpoint_key='declared-ramp',

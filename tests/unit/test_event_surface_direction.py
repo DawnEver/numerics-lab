@@ -4,8 +4,7 @@ import numpy as np
 import pytest
 from tests.unit.gauss._helpers import _RampWithToggle
 
-from motronics.contracts.spec.study_spec import TransientStudy
-from motronics.gauss.formulation import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators import EventSurface, integrate_transient
 
 
@@ -15,7 +14,7 @@ def test_initial_zero_leaving_into_stay_region_does_not_fire(direction, slope):
     problem.slope = slope
     solution = integrate_transient(
         problem,
-        TransientStudy(0, 1, 0.3, IntegratorKind.BDF2),
+        TimeWindow(0, 1, 0.3, IntegratorKind.BDF2),
         np.array([0.0]),
         event_fns=(EventSurface(lambda state, _time: float(state[0]), direction),),
     )
@@ -28,7 +27,7 @@ def test_declared_rising_surface_still_locates_the_actual_later_crossing():
     problem = _RampWithToggle(level=0.5)
     solution = integrate_transient(
         problem,
-        TransientStudy(0, 1, 0.3, IntegratorKind.BDF2),
+        TimeWindow(0, 1, 0.3, IntegratorKind.BDF2),
         np.array([0.0]),
         event_fns=(EventSurface(problem.event_fn, 1),),
         on_event=lambda _index, _time, _state: problem.toggle(),
