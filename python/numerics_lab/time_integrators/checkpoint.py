@@ -5,7 +5,7 @@ import hashlib
 import itertools
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -489,8 +489,22 @@ FIXED_POINTS_OVER_A_MARCH: frozenset[str] = frozenset({
     'motronics.gauss.time_integrators.periodic_march:shoot_transient_cycle',
 })
 
-#: The sealed file envelope: the ONE on-disk form of a :class:`TransientCheckpoint`.
-CHECKPOINT_FILE_SCHEMA = 'motronics-transient-checkpoint/v1'
+#: The sealed file envelope's version: the ONE on-disk form of a :class:`TransientCheckpoint`.
+CHECKPOINT_FILE_SCHEMA_VERSION = 1
+_CHECKPOINT_FILE_PREFIX = 'motronics-transient-checkpoint/v'
+CHECKPOINT_FILE_SCHEMA = f'{_CHECKPOINT_FILE_PREFIX}{CHECKPOINT_FILE_SCHEMA_VERSION}'
+
+#: Older envelope version -> the step taking its sealed ``checkpoint`` mapping one version on
+#: (FORMATS-UPGRADE-ON-READ). Version 1 is the first, so none is owed yet.
+_UPGRADES: dict[int, Callable[[dict], dict]] = {}
+
+
+def _file_version(schema: object) -> int | None:
+    if isinstance(schema, str) and schema.startswith(_CHECKPOINT_FILE_PREFIX):
+        digits = schema.removeprefix(_CHECKPOINT_FILE_PREFIX)
+        if digits.isdecimal():
+            return int(digits)
+    return None
 
 
 def _seal(mapping) -> str:
@@ -516,19 +530,26 @@ def write_checkpoint_file(path, checkpoint: TransientCheckpoint) -> Path:
 
 
 def read_checkpoint_file(path) -> TransientCheckpoint:
-    """Read a sealed checkpoint; an edited, truncated or unsealed file is REFUSED, never resumed from."""
+    """Read a sealed checkpoint; an edited, truncated or unsealed file is REFUSED, never resumed from.
+
+    An OLDER envelope version is upgraded through :data:`_UPGRADES` after its seal is checked; only a
+    version this reader does not know (newer, or never issued) is refused.
+    """
     data = json.loads(Path(path).read_text(encoding='utf-8'))
-    if (
-        not isinstance(data, dict)
-        or set(data) != {'schema', 'sha256', 'checkpoint'}
-        or data['schema'] != CHECKPOINT_FILE_SCHEMA
-    ):
+    version = _file_version(data.get('schema')) if isinstance(data, dict) else None
+    if set(data or ()) != {'schema', 'sha256', 'checkpoint'} or version is None:
         msg = f'{path}: not a sealed {CHECKPOINT_FILE_SCHEMA} checkpoint file'
         raise ValueError(msg)
     if _seal(data['checkpoint']) != data['sha256']:
         msg = f'{path}: checkpoint content does not match its sha256 seal; the file was edited or corrupted'
         raise ValueError(msg)
-    return TransientCheckpoint.from_mapping(data['checkpoint'])
+    mapping = data['checkpoint']
+    while version in _UPGRADES:
+        mapping, version = _UPGRADES[version](mapping), version + 1
+    if version != CHECKPOINT_FILE_SCHEMA_VERSION:
+        msg = f'{path}: checkpoint schema {data["schema"]!r} is unknown to this reader ({CHECKPOINT_FILE_SCHEMA})'
+        raise ValueError(msg)
+    return TransientCheckpoint.from_mapping(mapping)
 
 
 def validate_history_json(value):
