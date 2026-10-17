@@ -31,7 +31,7 @@ import tracemalloc
 import numpy as np
 import pytest
 
-from motronics.gauss.linear.constraints import resolve_constraint_chains
+from motronics.gauss.linear.constrained.master_slave import resolve_constraint_chains
 
 _FREE_BASE = 1_000_000  # free-target ids live above every constrained id
 

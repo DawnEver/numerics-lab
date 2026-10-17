@@ -20,7 +20,7 @@
 //! is the property under test, and it is stated here rather than left for a reader to infer from
 //! a count that does not match.
 
-use contracts::sparse::{Csr, SparseError};
+use crate::sparse::{Csr, SparseError};
 use std::collections::BTreeMap;
 
 /// SSOR relaxation factor.

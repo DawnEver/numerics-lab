@@ -3,7 +3,7 @@
 import numpy as np
 from scipy.sparse import csr_matrix
 
-from motronics.contracts.runtime.ports import ResidualAssemblyBound
+from motronics.gauss.formulation import ResidualAssemblyBound
 
 __all__ = [
     'affine_residual_bound',

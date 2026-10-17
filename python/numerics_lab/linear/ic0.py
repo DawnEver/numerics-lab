@@ -4,8 +4,8 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import LinearOperator, splu
 
-from motronics.gauss.linear.dirichlet import apply_dirichlet_csr
-from motronics.gauss.linear.gauge import constraint_rows
+from motronics.gauss.linear.constrained.fixed_values import apply_dirichlet_csr
+from motronics.gauss.linear.constrained.null_space_pinning import constraint_rows
 
 __all__ = ['IC0Operator', 'ic0_preconditioner', 'iccg_system']
 

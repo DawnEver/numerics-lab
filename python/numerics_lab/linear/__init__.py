@@ -49,22 +49,22 @@ from scipy.sparse.linalg import (
 )
 
 from motronics.gauss.linear.amg import amg_preconditioner
-from motronics.gauss.linear.dirichlet import apply_dirichlet_csr, apply_dirichlet_triplets
-
-#: ``errors`` (2026-09-17) -- THE SEAM'S OWN ERROR TYPE, and a TRUE LEAF. Both the backends above
-#: and the direct-solve guard in ``refinement`` raise it, so it can sit in neither without a cycle;
-#: it imports nothing at all, which is what makes it legal here.
-from motronics.gauss.linear.errors import LinearSolveError
-from motronics.gauss.linear.gauge import (
+from motronics.gauss.linear.constrained.fixed_values import apply_dirichlet_csr, apply_dirichlet_triplets
+from motronics.gauss.linear.constrained.null_space_pinning import (
     constraint_rows,
     floats_on_a_constant,
     gauge_pin_floating_constant,
     gauge_pin_orphan_rows,
     orphan_rows,
 )
+from motronics.gauss.linear.constrained.pin_rows import pin_rows
+
+#: ``errors`` (2026-09-17) -- THE SEAM'S OWN ERROR TYPE, and a TRUE LEAF. Both the backends above
+#: and the direct-solve guard in ``refinement`` raise it, so it can sit in neither without a cycle;
+#: it imports nothing at all, which is what makes it legal here.
+from motronics.gauss.linear.errors import LinearSolveError
 from motronics.gauss.linear.ic0 import IC0Operator, ic0_preconditioner, iccg_system
 from motronics.gauss.linear.native_direct import native_solve
-from motronics.gauss.linear.pin_rows import pin_rows
 
 #: ``refinement`` (2026-09-17) -- THE DIRECT-SOLVE GUARD: the residual TRIGGER, the refinement
 #: VERDICT, the repair that turns an ill-conditioned-but-SOLVABLE system into its answer, and the

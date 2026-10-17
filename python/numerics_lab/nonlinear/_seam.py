@@ -55,10 +55,10 @@ class AssembledState:
         payload: equation-specific extras the CALLER reads back off the final state (e.g. the
             per-branch energy/flux/B for MEC); the strategy never inspects it.
         material_change: relative change of the IRREVERSIBLE material state this assembly's trial
-            implies (`gauss.nonlinear.material_state`); ``0`` for a system whose materials are all
+            implies (the caller's material loop); ``0`` for a system whose materials are all
             reversible. The material term of :func:`_has_converged`.
         local_values: snapshots of per-element fields, one array per independently
-            dimensioned quantity (B, voltage, current); Newton checks the worst element.
+            scaled quantity the caller chooses; Newton checks the worst element.
 
     """
 
@@ -98,7 +98,7 @@ class NonlinearSystem(Protocol):
     # a nodal vector potential. Requiring a shared PARAMETER NAME here would be a "declaration that
     # lies" for whichever implementer's name is more honest; positional-only makes the Protocol
     # match how it is actually consumed instead (found via pyright while composing the P3 seam --
-    # `gauss/evaluation.py` -- surfaced this pre-existing mismatch on both `_ReluctanceSystem` and
+    # `hamilton/discretizations/evaluation.py` -- surfaced this pre-existing mismatch on both `_ReluctanceSystem` and
     # `GalerkinSystem`).
     def initial_guess(self) -> np.ndarray: ...
     def assemble(self, x: np.ndarray, /) -> AssembledState: ...
@@ -198,7 +198,7 @@ class ResidualStoppingStrategy(Protocol):
 
 @runtime_checkable
 class RawStateSystem(Protocol):
-    """Optional pre-boundary-fold assembly capability required by ``nu-damped``."""
+    """Optional pre-boundary-fold assembly capability required by ``coefficient-damped``."""
 
     def raw_state(self, x: np.ndarray, /) -> tuple: ...
     def fold_raw(self, s_row, s_col, s_val, t_mat, total_energy, /) -> AssembledState: ...
@@ -492,7 +492,7 @@ def _has_converged(
     and the other eleven strategies never had it. Hence one function.
 
     "CONSULTED BY ALL OF THEM" IS A CLAIM, AND IT WAS FALSE FOR TWO YEARS OF READERS UNTIL
-    2026-09-06. `nu-damped` -- the FEA DEFAULT -- judged on its own energy/flux pair and never
+    2026-09-06. `coefficient-damped` -- the FEA DEFAULT -- judged on its own energy/flux pair and never
     called this, and `continuation` is an outer driver that delegates. The first is now fixed and
     the second is exempt by kind; both are DECLARED in
     `tests/architecture/domain/test_every_iteration_strategy_consults_the_one_rule.py`, which reads
@@ -712,7 +712,7 @@ def increment_ratio(x: np.ndarray, x_next: np.ndarray, /) -> float:
     # `require_physical_inductance` (eigenvalue -5.76e-05 H at 364.177 A; 19 % reciprocity residual
     # at 36.4 A). The solve was physically converged; the CRITERION was measuring a gauge mode.
     #
-    # ITS TWIN IS `gauss.linear.gauge.gauge_pin_constant_mode`, and the two are halves of one fix:
+    # ITS TWIN IS `gauss.linear.constrained.null_space_pinning.gauge_pin_constant_mode`, and the two are halves of one fix:
     # that one stops the LINEAR solve from having no reference at all, this one stops the NONLINEAR
     # criterion from counting the resulting drift as movement.
     #

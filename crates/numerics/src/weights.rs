@@ -1,12 +1,11 @@
-//! `DerivativeWeights` — the Rust mirror of `contracts/spec/analysis_formulation.py`.
+//! `DerivativeWeights` — the Rust mirror of the Python `formulation` module.
 //!
 //! The semi-discrete operator a jacobian assembles is `alpha0*K + alpha1*C + alpha2*M`
 //! (stiffness / damping / mass). A study supplies ONLY these three numbers; the operators
 //! themselves come from the compiled equation.
 //!
-//! It lives in the leaf for the reason the Python does: BOTH sides consume it. `gauss`'s
-//! integrators PRODUCE the triple for a time step, and the physics kernels CONSUME it when
-//! assembling the tangent. A type two layers talk through belongs to neither of them.
+//! The integrators PRODUCE the triple for a time step and the physics kernels CONSUME it when
+//! assembling the tangent, so the numerics leaf both depend on owns it.
 //!
 //! # Why the weights are complex
 //!
@@ -16,17 +15,15 @@
 //! collapse unstateable, so the complex form is carried even though every time integrator
 //! produces real values.
 //!
-//! `Complex64` is hand-written rather than pulled from `num-complex`: `contracts` is the leaf
-//! and depends on nothing, and what is needed here is addition, scaling and a real part.
+//! `Complex64` is hand-written rather than pulled from `num-complex`: what is needed here is
+//! addition, scaling and a real part.
 
 use std::fmt;
 use std::ops::{Add, Mul};
 
 /// Newmark's average-acceleration defaults — unconditionally stable and second order.
 ///
-/// Owned here, not re-declared per integrator. Until 2026-09-03 the Python's integrator module
-/// carried its own copy under a comment saying it "matched" the contracts defaults — an
-/// agreement nothing enforced. One home, one edit.
+/// Owned here, not re-declared per integrator. One home, one edit.
 pub const NEWMARK_BETA: f64 = 0.25;
 /// See [`NEWMARK_BETA`].
 pub const NEWMARK_GAMMA: f64 = 0.5;

@@ -15,8 +15,7 @@ from functools import lru_cache
 import numpy as np
 from numpy.typing import NDArray
 
-from motronics.contracts.spec.analysis_formulation import NEWMARK_BETA, NEWMARK_GAMMA, DerivativeWeights
-from motronics.contracts.spec.study_spec import IntegratorKind
+from motronics.gauss.formulation import NEWMARK_BETA, NEWMARK_GAMMA, DerivativeWeights, IntegratorKind
 from motronics.gauss.time_integrators._forms import IntegratorState, ITimeIntegrator, StepForm
 
 __all__ = [
@@ -258,10 +257,8 @@ class TRBDF2Integrator:
         return self.start(u, t, rate)
 
 
-# Newmark defaults: average-acceleration (unconditionally stable, second order). IMPORTED, not
-# re-declared: contracts is the dependency leaf and owns them, and until 2026-09-03 this module
-# carried its own copy under a comment saying it "matched" the contracts defaults -- an agreement
-# nothing enforced. Now one edit moves both.
+# Newmark defaults: average-acceleration (unconditionally stable, second order). IMPORTED from
+# `formulation`, which owns them, not re-declared here.
 
 
 class NewmarkIntegrator:

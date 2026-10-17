@@ -9,7 +9,7 @@ import numpy as np
 import scipy.sparse as sp
 from numpy.typing import NDArray
 
-from motronics.contracts.spec.analysis_formulation import (
+from motronics.gauss.formulation import (
     AffineConstraintProjectionProblem,
     AlternativeJacobianProblem,
     DerivativeWeights,

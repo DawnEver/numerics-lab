@@ -35,7 +35,7 @@
 //! `gauss.linear.native_direct` (SciPy stays the logged fallback). The refinement step makes this
 //! side agree with the Python BETTER than before, so the bars below are unchanged.
 
-use contracts::sparse::{Coo, Csr};
+use gauss::sparse::{Coo, Csr};
 use gauss::linear::{
     check_direct_residual, direct, solve_linear_system, LinearSolveError, LinearSolver,
     DIRECT_RESIDUAL_RTOL,

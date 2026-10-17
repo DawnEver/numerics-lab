@@ -1,6 +1,6 @@
 """The Picard family: ONE successive-substitution loop on two orthogonal axes.
 
-* WHAT is relaxed -- the iterate (``x += alpha*(solve - x)``) or the reluctivity (mix the raw
+* WHAT is relaxed -- the iterate (``x += alpha*(solve - x)``) or the coefficients (mix the raw
   secant arrays before the boundary fold, then ``x = solve``).
 * HOW alpha moves -- constant 1, or the damped schedule of :class:`_AlphaSchedule`.
 
@@ -33,8 +33,8 @@ from motronics.gauss.nonlinear._seam import (
 )
 
 __all__ = [
+    'CoefficientDampedPicardStrategy',
     'DampedPicardStrategy',
-    'NuRelaxationDampedPicardStrategy',
     'PicardStrategy',
 ]
 
@@ -97,23 +97,24 @@ class _AlphaSchedule:
 class _PicardLoop:
     """Successive substitution, parametrised by relax target and alpha schedule.
 
-    ``relax='nu'`` rests on one identity: every raw stiffness and remanence-source entry is
-    ``nu_e * <geometric factor>`` and assembly is linear, so mixing the per-element reluctivity
-    ``nu_k = (1-a) nu_(k-1) + a nu(B_k)`` equals mixing the assembled raw arrays
-    ``S_k = (1-a) S_(k-1) + a S(nu(B_k))`` (likewise the source). That holds ONLY for a GLOBAL
-    scalar alpha; a per-element alpha would break it silently. The mix must precede the boundary
-    fold, hence the ``raw_state``/``fold_raw`` requirement.
+    ``relax='coefficients'`` rests on one contract the system declares by exposing ``raw_state``:
+    every raw matrix and source entry is ``c_e * <fixed factor>`` for a per-entry coefficient
+    ``c_e`` and assembly is linear, so mixing the coefficients ``c_k = (1-a) c_(k-1) + a c(x_k)``
+    equals mixing the assembled raw arrays ``S_k = (1-a) S_(k-1) + a S(c(x_k))`` (likewise the
+    source). That holds ONLY for a GLOBAL scalar alpha; a per-entry alpha would break it silently.
+    The mix must precede the boundary fold, hence the ``raw_state``/``fold_raw`` requirement. A
+    magnetostatic system satisfies it with the reluctivity as ``c``; that reading is its own.
     """
 
     name: str
-    relax: Literal['x', 'nu']
+    relax: Literal['x', 'coefficients']
     damped: bool
 
     def solve(
         self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
     ) -> IterationResult:
         schedule = _AlphaSchedule(damped=self.damped)
-        assemble = self._nu_assembler(system, schedule) if self.relax == 'nu' else system.assemble
+        assemble = self._coefficient_assembler(system, schedule) if self.relax == 'coefficients' else system.assemble
         trend = _IncrementTrend()
         watch = _StagnationWatch(rtol_energy_pct)
         x = system.initial_guess()
@@ -142,8 +143,8 @@ class _PicardLoop:
             system.on_iteration(i, state, err, alpha, increment)
         return IterationResult(x=x, state=state, iterations=ran, converged=converged)
 
-    def _nu_assembler(self, system: NonlinearSystem, schedule: _AlphaSchedule):
-        """``assemble`` for ``relax='nu'``: raw arrays mixed with the current alpha, then folded."""
+    def _coefficient_assembler(self, system: NonlinearSystem, schedule: _AlphaSchedule):
+        """``assemble`` for ``relax='coefficients'``: raw arrays mixed with the current alpha, then folded."""
         inner = unwrap_system(system)
         if not isinstance(inner, RawStateSystem):
             named = type(inner).__name__
@@ -171,10 +172,10 @@ class DampedPicardStrategy(_PicardLoop):
     name, relax, damped = 'picard-damped', 'x', True
 
 
-class NuRelaxationDampedPicardStrategy(_PicardLoop):
-    """Relax the reluctivity on the damped schedule -- the FEA default."""
+class CoefficientDampedPicardStrategy(_PicardLoop):
+    """Relax the assembly coefficients on the damped schedule."""
 
-    name, relax, damped = 'nu-damped', 'nu', True
+    name, relax, damped = 'coefficient-damped', 'coefficients', True
 
 
 class PicardStrategy(_PicardLoop):

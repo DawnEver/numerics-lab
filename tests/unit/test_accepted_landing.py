@@ -6,7 +6,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
+from motronics.contracts.spec.study_spec import TransientStudy
+from motronics.gauss.formulation import IntegratorKind
 from motronics.gauss.time_integrators import get_integrator, integrate_transient
 from motronics.gauss.time_integrators import march as march_runtime
 from motronics.gauss.time_integrators._landing import AcceptedProjectionResult

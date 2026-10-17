@@ -16,10 +16,10 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.contracts.spec.analysis_formulation import DerivativeWeights
 from motronics.contracts.spec.study_spec import TransientStudy
 from motronics.core.materials.library import library
 from motronics.core.materials.registry import compile_selection
+from motronics.gauss.formulation import DerivativeWeights
 from motronics.gauss.nonlinear import (
     DEFAULT_ITERATION_STRATEGY,
     ITERATION_REGISTRY,

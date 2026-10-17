@@ -40,7 +40,7 @@ pub mod precond;
 #[cfg(test)]
 mod tests;
 
-use contracts::sparse::{Csr, SparseError};
+use crate::sparse::{Csr, SparseError};
 
 pub use constraints::{resolve_constraint_chains, Constraint, ConstraintError};
 pub use dirichlet::{apply_dirichlet_triplets, pin_rows, DirichletGroup};
@@ -219,7 +219,7 @@ pub fn requires_symmetric(name: &str) -> bool {
 
 /// Is this solver being run on an operator it assumes something FALSE about?
 ///
-/// `contracts::sparse::Csr::is_symmetric` says what a matrix IS; [`requires_symmetric`] says what
+/// `crate::sparse::Csr::is_symmetric` says what a matrix IS; [`requires_symmetric`] says what
 /// a solver ASSUMES. Neither alone can catch the failure that matters — a symmetric-only method
 /// on an asymmetric operator converges quietly to the wrong answer — so the comparison is given a
 /// name and a caller instead of living in two docstrings.

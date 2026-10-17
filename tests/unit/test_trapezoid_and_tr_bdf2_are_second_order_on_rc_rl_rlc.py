@@ -15,7 +15,8 @@ import numpy as np
 import pytest
 from scipy.linalg import expm
 
-from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
+from motronics.contracts.spec.study_spec import TransientStudy
+from motronics.gauss.formulation import IntegratorKind
 from motronics.gauss.time_integrators import INTEGRATOR_REGISTRY, _step, integrate_transient
 
 

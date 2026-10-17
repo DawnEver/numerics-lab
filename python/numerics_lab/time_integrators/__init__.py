@@ -3,11 +3,11 @@
 This is the temporal counterpart of ``gauss/nonlinear`` (iteration strategies) and
 ``gauss/linear`` (linear-solve backends): a registry of pluggable TIME INTEGRATORS that a
 transient study marches with, decoupled from any physics. The orthogonality hinge is
-:class:`~motronics.contracts.spec.analysis_formulation.DerivativeWeights`: an analysis formulation
+:class:`~motronics.gauss.formulation.DerivativeWeights`: an analysis formulation
 supplies ONLY the triple ``(alpha0, alpha1, alpha2)`` weighting the ``u`` / ``u_dot`` /
 ``u_ddot`` operators; a time integrator is exactly the machinery that PRODUCES those weights
 per step (plus the history-dependent affine offsets) and advances a
-:class:`~motronics.contracts.spec.analysis_formulation.SemiDiscreteProblem` one step.
+:class:`~motronics.gauss.formulation.SemiDiscreteProblem` one step.
 
 The load-bearing idea: an implicit integrator writes each derivative at the new step as an
 AFFINE function of the unknown ``u_{n+1}``,
@@ -22,7 +22,7 @@ so the residual root-find for ``u_{n+1}`` is driven purely through ``residual`` 
 (BDF1/BDF2) leave ``alpha2 = 0`` (the eddy-current / diffusion form ``u_dot``); second-order
 schemes (Newmark, generalized-alpha) carry ``alpha2`` (the structural ``u_ddot``).
 
-This module imports ONLY contracts + numpy/scipy (enforced by
+This module imports ONLY its own engine + numpy/scipy (enforced by
 ``test_import_purity.py::test_importing_gauss_pulls_no_physics_into_sys_modules``); it touches no
 mesh, no material, no solver.
 """

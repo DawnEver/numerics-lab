@@ -42,17 +42,17 @@ _PLATEAU_ENERGY = 100.0
 # Two exclusions, BY NAME and with their reasons -- never a silent filter, which is how a
 # registry-derived list quietly stops covering anything:
 #   `continuation` wraps another strategy and is driven through `scale_source`;
-#   `nu-damped` under-relaxes the RELUCTIVITY inside the assembly kernel, so it needs a wider
+#   `coefficient-damped` under-relaxes the RELUCTIVITY inside the assembly kernel, so it needs a wider
 #     interface than the `NonlinearSystem` Protocol (`raw_state` / `fold_raw`) and REFUSES a system
 #     that lacks it with a TypeError -- it cannot be driven by a synthetic scalar map at all.
-# `nu-damped` therefore still carries its own two-metric energy-AND-flux rule, NOT `_has_converged`.
+# `coefficient-damped` therefore still carries its own two-metric energy-AND-flux rule, NOT `_has_converged`.
 # That is a NAMED hole in this file's scope, not a claim that it is covered: its flux metric is
 # `max|x|`, iterate-derived and so not vulnerable in the same way, but nothing here proves that.
 #   `newton` / `newton-linesearch` (the ONE Newton, two names) REFUSE a system with no tangent since
 #     2026-09-25 -- this fixture offers none, so they are held to the same two properties on
 #     `_TangentPlateauSystem` below instead, and their refusal is pinned too.
 _NEWTON = ('newton', 'newton-linesearch', 'newton-held-factor')
-_UNDRIVABLE = {'continuation', 'nu-damped', *_NEWTON}
+_UNDRIVABLE = {'continuation', 'coefficient-damped', *_NEWTON}
 _STRATEGIES = sorted(set(ITERATION_REGISTRY) - _UNDRIVABLE)
 
 

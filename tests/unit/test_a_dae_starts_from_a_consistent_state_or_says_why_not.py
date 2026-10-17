@@ -5,8 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.analysis_formulation import DerivativeWeights
-from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
+from motronics.contracts.spec.study_spec import TransientStudy
+from motronics.gauss.formulation import DerivativeWeights, IntegratorKind
 from motronics.gauss.time_integrators import integrate_transient
 from motronics.gauss.time_integrators.initial import InconsistentInitialCondition, consistent_initial_condition
 

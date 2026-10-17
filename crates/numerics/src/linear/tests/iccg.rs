@@ -1,6 +1,6 @@
 use super::{assert_close, nonsymmetric_system, spd_system};
 use crate::linear::{direct, solve_linear_system, Preconditioner};
-use contracts::sparse::Coo;
+use crate::sparse::Coo;
 
 #[test]
 fn iccg_and_auto_recover_the_direct_solution() {

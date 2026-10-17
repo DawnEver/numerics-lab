@@ -1,4 +1,4 @@
-"""Local convergence without mixing magnetic, voltage, or current units."""
+"""Local convergence over independently scaled fields, each judged against its own scale."""
 
 import numpy as np
 

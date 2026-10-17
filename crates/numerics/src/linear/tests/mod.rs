@@ -9,7 +9,7 @@ mod krylov;
 mod precond;
 mod seam;
 
-use contracts::sparse::{Coo, Csr};
+use crate::sparse::{Coo, Csr};
 
 /// A well-conditioned SPD tridiagonal (a 1-D Laplacian plus a varying diagonal), and a rhs.
 ///

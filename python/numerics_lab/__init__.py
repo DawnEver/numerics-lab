@@ -1,4 +1,5 @@
-"""Gauss -- physics-free numerical runtime (nonlinear iteration + linear solves).
+"""Gauss -- the physics-free numerics engine (linear and nonlinear solves, time integration).
 
-Imports only contracts + numpy/scipy/core-numerics; never hamilton/euclid/workflow.
+The leaf of the motronics arrow: it imports nothing else of motronics, only numpy and scipy, and
+leaves this repository as `numerics-lab`.
 """

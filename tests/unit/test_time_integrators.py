@@ -14,9 +14,9 @@ import math
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.analysis_formulation import SemiDiscreteProblem
-from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
+from motronics.contracts.spec.study_spec import TransientStudy
 from motronics.gauss import time_integrators
+from motronics.gauss.formulation import IntegratorKind, SemiDiscreteProblem
 from motronics.gauss.time_integrators import (
     INTEGRATOR_REGISTRY,
     BDF1Integrator,

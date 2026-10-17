@@ -5,7 +5,7 @@ created this module for a different half of "reach the periodic steady state":
 
 * EXPLICIT ERROR CORRECTION on a time-marched field solve (including nonuniform grids):
   :func:`periodic_converged`, :func:`explicit_error_correction`, :func:`nonlinear_error_correction`
-  and the restart identity checks :func:`canonical_eec_study` / :func:`validate_eec_restart`.
+  and the restart identity checks :func:`canonical_eec_window` / :func:`validate_eec_restart`.
 * THE PERIOD MAP'S FIXED POINT for a forced circuit: :func:`periodic_fixed_point`, by reduced rank
   extrapolation, returning a :class:`PeriodicFixedPoint`.
 
@@ -39,14 +39,14 @@ from numbers import Integral, Real
 import numpy as np
 from numpy.typing import NDArray
 
-from motronics.contracts.spec.analysis_formulation import DerivativeWeights
+from motronics.gauss.formulation import DerivativeWeights
 from motronics.gauss.time_integrators._forms import TransientSolution
 from motronics.gauss.time_integrators.instants import same_instant
 
 __all__ = [
     'PeriodicFixedPoint',
     'bdf2_boundary_moment',
-    'canonical_eec_study',
+    'canonical_eec_window',
     'explicit_error_correction',
     'nonlinear_error_correction',
     'periodic_converged',
@@ -57,8 +57,8 @@ __all__ = [
 ]
 
 
-def canonical_eec_study(study, restart, *, uniform_clock=False):
-    """Resolve a declared uniform tick to its one original-clock representation: ``(study, restart)``.
+def canonical_eec_window(window, restart, *, uniform_clock=False):
+    """Resolve a declared uniform tick to its one original-clock representation: ``(window, restart)``.
 
     THE IDENTITY IS THE INTEGER TICK, not a float time. The checkpoint's own ``time`` (a first run
     stopped at its ``t1``) and the producing lattice's ``origin + k dt`` can differ in the last ULP
@@ -66,36 +66,36 @@ def canonical_eec_study(study, restart, *, uniform_clock=False):
     representation alone. Both are therefore returned on the lattice representation, so the resumed
     grid is the uninterrupted run's grid and the checkpoint identity check compares like with like.
     """
-    origin = study.t0
+    origin = window.t0
     if restart is not None and restart.eec_state is not None:
         origin = restart.eec_state.origin_time
-        phase = (study.t0 - origin) / study.dt
+        phase = (window.t0 - origin) / window.dt
         if not np.isfinite(phase):
             msg = 'EEC restart time must align with the original uniform integration clock'
             raise ValueError(msg)
-        time = origin + round(phase) * study.dt
-        if not same_instant(study.t0, time):
+        time = origin + round(phase) * window.dt
+        if not same_instant(window.t0, time):
             msg = 'EEC restart time must align with the original uniform integration clock'
             raise ValueError(msg)
-        checkpoint_phase = (restart.time - origin) / study.dt
+        checkpoint_phase = (restart.time - origin) / window.dt
         if not np.isfinite(checkpoint_phase) or round(checkpoint_phase) != round(phase):
             msg = 'EEC restart original-clock tick does not match the checkpoint time'
             raise ValueError(msg)
-        study, restart = replace(study, t0=time), replace(restart, time=time)
-    if uniform_clock and np.isfinite(study.dt) and study.dt > 0:
-        phase = (study.t1 - origin) / study.dt
+        window, restart = replace(window, t0=time), replace(restart, time=time)
+    if uniform_clock and np.isfinite(window.dt) and window.dt > 0:
+        phase = (window.t1 - origin) / window.dt
         if not np.isfinite(phase):
             msg = 'EEC endpoint must align with its declared uniform integration clock'
             raise ValueError(msg)
-        endpoint = origin + round(phase) * study.dt
-        if not same_instant(study.t1, endpoint):
+        endpoint = origin + round(phase) * window.dt
+        if not same_instant(window.t1, endpoint):
             msg = (
-                f'EEC endpoint must align with its declared uniform {study.integrator.value.upper()} integration clock'
+                f'EEC endpoint must align with its declared uniform {window.integrator.value.upper()} integration clock'
             )
             raise ValueError(msg)
-        if endpoint != study.t1:
-            study = replace(study, t1=endpoint)
-    return study, restart
+        if endpoint != window.t1:
+            window = replace(window, t1=endpoint)
+    return window, restart
 
 
 def validate_eec_restart(restart, period, sign, dt, nonlinear=False):

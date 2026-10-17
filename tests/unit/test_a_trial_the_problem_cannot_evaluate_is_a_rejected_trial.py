@@ -13,7 +13,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
+from motronics.contracts.spec.study_spec import TransientStudy
+from motronics.gauss.formulation import IntegratorKind
 from motronics.gauss.time_integrators import TrialNotEvaluable, integrate_transient
 
 

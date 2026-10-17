@@ -43,8 +43,8 @@ from motronics.gauss.nonlinear._strategies_newton import (
     NewtonStrategy,
 )
 from motronics.gauss.nonlinear._strategies_picard import (
+    CoefficientDampedPicardStrategy,
     DampedPicardStrategy,
-    NuRelaxationDampedPicardStrategy,
     PicardStrategy,
 )
 from motronics.gauss.nonlinear._strategies_quasi import AndersonStrategy, BFGSStrategy, BroydenStrategy, LBFGSStrategy
@@ -57,6 +57,7 @@ __all__ = [
     'AssembledState',
     'BFGSStrategy',
     'BroydenStrategy',
+    'CoefficientDampedPicardStrategy',
     'ContinuationStrategy',
     'DampedPicardStrategy',
     'HeldFactorNewtonStrategy',
@@ -70,7 +71,6 @@ __all__ = [
     'NewtonStrategy',
     'NewtonTangentUnavailable',
     'NonlinearSystem',
-    'NuRelaxationDampedPicardStrategy',
     'PicardStrategy',
     'get_strategy',
     'increment_ratio',
@@ -85,7 +85,7 @@ __all__ = [
 
 ITERATION_REGISTRY: dict[str, IterationStrategy] = {
     'picard-damped': DampedPicardStrategy(),
-    'nu-damped': NuRelaxationDampedPicardStrategy(),
+    'coefficient-damped': CoefficientDampedPicardStrategy(),
     'picard': PicardStrategy(),
     'newton': NewtonStrategy(),
     'anderson': AndersonStrategy(),
@@ -100,7 +100,7 @@ ITERATION_REGISTRY: dict[str, IterationStrategy] = {
 }
 
 _STRATEGY_REQUIREMENTS: dict[str, tuple[str, ...]] = {
-    'nu-damped': ('raw_state', 'fold_raw'),
+    'coefficient-damped': ('raw_state', 'fold_raw'),
     'quasi-newton': ('solve_secant',),
     'bfgs': ('solve_secant',),
     'l-bfgs': ('solve_secant',),
@@ -110,7 +110,7 @@ _STRATEGY_REQUIREMENTS: dict[str, tuple[str, ...]] = {
 def strategy_requires(name: str) -> tuple[str, ...]:
     """The system attributes strategy ``name`` needs, or ``()`` when it needs nothing special.
 
-    Quasi-Newton needs arbitrary-rhs secant solves; `nu-damped` needs pre-fold assembly.
+    Quasi-Newton needs arbitrary-rhs secant solves; `coefficient-damped` needs pre-fold assembly.
     Continuation can run without source scaling by solving the full source directly.
     These are capability boundaries, not convergence properties.
     """

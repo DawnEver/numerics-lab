@@ -3,7 +3,7 @@
 THE DEFECT THIS PINS, measured 2026-09-15 on `spm_ferrari_luce_rear --scope pole-pair --point
 rated_25500`. That model carries `bound_edge_dict['dirichlet'] == {}` and one `even` (periodic)
 seam, and `param_model_compile` tags no Dirichlet at all -- so EVERY `param_fit` sector reaches the
-solver with `A` determined only up to a constant. The nu-damped Picard then ran its full 100
+solver with `A` determined only up to a constant. The coefficient-damped Picard then ran its full 100
 iterations like this:
 
     i=92 alpha=0.050000 |x|=1.96638e+02 E=28.339107 err%=0.000131 inc=1.9358e+02

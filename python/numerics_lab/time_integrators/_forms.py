@@ -13,7 +13,7 @@ import numpy as np
 import scipy.sparse as sp
 from numpy.typing import NDArray
 
-from motronics.contracts.spec.analysis_formulation import DerivativeWeights
+from motronics.gauss.formulation import DerivativeWeights
 from motronics.gauss.linear import solve_linear_system
 from motronics.gauss.linear.resolution import FLOOR_SAFETY, row_bar, system_resolution
 from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint

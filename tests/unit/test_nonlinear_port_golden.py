@@ -50,11 +50,11 @@ from motronics.gauss.nonlinear import ITERATION_REGISTRY, AssembledState, get_st
 
 _GOLDEN = repo_root() / 'rust' / 'crates' / 'gauss' / 'tests' / 'goldens' / 'nonlinear.json'
 
-#: `nu-damped` is driven on its own fixture: it needs the raw pre-fold pair (`raw_state` /
+#: `coefficient-damped` is driven on its own fixture: it needs the raw pre-fold pair (`raw_state` /
 #: `fold_raw`) and REFUSES a system without it, so it cannot share the generic one. Named here
 #: rather than filtered silently, because a registry-derived list that quietly stops covering
 #: something is the failure this file's coverage test exists to catch.
-_RAW_ONLY = 'nu-damped'
+_RAW_ONLY = 'coefficient-damped'
 _GENERIC = sorted(set(ITERATION_REGISTRY) - {_RAW_ONLY})
 
 
@@ -156,7 +156,7 @@ class _NuMixSystem:
     """The FEA `raw_state`/`fold_raw` contract, reduced to one scalar per call.
 
     Raw stiffness and source are LINEAR in a single `k` (standing in for the per-element
-    reluctivity target), which is the identity `nu-damped` rests on. The `k` sequence forces a
+    reluctivity target), which is the identity `coefficient-damped` rests on. The `k` sequence forces a
     KNOWN alpha ratchet at a KNOWN iteration, so the mixed value is hand-computable: energies
     `k**2` give deltas +8 then -5, the sign flip ratchets alpha to 0.6, and the fourth mix is
     `0.4*2 + 0.6*5 = 3.8`.
@@ -275,7 +275,7 @@ def _build() -> dict:
         ),
         'rtol_energy_pct': _RTOL_PCT,
         'fixtures': fixtures,
-        'nu_damped': {
+        'coefficient_damped': {
             'k_seq': _NU_K_SEQ,
             'max_iter': 4,
             'folded': nu.folded,
@@ -366,11 +366,11 @@ def test_the_live_python_still_produces_the_frozen_trajectories() -> None:
             for k, (g, w) in enumerate(zip(got['x'], want['x'], strict=True)):
                 _same(g, w, f'{where}.x[{k}]')
 
-    want_nu, got_nu = golden['nu_damped'], live['nu_damped']
-    assert len(got_nu['folded']) == len(want_nu['folded']), 'nu_damped: fold count'
+    want_nu, got_nu = golden['coefficient_damped'], live['coefficient_damped']
+    assert len(got_nu['folded']) == len(want_nu['folded']), 'coefficient_damped: fold count'
     for k, (g_row, w_row) in enumerate(zip(got_nu['folded'], want_nu['folded'], strict=True)):
         for j, (g, w) in enumerate(zip(g_row, w_row, strict=True)):
-            _same(g, w, f'nu_damped.folded[{k}][{j}]')
+            _same(g, w, f'coefficient_damped.folded[{k}][{j}]')
     assert got_nu['iterations'] == want_nu['iterations']
     assert got_nu['converged'] == want_nu['converged']
 
@@ -414,15 +414,15 @@ def test_the_fixtures_exercise_both_damping_answers() -> None:
 
 
 @pytest.mark.unit
-def test_the_nu_damped_mix_is_the_hand_computed_one() -> None:
-    """The frozen `nu-damped` fold history is checked against arithmetic, not only against itself.
+def test_the_coefficient_damped_mix_is_the_hand_computed_one() -> None:
+    """The frozen `coefficient-damped` fold history is checked against arithmetic, not only against itself.
 
     `k_seq = [1, 3, 2, 5]` gives energy deltas +8 (no PRIOR sign to flip against) then -5 (a flip,
     so alpha ratchets to 0.6 for the NEXT mix). The fourth mixed reluctivity is therefore
     `0.4*2 + 0.6*5 = 3.8`, and the source is twice it. A golden that merely records what the code
     did could not catch the code doing the wrong thing consistently.
     """
-    folded = _load()['nu_damped']['folded']
+    folded = _load()['coefficient_damped']['folded']
     assert folded[:3] == [[1.0, 2.0], [3.0, 6.0], [2.0, 4.0]]
     assert folded[3] == pytest.approx([3.8, 7.6])
 

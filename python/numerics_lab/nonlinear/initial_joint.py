@@ -3,7 +3,7 @@
 import numpy as np
 import scipy.sparse as sp
 
-from motronics.contracts.runtime.initial_coordinates import InitialJointEvaluation
+from motronics.gauss.formulation import InitialJointEvaluation
 from motronics.gauss.linear.initial_rate import sparse_initial_rate
 from motronics.gauss.linear.initial_sparse import SparseInitialPair
 from motronics.gauss.linear.initial_storage_border import joint_coordinate_sparse_correction

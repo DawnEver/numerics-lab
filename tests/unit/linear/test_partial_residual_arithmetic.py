@@ -3,7 +3,7 @@
 import numpy as np
 import scipy.sparse as sp
 
-from motronics.contracts.runtime.ports import ResidualAssemblyBound
+from motronics.gauss.formulation import ResidualAssemblyBound
 from motronics.gauss.linear.arithmetic import matrix_vector_roundoff, transport_residual_bound
 
 

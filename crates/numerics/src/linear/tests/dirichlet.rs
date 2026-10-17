@@ -1,7 +1,7 @@
 //! Dirichlet pinning, mirroring `tests/unit/gauss/test_dirichlet_triplets.py`.
 
 use crate::linear::dirichlet::{apply_dirichlet_triplets, pin_rows, DirichletGroup};
-use contracts::sparse::Coo;
+use crate::sparse::Coo;
 
 fn dense(rows: &[u32], cols: &[u32], vals: &[f64], n: usize) -> Vec<Vec<f64>> {
     let coo = Coo::from_triplets(n, n, rows.to_vec(), cols.to_vec(), vals.to_vec()).unwrap();

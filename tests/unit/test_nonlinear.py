@@ -12,8 +12,8 @@ import pytest
 from motronics.gauss.nonlinear import (
     ITERATION_REGISTRY,
     AssembledState,
+    CoefficientDampedPicardStrategy,
     DampedPicardStrategy,
-    NuRelaxationDampedPicardStrategy,
     PicardStrategy,
     get_strategy,
 )
@@ -129,7 +129,7 @@ def test_registry_and_get_strategy():
         get_strategy('nonesuch')
 
 
-# -- P5: FEA's deleted frozen_damped_solve moved onto the ITERATION_REGISTRY seam, as 'nu-damped' ---
+# -- P5: FEA's deleted frozen_damped_solve moved onto the ITERATION_REGISTRY seam, as 'coefficient-damped' ---
 
 
 class _NuMixSystem:
@@ -137,7 +137,7 @@ class _NuMixSystem:
 
     Raw stiffness/source are linear in a single scalar ``k`` per call -- ``k`` stands in for the per-
     element reluctivity target ``nu_target``, since every real FEA kernel's raw stiffness AND magnet-
-    source entries are linear in it (see ``NuRelaxationDampedPicardStrategy``'s docstring). Each call
+    source entries are linear in it (see ``CoefficientDampedPicardStrategy``'s docstring). Each call
     returns ``s_val=[k]``, ``T_mat=[2k]``, ``total_energy=k**2``, driven by a ``k`` sequence chosen to
     force a KNOWN alpha-ratchet at a KNOWN iteration, so the mixed value can be hand-computed and
     compared exactly -- this pins the alpha schedule (halve x0.6, floor 0.05, on an energy-delta sign
@@ -170,15 +170,15 @@ class _NuMixSystem:
         pass
 
 
-def test_nu_damped_registered_and_dispatchable_by_name():
-    # 'nu-damped' is a registry entry, not only a hardcoded fast path in fea/_newton.py -- get_strategy
+def test_coefficient_damped_registered_and_dispatchable_by_name():
+    # 'coefficient-damped' is a registry entry, not only a hardcoded fast path in fea/_newton.py -- get_strategy
     # resolves it like any other named strategy.
-    assert 'nu-damped' in ITERATION_REGISTRY
-    assert isinstance(ITERATION_REGISTRY['nu-damped'], NuRelaxationDampedPicardStrategy)
-    assert get_strategy('nu-damped').name == 'nu-damped'
+    assert 'coefficient-damped' in ITERATION_REGISTRY
+    assert isinstance(ITERATION_REGISTRY['coefficient-damped'], CoefficientDampedPicardStrategy)
+    assert get_strategy('coefficient-damped').name == 'coefficient-damped'
 
 
-def test_nu_damped_mixes_the_raw_matrix_exactly_like_the_deleted_per_element_mix():
+def test_coefficient_damped_mixes_the_raw_matrix_exactly_like_the_deleted_per_element_mix():
     """Hand-computed check of both the matrix-mixing math and the alpha-ratchet schedule.
 
     ``k_seq = [1, 3, 2, 5]`` (energy ``k**2``) gives deltas +8 (sign +1, no ratchet yet -- there is no
@@ -187,7 +187,7 @@ def test_nu_damped_mixes_the_raw_matrix_exactly_like_the_deleted_per_element_mix
     here independently of the strategy.
     """
     system = _NuMixSystem([1.0, 3.0, 2.0, 5.0])
-    NuRelaxationDampedPicardStrategy().solve(system, max_iter=4)
+    CoefficientDampedPicardStrategy().solve(system, max_iter=4)
     assert len(system.fold_history) == 4
     # Calls 1-3: alpha stays 1.0 (the sign-flip trigger needs a PRIOR sign, so it cannot fire before
     # the 3rd energy sample) -- the mix reduces to nu_target every time.
@@ -199,6 +199,6 @@ def test_nu_damped_mixes_the_raw_matrix_exactly_like_the_deleted_per_element_mix
     assert system.fold_history[3] == pytest.approx((expected_s, 2.0 * expected_s))
 
 
-def test_nu_damped_strategy_rejects_a_system_without_raw_state_or_fold_raw():
+def test_coefficient_damped_strategy_rejects_a_system_without_raw_state_or_fold_raw():
     with pytest.raises(TypeError, match='raw_state/fold_raw'):
-        NuRelaxationDampedPicardStrategy().solve(_LinearSystem(np.array([1.0])), max_iter=5)
+        CoefficientDampedPicardStrategy().solve(_LinearSystem(np.array([1.0])), max_iter=5)

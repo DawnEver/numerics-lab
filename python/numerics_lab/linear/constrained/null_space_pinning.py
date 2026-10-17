@@ -127,7 +127,7 @@ def gauge_pin_floating_constant(mat, rhs: NDArray[np.float64], *, has_dirichlet:
     """Pin ONE dof when the problem has no Dirichlet reference, so ``A`` stops floating.
 
     WHY, measured 2026-09-15 on `spm_ferrari_luce_rear --scope pole-pair --point rated_25500`. The
-    nu-damped Picard ran its full 100 iterations with the ENERGY converged to 9.2e-05 percent and
+    coefficient-damped Picard ran its full 100 iterations with the ENERGY converged to 9.2e-05 percent and
     the iterate wandering by up to 200x its own norm:
 
         i=92 alpha=0.050000 |x|=1.96638e+02 E=28.339107 err%=0.000131 inc=1.9358e+02

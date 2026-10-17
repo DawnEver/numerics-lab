@@ -6,7 +6,8 @@ import numpy as np
 import pytest
 from tests.unit.gauss.test_antiperiodic_eec import Affine
 
-from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
+from motronics.contracts.spec.study_spec import TransientStudy
+from motronics.gauss.formulation import IntegratorKind
 from motronics.gauss.time_integrators import integrate_transient
 
 

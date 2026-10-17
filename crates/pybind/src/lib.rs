@@ -5,7 +5,7 @@
 //! `scipy.sparse.coo_matrix` hands out on the Python side, and `contracts` owns the
 //! COO -> CSR conversion.
 
-use contracts::sparse::{Coo, Csr};
+use gauss::sparse::{Coo, Csr};
 use gauss::linear::direct::DirectFactorization;
 use gauss::linear::{check_direct_residual, requires_symmetric, solve_linear_system};
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1};

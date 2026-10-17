@@ -3,7 +3,7 @@
 //! block. Split out of `direct.rs` on 2026-09-29; see [`super::DirectFactorization`] for why.
 
 use super::{DirectFailure, FactorKind, Kernel};
-use contracts::sparse::{Coo, Csr};
+use crate::sparse::{Coo, Csr};
 use faer::linalg::solvers::{PartialPivLu, Solve};
 use faer::Mat;
 

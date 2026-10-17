@@ -1,6 +1,6 @@
 """THE time march -- the one loop every transient in this repo steps through, physics-blind.
 
-It marches a nominal ``study.dt`` grid (the output grid and the largest step), lands KNOWN
+It marches a nominal ``window.dt`` grid (the output grid and the largest step), lands KNOWN
 non-smooth instants (``time_breakpoints``), locates STATE events (``event_fns``), halves a step
 whose Newton failed (``adaptive``) and, with a :class:`StepTolerance`, controls every step's LOCAL
 TRUNCATION ERROR per unknown. Without events, breakpoints or step control it is the plain fixed grid.
@@ -54,7 +54,7 @@ pays that one BDF1 step for no benefit; that is the price of the semantics, stat
 For a second-order integrator the restart carries the landing step's ``v`` / ``a`` (continuous
 state is preserved; only the derivative HISTORY is dropped).
 
-This module imports only contracts + numpy and the sibling integrator module; it touches no
+This module imports only numpy and the sibling integrator module; it touches no
 circuit, no device, no physics.
 
 THE STEP PLANS, all inside this one loop. A march takes its cell targets from exactly one plan:
@@ -86,8 +86,7 @@ import numpy as np
 import psutil
 from numpy.typing import NDArray
 
-from motronics.contracts.spec.analysis_formulation import DerivativeWeights
-from motronics.contracts.spec.study_spec import TransientStudy
+from motronics.gauss.formulation import DerivativeWeights, TimeWindow
 from motronics.gauss.time_integrators._fixed_lattice import fixed_lattice_step_size, fixed_lattice_targets
 from motronics.gauss.time_integrators._forms import (
     IntegratorState,
@@ -119,7 +118,7 @@ from motronics.gauss.time_integrators.factor_reuse import FactorCache
 from motronics.gauss.time_integrators.instants import same_instant
 from motronics.gauss.time_integrators.periodic import (
     bdf2_boundary_moment,
-    canonical_eec_study,
+    canonical_eec_window,
     explicit_error_correction,
     nonlinear_error_correction,
     periodic_converged,
@@ -266,7 +265,7 @@ class StepTolerance:
     ``rtol`` / ``atol`` are scalars or vectors the length of the state; a vector is how a caller
     whose unknowns carry different units says so (a circuit's node volts and branch amperes need
     different absolute floors -- one scalar is right for at most one of them). ``h_min`` is the
-    smallest step the controller may take (default ``study.dt * 1e-6``); a step still rejected
+    smallest step the controller may take (default ``window.dt * 1e-6``); a step still rejected
     there RAISES with the error reached rather than being accepted.
     """
 
@@ -275,9 +274,9 @@ class StepTolerance:
     h_min: float | None = None
 
 
-def _full_fixed_steps(study: TransientStudy) -> int:
+def _full_fixed_steps(window: TimeWindow) -> int:
     """Count full cells, treating a floating-point near-integer as an integer."""
-    ratio = (study.t1 - study.t0) / study.dt
+    ratio = (window.t1 - window.t0) / window.dt
     nearest = round(ratio)
     return nearest if abs(ratio - nearest) <= 1e-10 else int(np.floor(ratio))
 
@@ -434,7 +433,7 @@ def _positive_finite(value) -> bool:
     return not isinstance(value, bool) and isinstance(value, Real) and bool(np.isfinite(value)) and value > 0
 
 
-def _admit_eec(study, integrator, *, period, sign, affine, nonlinear, step_times, curvature, owner) -> None:
+def _admit_eec(window, integrator, *, period, sign, affine, nonlinear, step_times, curvature, owner) -> None:
     """Every TP-EEC admission rule, before any history is restored or any step is solved."""
     if nonlinear and (period is None or affine):
         msg = 'nonlinear EEC needs an active interval and its distinct nonlinear operator assertion'
@@ -456,11 +455,11 @@ def _admit_eec(study, integrator, *, period, sign, affine, nonlinear, step_times
         msg = 'eec_period requires a positive finite nonboolean interval'
         raise ValueError(msg)
     if (
-        not np.isfinite(study.dt)
-        or study.dt <= 0
-        or not study.t0 + study.dt > study.t0
-        or not study.t1 - study.dt < study.t1
-        or not study.t0 + period > study.t0
+        not np.isfinite(window.dt)
+        or window.dt <= 0
+        or not window.t0 + window.dt > window.t0
+        or not window.t1 - window.dt < window.t1
+        or not window.t0 + period > window.t0
     ):
         msg = 'EEC requires representable advancing time steps and correction intervals'
         raise ValueError(msg)
@@ -468,8 +467,8 @@ def _admit_eec(study, integrator, *, period, sign, affine, nonlinear, step_times
         msg = 'anti-periodic EEC requires fixed uniform BDF1 without step tables'
         raise ValueError(msg)
     if integrator.name == 'bdf2' or nonlinear:
-        intervals = (study.t1 - study.t0) / study.dt
-        ticks = period / study.dt
+        intervals = (window.t1 - window.t0) / window.dt
+        ticks = period / window.dt
         if (
             not np.isfinite(intervals + ticks)
             or ticks < 1
@@ -477,7 +476,7 @@ def _admit_eec(study, integrator, *, period, sign, affine, nonlinear, step_times
             or not np.isclose(ticks, round(ticks), rtol=0.0, atol=1e-9)
             or (
                 step_times is not None
-                and not np.allclose(np.diff(step_times), study.dt, rtol=0.0, atol=study.dt * 1e-12)
+                and not np.allclose(np.diff(step_times), window.dt, rtol=0.0, atol=window.dt * 1e-12)
             )
         ):
             msg = (
@@ -500,7 +499,7 @@ def _admit_eec(study, integrator, *, period, sign, affine, nonlinear, step_times
 
 def integrate_transient(
     problem,
-    study: TransientStudy,
+    window: TimeWindow,
     u0: NDArray[np.floating],
     *,
     event_fns: Sequence[Callable[[NDArray[np.floating], float], float]] = (),
@@ -551,7 +550,7 @@ def integrate_transient(
     next_breakpoint: Callable[[float], float | None] | None = None,
     project_accepted_state: Callable[[float, NDArray[np.floating]], NDArray[np.floating]] | None = None,
 ) -> TransientSolution:
-    """March ``problem`` over ``study``, stopping the grid at every zero of ``event_fns``.
+    """March ``problem`` over ``window``, stopping the grid at every zero of ``event_fns``.
 
     With no ``event_fns`` this is the plain fixed-grid march. Otherwise each step is taken under a
     checkpoint; a sign change in any ``g_i`` between the step's ends brackets a crossing, which is
@@ -563,14 +562,14 @@ def integrate_transient(
     An :class:`EventSurface` declares a crossing orientation; a plain callable locates both.
 
     ``time_tol`` is the bracket width the locator converges to, in seconds (default
-    ``study.dt * 1e-6``). A crossing already within ``time_tol`` of the checkpoint is handled at
+    ``window.dt * 1e-6``). A crossing already within ``time_tol`` of the checkpoint is handled at
     the checkpoint rather than bisected into a zero-length step.
 
     The initial point is NOT scanned for events: a zero at ``t0`` is the caller's initial
     condition to declare, not an event to locate.
 
     ``adaptive`` (default ``False``) REJECTS a step whose Newton failed and halves it (down to
-    ``h_min``, default ``study.dt / 1000``) until it converges or hits the floor; a shortened step
+    ``h_min``, default ``window.dt / 1000``) until it converges or hits the floor; a shortened step
     lands inside the cell and the march continues to the same nominal target, so the cell's
     endpoint is unchanged. Only a step that ACTUALLY failed is subdivided: blanket subdivision was
     measured WORSE (64 -> 98/148/268 exhausted on srdab_closed_loop).
@@ -589,7 +588,7 @@ def integrate_transient(
     ``step_control`` is LOCAL-ERROR control for every integrator: each converged step that lands
     without crossing an event has its truncation error estimated per unknown (:func:`_lte_ratio`)
     against the :class:`StepTolerance`; a step over tolerance is rejected and retried smaller, an
-    accepted one sets the next step's size. ``study.dt`` stays the largest step and the output
+    accepted one sets the next step's size. ``window.dt`` stays the largest step and the output
     grid. A step still over tolerance at ``h_min`` RAISES. ``refine`` is the eventful march's
     step-doubling check: a step whose two half-steps differ by more than ``refine`` (relative to
     ``max |u|``) is replaced by them.
@@ -662,11 +661,11 @@ def integrate_transient(
     capabilities = ProblemCapabilities.resolve(problem)
     if factor_cache is None and capabilities.factor_reusable:
         factor_cache = FactorCache()
-    integrator = get_integrator(study.integrator)
+    integrator = get_integrator(window.integrator)
     curvature = curvature_atol is not None
     eec = eec_period is not None
     _admit_eec(
-        study,
+        window,
         integrator,
         period=eec_period,
         sign=eec_sign,
@@ -676,7 +675,7 @@ def integrate_transient(
         curvature=curvature or adaptive or step_control is not None or refine is not None,
         owner=problem,
     )
-    study, restart = canonical_eec_study(study, restart, uniform_clock=eec_period is not None and step_times is None)
+    window, restart = canonical_eec_window(window, restart, uniform_clock=eec_period is not None and step_times is None)
     if steady_period is not None and (not np.isfinite(steady_period) or steady_period <= 0):
         msg = 'steady_period must be finite and positive'
         raise ValueError(msg)
@@ -731,8 +730,8 @@ def integrate_transient(
             or len(grid) < 2
             or not np.all(np.isfinite(grid))
             or not np.all(np.diff(grid) > 0)
-            or grid[0] != study.t0
-            or grid[-1] != study.t1
+            or grid[0] != window.t0
+            or grid[-1] != window.t1
         ):
             msg = 'step_times must increase from t0 to t1 and cannot combine with adaptive'
             raise ValueError(msg)
@@ -741,7 +740,7 @@ def integrate_transient(
         or isinstance(step_origin, bool)
         or not isinstance(step_origin, Real)
         or not np.isfinite(step_origin)
-        or step_origin > study.t0
+        or step_origin > window.t0
         or eec
     ):
         msg = 'step_origin requires a finite fixed parent lattice without EEC'
@@ -762,7 +761,7 @@ def integrate_transient(
     if plan == 'lattice' and checkpoint_key is not None and event_fns:
         msg = 'a lattice-plan checkpoint carries no event locator history; locate events on the nominal grid'
         raise ValueError(msg)
-    dt = study.dt
+    dt = window.dt
     if time_tol is not None and (not np.isfinite(time_tol) or time_tol <= 0.0):
         msg = f'time_tol must be finite and positive, got {time_tol!r}'
         raise ValueError(msg)
@@ -779,13 +778,13 @@ def integrate_transient(
 
     # ---------------------------------------------------------------- the initial state
     u0 = np.asarray(u0, dtype=float)
-    state = integrator.start(u0, study.t0, v0, a0)
+    state = integrator.start(u0, window.t0, v0, a0)
     if initial_history is not None:
         state = seeded_bdf2_state(state, initial_history, integrator, restart, dt)
-    origin = study.t0 if step_origin is None else float(step_origin)
+    origin = window.t0 if step_origin is None else float(step_origin)
     cursor = None
     if restart is not None:
-        restart.validate_restart(checkpoint_key, integrator.name, study.t0, u0.size)
+        restart.validate_restart(checkpoint_key, integrator.name, window.t0, u0.size)
         validate_eec_restart(restart, eec_period, eec_sign, dt, eec_nonlinear_first_order)
         if restart.event_state is not None:
             if plan != 'nominal':
@@ -822,7 +821,7 @@ def integrate_transient(
         )
         u0 = state.last_u
     solution = TransientSolution(
-        times=[study.t0], states=[u0], state_rates=[], residual_times=[], rate_state_overrides={}
+        times=[window.t0], states=[u0], state_rates=[], residual_times=[], rate_state_overrides={}
     )
     # A fresh march's initial state is canonical too: the owner may declare its law there.
     if restart is None and on_accept is not None and accepted_observation(on_accept, state.t, state.last_u):
@@ -856,8 +855,8 @@ def integrate_transient(
     observations = tuple(observation_times)
     for label, instants in (('time_breakpoints', breakpoints), ('observation_times', observations)):
         for i, instant in enumerate(instants):
-            if not study.t0 < instant <= study.t1:
-                msg = f'{label}[{i}]={instant:g} is outside the study window ({study.t0:g}, {study.t1:g}]'
+            if not window.t0 < instant <= window.t1:
+                msg = f'{label}[{i}]={instant:g} is outside the march window ({window.t0:g}, {window.t1:g}]'
                 raise ValueError(msg)
             if i and instant <= instants[i - 1]:
                 msg = f'{label} must be strictly increasing, got {instants}'
@@ -880,13 +879,13 @@ def integrate_transient(
 
     # EEC cycle bookkeeping (the lattice plan's coarse correction clock).
     saved_eec = None if restart is None else restart.eec_state
-    eec_origin = study.t0 if saved_eec is None else saved_eec.origin_time
+    eec_origin = window.t0 if saved_eec is None else saved_eec.origin_time
     next_correction = None
     cycle_start = u0.copy()
     integrated_tangent = None
     cycle_converged = True
     if eec:
-        next_correction = study.t0 + eec_period if saved_eec is None else saved_eec.next_correction_time
+        next_correction = window.t0 + eec_period if saved_eec is None else saved_eec.next_correction_time
         if integrator.name == 'bdf2' and len(state.us) >= 2:
             cycle_start = bdf2_boundary_moment(state.us)
         if saved_eec is not None:
@@ -896,7 +895,7 @@ def integrate_transient(
                 cycle_converged = saved_eec.cycle_converged
 
     # The step plan's own clock.
-    n_steps = _full_fixed_steps(replace(study, t0=origin))
+    n_steps = _full_fixed_steps(replace(window, t0=origin))
     resume_from: float | None = None if cursor is None else cursor.next_reanchor
     k = 0 if cursor is None else cursor.nominal_index
     resumed_target = None if cursor is None else cursor.pending_target
@@ -918,9 +917,9 @@ def integrate_transient(
             lattice_targets = [float(t) for t in list(step_times)[1:]]
         else:
             lattice_origin = eec_origin if eec else origin
-            lattice_targets = fixed_lattice_targets(lattice_origin, study.t0, study.t1, dt)
+            lattice_targets = fixed_lattice_targets(lattice_origin, window.t0, window.t1, dt)
         if eec:
-            count = max(0.0, (study.t1 - next_correction) / eec_period + 1.0)
+            count = max(0.0, (window.t1 - next_correction) / eec_period + 1.0)
             if not np.isfinite(count) or count > len(lattice_targets) + 1e-9:
                 msg = 'TP-EEC correction period requires positive integer steps between boundaries'
                 raise ValueError(msg)
@@ -934,7 +933,7 @@ def integrate_transient(
     curve_lattice = None
     if curvature:
         curve_lattice = adaptive_lattice(
-            study, True, timestep_quantum, timestep_origin, dt if restart is None else restart.previous_dt
+            window, True, timestep_quantum, timestep_origin, dt if restart is None else restart.previous_dt
         )
         h_curve = dt
         h_prev_curve = dt if restart is None else restart.previous_dt
@@ -1180,14 +1179,14 @@ def integrate_transient(
     # fixed step count. Only roundoff at the declared end may terminate it -- the SPAN's roundoff and
     # the end clock's own ulps, never a fraction of the clock's MAGNITUDE: `1e-12 * |t0|` is 1 s at a
     # 1e12 s origin, which ended a 4 ms march before its first step (`test_axisymmetric_checkpoint`).
-    end_tol = max(1e-12 * (study.t1 - study.t0), 4.0 * float(np.spacing(abs(study.t1))))
+    end_tol = max(1e-12 * (window.t1 - window.t0), 4.0 * float(np.spacing(abs(window.t1))))
     events_this_cell = 0
     try:
-        while not stop and (state.t < study.t1 - end_tol or (len(observations) > 0 and state.t < observations[-1])):
+        while not stop and (state.t < window.t1 - end_tol or (len(observations) > 0 and state.t < observations[-1])):
             continuing_cell = resumed_target is not None
             lattice_cell = False
             if plan == 'curvature':
-                h_curve = min(h_curve, study.t1 - state.t)
+                h_curve = min(h_curve, window.t1 - state.t)
                 proposed = state.t + h_curve
                 t_target = next_deadline(next_breakpoint, state.t, proposed)
                 h_curve = t_target - state.t
@@ -1195,7 +1194,7 @@ def integrate_transient(
                     if t_target < proposed:
                         curve_lattice.tick(t_target)
                     current_tick = curve_lattice.tick(state.t)
-                    count = min(curve_lattice.steps(h_curve), curve_lattice.tick(study.t1) - current_tick)
+                    count = min(curve_lattice.steps(h_curve), curve_lattice.tick(window.t1) - current_tick)
                     h_curve = count * curve_lattice.quantum
                     t_target = curve_lattice.time(current_tick + count)
                     if not t_target > state.t:
@@ -1217,27 +1216,27 @@ def integrate_transient(
                 else:
                     pending_dt = t_target - state.t
             elif continuing_cell:
-                t_target = min(resumed_target, study.t1)
+                t_target = min(resumed_target, window.t1)
                 resumed_target = None
                 pending_dt = t_target - state.t
             elif resume_from is not None:
                 # The re-anchored grid continues from the last breakpoint; the t1 clamp makes the FINAL
                 # re-anchored cell a PARTIAL step, so its dt is the true remainder (SR-025).
-                t_target = min(resume_from, study.t1)
+                t_target = min(resume_from, window.t1)
                 resume_from = t_target + dt
                 pending_dt = t_target - state.t
             elif k >= n_steps:
-                t_target = study.t1
+                t_target = window.t1
                 pending_dt = t_target - state.t
             else:
                 t_target = origin + (k + 1) * dt
                 # dt exactly on a canonical cell (not t_target - state.t, which is off by ulps from dt).
                 pending_dt = dt if origin + k * dt == state.t else t_target - state.t
-                if same_instant(t_target, study.t1):
+                if same_instant(t_target, window.t1):
                     # A full nominal cell retains its weights; its time label is the declared endpoint.
-                    t_target = study.t1
-                elif t_target > study.t1:
-                    t_target = study.t1
+                    t_target = window.t1
+                elif t_target > window.t1:
+                    t_target = window.t1
                     pending_dt = t_target - state.t
             if plan == 'nominal' and not continuing_cell:
                 k += 1

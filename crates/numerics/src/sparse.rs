@@ -7,9 +7,8 @@
 //! those steps pays a conversion; if it is owned here, the whole loop runs without crossing
 //! the boundary at all.
 //!
-//! It lives in `contracts` — the dependency-free leaf — for the same reason `Chart` does: it
-//! is a type the layers TALK THROUGH, and a shared type that lived in one of them would drag
-//! that layer into everything above it.
+//! It lives in the numerics crate, the leaf every layer above may depend on: the solvers consume
+//! it and the assemblers produce it, so the engine that solves it owns it.
 //!
 //! # Why COO and CSR, and not one of them
 //!

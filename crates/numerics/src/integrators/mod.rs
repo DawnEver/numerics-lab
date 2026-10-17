@@ -19,7 +19,7 @@
 //! intermediate point for generalized-alpha, which is the only reason `alpha0` and `h_u` exist
 //! at all.
 
-use contracts::weights::{DerivativeWeights, NEWMARK_BETA, NEWMARK_GAMMA};
+use crate::weights::{DerivativeWeights, NEWMARK_BETA, NEWMARK_GAMMA};
 use std::fmt;
 
 /// Every way an integrator can refuse.

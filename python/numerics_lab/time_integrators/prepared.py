@@ -12,7 +12,7 @@ from typing import Protocol, runtime_checkable
 
 from numpy.typing import NDArray
 
-from motronics.contracts.spec.analysis_formulation import SemiDiscreteProblem
+from motronics.gauss.formulation import SemiDiscreteProblem
 from motronics.gauss.time_integrators._forms import (
     IntegratorState,
     ITimeIntegrator,

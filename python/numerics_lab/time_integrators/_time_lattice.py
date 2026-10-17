@@ -46,7 +46,7 @@ class TimeLattice:
         return max(1, int(np.floor(interval / self.quantum + 1e-9)))
 
 
-def adaptive_lattice(study, adaptive, quantum, origin, previous_dt):
+def adaptive_lattice(window, adaptive, quantum, origin, previous_dt):
     if quantum is None:
         if origin is not None:
             msg = 'timestep_origin requires timestep_quantum'
@@ -61,11 +61,11 @@ def adaptive_lattice(study, adaptive, quantum, origin, previous_dt):
     ):
         msg = 'adaptive time lattice requires positive finite timestep_quantum'
         raise ValueError(msg)
-    origin = study.t0 if origin is None else origin
+    origin = window.t0 if origin is None else origin
     if isinstance(origin, bool) or not isinstance(origin, Real) or not np.isfinite(origin):
         msg = 'adaptive time lattice requires finite timestep_origin'
         raise ValueError(msg)
     lattice = TimeLattice(float(quantum), float(origin))
-    for time in (study.t0, study.t1, study.t0 - previous_dt, study.t0 + study.dt):
+    for time in (window.t0, window.t1, window.t0 - previous_dt, window.t0 + window.dt):
         lattice.tick(time)
     return lattice

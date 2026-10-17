@@ -20,7 +20,7 @@ from tests.bound_names import binds, bound
 
 import motronics.__main__ as cli
 import motronics.gauss.linear as gauss_linear
-from motronics.contracts.spec.analysis_formulation import DerivativeWeights
+from motronics.gauss.formulation import DerivativeWeights
 from motronics.gauss.linear import LinearSolveError
 from motronics.gauss.time_integrators.factor_reuse import FactorCache
 from motronics.laplace.circuit.cases.case_library import load_circuit_case

@@ -4,7 +4,8 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.contracts.runtime.ports import ResidualAssemblyBound, ResidualAssemblyEvaluation
+from motronics.contracts.runtime.ports import ResidualAssemblyEvaluation
+from motronics.gauss.formulation import ResidualAssemblyBound
 from motronics.gauss.linear.storage_border import StorageRows
 from motronics.gauss.nonlinear.finite_storage import finite_storage_actual_rate_initial_pair
 

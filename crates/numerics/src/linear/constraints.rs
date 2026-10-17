@@ -1,6 +1,6 @@
 //! Master-slave constraint chains, resolved so no master is itself constrained.
 //!
-//! Port of `resolve_constraint_chains` in `src/motronics/gauss/linear/constraints.py`, and it
+//! Port of `resolve_constraint_chains` in `src/motronics/gauss/linear/constrained/master_slave.py`, and it
 //! lives HERE because that is where the Python has it.
 //!
 //! # It arrived here as a MOVE, which is the point

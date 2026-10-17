@@ -95,7 +95,7 @@ fn a_non_converging_krylov_solve_raises_rather_than_returning_a_wrong_x() {
     // A deliberately hostile operator: a 2x2 rotation-like block CG cannot handle. The point is
     // the SHAPE of the failure, not the matrix — a wrong `x` returned as a success is the defect
     // this whole seam exists to refuse.
-    let mut coo = contracts::sparse::Coo::new(2, 2);
+    let mut coo = crate::sparse::Coo::new(2, 2);
     coo.push(0, 1, 1.0).unwrap();
     coo.push(1, 0, -1.0).unwrap();
     let a = coo.to_csr().unwrap();

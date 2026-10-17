@@ -1,6 +1,6 @@
 //! Physics-free numerical runtime — the Rust mirror of `src/motronics/gauss/`.
 //!
-//! Nonlinear iteration, linear solves, time integration and the phase transforms. It touches
+//! Nonlinear iteration, linear solves and time integration. It touches
 //! no physics and no mesh: everything here is "given a system, drive the iterate".
 //!
 //! Wave 2 of `.claude/memory/2026/09/03/plan-rust-migration-execution.md`. This is where D4
@@ -14,4 +14,5 @@ pub mod integrators;
 pub mod linear;
 pub mod marching;
 pub mod nonlinear;
-pub mod transforms;
+pub mod sparse;
+pub mod weights;

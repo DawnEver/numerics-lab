@@ -52,7 +52,7 @@
 //!
 //! Threading (`Par::rayon`) was measured to HURT at every size here and is not used.
 
-use contracts::sparse::{Csr, SparseError};
+use crate::sparse::{Csr, SparseError};
 use faer::dyn_stack::{MemBuffer, MemStack};
 use faer::linalg::cholesky::llt::factor::LltRegularization;
 

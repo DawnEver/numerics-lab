@@ -19,7 +19,7 @@
 //! mode the direct backend's residual guard exists to catch, so the two halves agree.
 
 use crate::linear::precond::Preconditioner;
-use contracts::sparse::{Csr, SparseError};
+use crate::sparse::{Csr, SparseError};
 
 /// Krylov convergence target.
 ///

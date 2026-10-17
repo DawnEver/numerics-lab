@@ -4,7 +4,7 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 
-from motronics.contracts.spec.study_spec import IntegratorKind
+from motronics.gauss.formulation import IntegratorKind
 from motronics.gauss.time_integrators import integrate_transient
 from motronics.gauss.time_integrators.checkpoint import owns_history
 from motronics.gauss.time_integrators.shooting import periodic_shooting
@@ -22,7 +22,7 @@ class TransientShootingResult:
 
 
 def shoot_transient_cycle(
-    problem, study, initial, *, period, max_newton=100, step_tol=1e-12, atol=1e-9, rtol=1e-7, max_iterations=30, sign=1
+    problem, window, initial, *, period, max_newton=100, step_tol=1e-12, atol=1e-9, rtol=1e-7, max_iterations=30, sign=1
 ):
     """Shoot a discrete BDF orbit with complete fresh numerical history every trial.
 
@@ -31,13 +31,13 @@ def shoot_transient_cycle(
     The producer supplies a stateless operator whose geometry and excitation both
     repeat over the declared period; moving meshes must preserve node identities.
     """
-    if study.integrator not in (IntegratorKind.BDF1, IntegratorKind.BDF2):
+    if window.integrator not in (IntegratorKind.BDF1, IntegratorKind.BDF2):
         msg = 'shooting requires first-order BDF1 or BDF2 integration'
         raise ValueError(msg)
     if owns_history(problem):
         msg = 'shooting cannot reuse mutable material history across trial cycles'
         raise ValueError(msg)
-    steps = period / study.dt
+    steps = period / window.dt
     if (
         not np.isfinite(period)
         or period <= 0
@@ -46,8 +46,8 @@ def shoot_transient_cycle(
     ):
         msg = 'shooting period must contain a positive whole number of fixed steps'
         raise ValueError(msg)
-    cycle_study = replace(study, t1=study.t0 + period)
-    augmented = study.integrator is IntegratorKind.BDF2
+    cycle_study = replace(window, t1=window.t0 + period)
+    augmented = window.integrator is IntegratorKind.BDF2
     initial = np.asarray(initial, dtype=float)
     seed = np.tile(initial, 2) if augmented else initial
 

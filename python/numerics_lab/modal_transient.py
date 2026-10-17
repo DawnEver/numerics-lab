@@ -40,7 +40,7 @@ class _ReducedProblem:
 
 
 def integrate_modal_transient(
-    stiffness, mass, damping, load, study, *, n_modes, u0=None, v0=None, a0=None, damping_ratios=None
+    stiffness, mass, damping, load, window, *, n_modes, u0=None, v0=None, a0=None, damping_ratios=None
 ):
     """Project ``M u'' + C u' + K u = f`` onto the lowest retained eigenmodes.
 
@@ -85,7 +85,7 @@ def integrate_modal_transient(
     if not np.isfinite(minimum_mass) or minimum_mass <= 0:
         msg = 'modal transient requires positive definite mass on all free DOFs'
         raise ValueError(msg)
-    if not get_integrator(study.integrator).weights(study.dt).alpha2:
+    if not get_integrator(window.integrator).weights(window.dt).alpha2:
         msg = 'modal transient requires a second-order integrator'
         raise ValueError(msg)
     eigenvalues, shapes = semidefinite_modes(k, m, n_modes, minimum_mass=minimum_mass)
@@ -124,7 +124,7 @@ def integrate_modal_transient(
         load_error = max(load_error, float(np.linalg.norm(missing)) / norm if norm else 0.0)
         return coordinates
 
-    initial_load = projected_load(study.t0)
+    initial_load = projected_load(window.t0)
     reduced = _ReducedProblem(np.diag(eigenvalues), modal_c, projected_load)
     if a0 is not None and (np.asarray(a0).shape != (size,) or not np.all(np.isfinite(a0))):
         msg = 'modal initial acceleration must be finite and match the free operator dimension'
@@ -135,7 +135,7 @@ def integrate_modal_transient(
         if a0 is None
         else shapes.T @ (m @ np.asarray(a0, dtype=float))
     )
-    projected = integrate_transient(reduced, study, q0, v0=qv, a0=qa, on_nonconverged='label')
+    projected = integrate_transient(reduced, window, q0, v0=qv, a0=qa, on_nonconverged='label')
     physical = TransientSolution(
         times=projected.times,
         states=[shapes @ q for q in projected.states],

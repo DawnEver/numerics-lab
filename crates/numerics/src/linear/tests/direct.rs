@@ -8,10 +8,10 @@
 
 use super::{laplacian_2d, nonsymmetric_system, spd_system};
 use crate::linear::direct::{solve, DirectFactorization, DirectFailure, FactorKind};
-use contracts::sparse::Coo;
+use crate::sparse::Coo;
 
 /// The same pattern with different values -- what a Newton iteration hands the solver.
-fn revalued(base: &contracts::sparse::Csr, scale: f64) -> contracts::sparse::Csr {
+fn revalued(base: &crate::sparse::Csr, scale: f64) -> crate::sparse::Csr {
     let mut next = base.clone();
     for (k, v) in next.values_mut().iter_mut().enumerate() {
         *v *= scale + (k % 3) as f64 * 0.01;
@@ -102,7 +102,7 @@ fn a_non_square_operator_is_refused_at_analysis_time() {
     ));
 }
 
-fn residual(a: &contracts::sparse::Csr, x: &[f64], b: &[f64]) -> f64 {
+fn residual(a: &crate::sparse::Csr, x: &[f64], b: &[f64]) -> f64 {
     let ax = a.matvec(x).unwrap();
     let num: f64 = ax.iter().zip(b).map(|(p, q)| (p - q) * (p - q)).sum();
     let den: f64 = b.iter().map(|q| q * q).sum();
@@ -210,7 +210,7 @@ fn a_badly_scaled_operator_is_solved_to_its_forward_accuracy_not_only_its_residu
 
 /// The field<->circuit shape: a sparse 2D Laplacian bordered by one DENSE row and column (a
 /// winding coupled to every conductor dof) plus a small circuit block.
-fn bordered_system(side: usize, dense_every: usize) -> (contracts::sparse::Csr, Vec<f64>) {
+fn bordered_system(side: usize, dense_every: usize) -> (crate::sparse::Csr, Vec<f64>) {
     let (lap, _) = laplacian_2d(side);
     let n1 = side * side;
     let n = n1 + 2;

@@ -35,7 +35,7 @@ from collections import Counter, OrderedDict
 import numpy as np
 import scipy.sparse as sp
 
-from motronics.gauss.linear.dirichlet import lift_dirichlet_rhs
+from motronics.gauss.linear.constrained.fixed_values import lift_dirichlet_rhs
 from motronics.gauss.linear.errors import LinearSolveError
 
 try:

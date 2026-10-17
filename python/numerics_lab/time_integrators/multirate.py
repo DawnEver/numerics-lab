@@ -28,7 +28,7 @@ from fractions import Fraction
 import numpy as np
 from numpy.typing import NDArray
 
-from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
+from motronics.gauss.formulation import IntegratorKind, TimeWindow
 from motronics.gauss.time_integrators._forms import IntegratorState, TransientSolution
 from motronics.gauss.time_integrators._integrators import get_integrator
 from motronics.gauss.time_integrators.checkpoint import (
@@ -106,7 +106,7 @@ class ScheduledTask:
 
     Within one priority periodic tasks retain fastest-clock order, followed by
     explicit schedules in declaration order. Use priority for causal dependencies.
-    Instants are owned and validated once; the study uses exactly [t0, t1).
+    Instants are owned and validated once; the window uses exactly [t0, t1).
     """
 
     times: Sequence[float]
@@ -156,7 +156,7 @@ def sample_hits(t0: float, t1: float, period: float, offset: float = 0.0) -> NDA
     _validate_clock(period, offset)
     # Quotient rounding can land on either side of an integer. Generate one extra
     # candidate at each boundary, then decide membership from the actual instants.
-    # A relative clock tolerance must never admit a hit before a study's start or
+    # A relative clock tolerance must never admit a hit before a window's start or
     # drop a genuine final hit: doing so changes the held-input problem itself.
     k_first = max(0, int(np.floor((t0 - offset) / period)) - 1)
     k_last = int(np.ceil((t1 - offset) / period)) + 1
@@ -269,7 +269,7 @@ def schedule_cursor(segment_start: float, task_history: CheckpointHistory | None
 
 def integrate_sampled(
     problem,
-    study: TransientStudy,
+    window: TimeWindow,
     u0: NDArray[np.floating],
     tasks: Sequence[SampledTask | ScheduledTask],
     *,
@@ -281,9 +281,9 @@ def integrate_sampled(
     on_checkpoint: Callable[[TransientCheckpoint], None] | None = None,
     **march,
 ) -> TransientSolution:
-    """March ``problem`` over ``study`` with ``tasks`` firing at their hits and holding between them.
+    """March ``problem`` over ``window`` with ``tasks`` firing at their hits and holding between them.
 
-    ``study.dt`` bounds the continuous step inside a segment; every ``march`` keyword passes to
+    ``window.dt`` bounds the continuous step inside a segment; every ``march`` keyword passes to
     :func:`~motronics.gauss.time_integrators.march.integrate_transient`. Coincident tasks run by
     ascending priority, then fastest clock, then declaration order. The returned trajectory is the segments joined at their hits
     (each hit appears once), with every convergence label carried.
@@ -292,28 +292,28 @@ def integrate_sampled(
     moves (an ideal source's node voltage) are placed on the new hold, and the rates follow. The
     joined trajectory keeps the left limit at each hit; this option is for index-1 first-order
     systems, not acceleration.
-    ``segment_step_limit(start, stop)`` optionally tightens the study's maximum step
+    ``segment_step_limit(start, stop)`` optionally tightens the window's maximum step
     for each actual interval. It changes resolution, never task instants or priorities.
     ``checkpoint_key`` / ``on_checkpoint`` / ``restart`` are the ONE transient checkpoint contract: every
     segment's accepted records carry the schedule cursor and ``task_history``'s state (required whenever
-    there are tasks), and a resume at ``study.t0 == restart.time`` is bit-identical to the straight march.
+    there are tasks), and a resume at ``window.t0 == restart.time`` is bit-identical to the straight march.
     """
-    if consistent_start and study.integrator in (IntegratorKind.NEWMARK, IntegratorKind.GENERALIZED_ALPHA):
+    if consistent_start and window.integrator in (IntegratorKind.NEWMARK, IntegratorKind.GENERALIZED_ALPHA):
         msg = 'consistent_start initializes first-order rates, not second-order acceleration'
         raise ValueError(msg)
     order, bounds, due = checkpointed_schedule(
         tasks,
-        study.t0,
-        study.t1,
+        window.t0,
+        window.t1,
         restart=restart,
         checkpoint_key=checkpoint_key,
         on_checkpoint=on_checkpoint,
         task_history=task_history,
     )
     u = np.asarray(u0 if restart is None else restart.states[-1], dtype=float)
-    out = TransientSolution(times=[study.t0], states=[u], state_rates=[], residual_times=[], rate_state_overrides={})
+    out = TransientSolution(times=[window.t0], states=[u], state_rates=[], residual_times=[], rate_state_overrides={})
     v, a = march.pop('v0', None), march.pop('a0', None)
-    integrator = get_integrator(study.integrator)
+    integrator = get_integrator(window.integrator)
     budget = march.pop('budget', None)
     started = time.perf_counter()
     for segment, ((t_a, t_b), firing) in enumerate(zip(itertools.pairwise(bounds), due, strict=True)):
@@ -327,7 +327,7 @@ def integrate_sampled(
                 budget.check(started, out.times[-1], u, len(out.times) - 1)
         if t_b <= t_a:
             continue
-        dt = min(study.dt, t_b - t_a)
+        dt = min(window.dt, t_b - t_a)
         if segment_step_limit is not None:
             limit = segment_step_limit(t_a, t_b)
             if not np.isfinite(limit) or limit <= 0:
@@ -364,7 +364,7 @@ def integrate_sampled(
         try:
             seg = integrate_transient(
                 problem,
-                TransientStudy(t0=restart.time if resuming else t_a, t1=t_b, dt=dt, integrator=study.integrator),
+                TimeWindow(t0=restart.time if resuming else t_a, t1=t_b, dt=dt, integrator=window.integrator),
                 u,
                 v0=None if resuming else v,
                 a0=None if resuming else a,

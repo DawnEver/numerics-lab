@@ -1,7 +1,7 @@
 //! Dirichlet pinning — pure algebra, no physics, no mesh.
 //!
-//! The Rust mirror of `src/motronics/gauss/linear/dirichlet.py` and
-//! `src/motronics/gauss/linear/pin_rows.py`. Neither function ever referenced an element, a
+//! The Rust mirror of `src/motronics/gauss/linear/constrained/fixed_values.py` and
+//! `src/motronics/gauss/linear/constrained/pin_rows.py`. Neither function ever referenced an element, a
 //! material or a chart, which is why they are `gauss` citizens on the Python side and stay
 //! `gauss` citizens here. The two exist separately because they pin DIFFERENT representations:
 //! [`apply_dirichlet_triplets`] works on an assembly's COO stream, [`pin_rows`] on a matrix that
@@ -17,7 +17,7 @@
 //! solve that loses its imaginary part. When `contracts` grows a complex operator, this function
 //! is the first caller that needs it.
 
-use contracts::sparse::{Coo, Csr, SparseError};
+use crate::sparse::{Coo, Csr, SparseError};
 
 /// A Dirichlet group: one prescribed value and the indices it is imposed on.
 ///

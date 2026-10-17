@@ -14,7 +14,8 @@ import json
 import numpy as np
 import pytest
 
-from motronics.contracts.spec.study_spec import IntegratorKind, TransientStudy
+from motronics.contracts.spec.study_spec import TransientStudy
+from motronics.gauss.formulation import IntegratorKind
 from motronics.gauss.time_integrators import Hold, SampledTask, integrate_explicit_sampled, integrate_sampled
 from motronics.gauss.time_integrators.checkpoint import read_checkpoint_file, write_checkpoint_file
 from motronics.gauss.time_integrators.waveform_relaxation import waveform_relaxation

@@ -13,8 +13,7 @@ from typing import Protocol, runtime_checkable
 
 import numpy as np
 
-from motronics.contracts.converted import Converted
-from motronics.contracts.spec.analysis_formulation import HistoryProblem
+from motronics.gauss.formulation import HistoryProblem
 from motronics.gauss.time_integrators.eec_checkpoint import EECCheckpointState
 from motronics.gauss.time_integrators.event_checkpoint import EventCheckpointState
 
@@ -250,11 +249,8 @@ class TransientCheckpoint:
     states: tuple[tuple[float, ...], ...]
     velocity: tuple[float, ...] | None = None
     acceleration: tuple[float, ...] | None = None
-    previous_time: Converted[float | None] = Converted(
-        lambda value: value,
-        default=None,
-        resolve=lambda checkpoint, value: checkpoint.time - checkpoint.previous_dt if value is None else value,
-    )
+    #: Absent means one nominal step back, ``time - previous_dt``; resolved at construction.
+    previous_time: float | None = None
     material_history: dict | None = None
     problem_context: dict | None = None
     eec_state: EECCheckpointState | None = None
@@ -268,6 +264,8 @@ class TransientCheckpoint:
     newton_tolerance: float | None = None
 
     def __post_init__(self) -> None:
+        if self.previous_time is None:
+            object.__setattr__(self, 'previous_time', self.time - self.previous_dt)
         if self.problem_context is not None:
             if not isinstance(self.problem_context, dict):
                 msg = 'checkpoint problem_context must be a JSON object'

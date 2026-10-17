@@ -39,7 +39,7 @@ step it took on a `None` tangent; it now REFUSES a tangent-less system
 it judges the residual rather than the energy, so the byd-newton creep this file measured is no
 longer reachable through it. Anderson / the quasi-Newton family mix their own steps from history, so a synthetic
 map cannot pin their increment -- the same reason `_PlateauSystem` next door drives them only for
-the NOT-converged direction. `nu-damped` and `continuation` are undrivable here for the reasons
+the NOT-converged direction. `coefficient-damped` and `continuation` are undrivable here for the reasons
 `test_a_flat_energy_plateau_is_not_convergence` names.
 """
 

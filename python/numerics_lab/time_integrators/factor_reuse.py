@@ -59,7 +59,7 @@ problem's side (``tests/unit/laplace/solver/test_circuit_factor_reuse_key.py``'s
 problem that cannot derive the implication should not expose the seam at all -- ``None`` keys and
 keyless problems always take the plain per-solve path, which is what every pre-W6 problem does.
 
-This module imports only contracts + numpy/scipy and touches no physics, like the rest of gauss.
+This module imports only numpy/scipy and touches no physics, like the rest of gauss.
 """
 
 from __future__ import annotations
