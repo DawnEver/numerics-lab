@@ -4,13 +4,13 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import splu
 
-from motronics.gauss.linear.arithmetic import certified_sparse_product
-from motronics.gauss.linear.border_rank import border_affine_space, homogeneous_zero_coordinates
-from motronics.gauss.linear.index_two import index_two_frozen_rate
-from motronics.gauss.linear.initial_rate import normalize_sparse_rows
-from motronics.gauss.linear.refinement import refine_factored_solution
-from motronics.gauss.linear.resolution import row_bar, system_resolution
-from motronics.gauss.linear.storage_border import free_pinned_columns
+from numerics_lab.linear.arithmetic import certified_sparse_product
+from numerics_lab.linear.border_rank import border_affine_space, homogeneous_zero_coordinates
+from numerics_lab.linear.index_two import index_two_frozen_rate
+from numerics_lab.linear.initial_rate import normalize_sparse_rows
+from numerics_lab.linear.refinement import refine_factored_solution
+from numerics_lab.linear.resolution import row_bar, system_resolution
+from numerics_lab.linear.storage_border import free_pinned_columns
 
 __all__ = ['joint_coordinate_sparse_correction', 'stored_initial_correction']
 
@@ -305,7 +305,7 @@ def _row_bars(matrix, rows, trial, rhs, row_scale, tolerance):
     A row whose operands are all rounding (forcing 0, ``|row| . |trial|`` at 1e-46 beside rows at
     the system's scale) has no scale of its own, and its relative bar is noise judging noise --
     MEASURED 2026-10-14 on the moving-band networks: residual 1.1e-44 against bars of 1e-56.
-    :func:`~motronics.gauss.linear.resolution.system_resolution` owns that floor.
+    :func:`~numerics_lab.linear.resolution.system_resolution` owns that floor.
     """
     operands = np.asarray(abs(matrix) @ abs(trial)).ravel() + abs(rhs) + row_scale
     own = operands[rows]

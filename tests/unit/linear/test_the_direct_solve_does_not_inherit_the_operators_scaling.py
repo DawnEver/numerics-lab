@@ -29,7 +29,7 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import spsolve
 
-from motronics.gauss.linear import solve_equilibrated
+from numerics_lab.linear import solve_equilibrated
 
 
 def _spd(n: int, scale: np.ndarray) -> sp.csc_matrix:

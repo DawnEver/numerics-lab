@@ -4,16 +4,16 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear import initial_rate
-from motronics.gauss.linear.initial_rate import (
+from numerics_lab.linear import initial_rate
+from numerics_lab.linear.initial_rate import (
     _independent_exact_columns,
     _independent_exact_rows,
 )
-from motronics.gauss.linear.initial_sparse import (
+from numerics_lab.linear.initial_sparse import (
     sparse_complete_initial_rate,
     sparse_initial_pair,
 )
-from motronics.gauss.linear.storage_border import storage_border_rows
+from numerics_lab.linear.storage_border import storage_border_rows
 
 
 @pytest.mark.parametrize('tiny_constraint', [0.0, 1e-30])

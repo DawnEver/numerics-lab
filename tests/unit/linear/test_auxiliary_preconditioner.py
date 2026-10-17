@@ -8,11 +8,11 @@ import pytest
 from scipy.sparse import csr_matrix
 from scipy.sparse.linalg import LinearOperator
 
-from motronics.gauss.linear import LinearSolveError, solve_linear_system
+from numerics_lab.linear import LinearSolveError, solve_linear_system
 
 
 def test_additive_inverse_matches_the_transpose_and_complex_scale_dense_oracle():
-    module = importlib.import_module('motronics.gauss.linear.auxiliary')
+    module = importlib.import_module('numerics_lab.linear.auxiliary')
     matrix = csr_matrix(np.array([[3.0 + 2j, 0.2], [0.2, 4.0 + 1j]]))
     transfer = csr_matrix(np.array([[1.0 + 0.3j], [-0.4 + 0.2j]]))
     scalar = csr_matrix(np.array([[2.0 + 0.7j]]))

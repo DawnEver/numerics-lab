@@ -6,11 +6,11 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from motronics.gauss.formulation import IntegratorKind, TimeWindow
-from motronics.gauss.time_integrators import get_integrator, integrate_transient
-from motronics.gauss.time_integrators import march as march_runtime
-from motronics.gauss.time_integrators._landing import AcceptedProjectionResult
-from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint
+from numerics_lab.formulation import IntegratorKind, TimeWindow
+from numerics_lab.time_integrators import get_integrator, integrate_transient
+from numerics_lab.time_integrators import march as march_runtime
+from numerics_lab.time_integrators._landing import AcceptedProjectionResult
+from numerics_lab.time_integrators.checkpoint import TransientCheckpoint
 
 pytestmark = pytest.mark.unit
 

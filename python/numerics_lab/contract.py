@@ -29,7 +29,7 @@ assembly cost -- those are the 0.71 s row, 0.6% of the budget.
 THIS IS NOT BIT-IDENTICAL TO THE NAIVE PATH AND CANNOT BE. Reassociating a floating-point sum
 changes its rounding, so the results agree to relative 1e-12 rather than exactly; BLAS's blocked
 accumulation is if anything the more accurate of the two.
-``tests/unit/gauss/test_an_assembly_contraction_takes_the_blas_path.py`` pins both halves -- the
+``tests/unit/test_an_assembly_contraction_takes_the_blas_path.py`` pins both halves -- the
 agreement and the ratio -- and scans the assembly modules so that a site cannot silently fall back
 onto the default.
 

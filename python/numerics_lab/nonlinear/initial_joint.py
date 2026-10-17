@@ -3,10 +3,10 @@
 import numpy as np
 import scipy.sparse as sp
 
-from motronics.gauss.formulation import InitialJointEvaluation
-from motronics.gauss.linear.initial_rate import sparse_initial_rate
-from motronics.gauss.linear.initial_sparse import SparseInitialPair
-from motronics.gauss.linear.initial_storage_border import joint_coordinate_sparse_correction
+from numerics_lab.formulation import InitialJointEvaluation
+from numerics_lab.linear.initial_rate import sparse_initial_rate
+from numerics_lab.linear.initial_sparse import SparseInitialPair
+from numerics_lab.linear.initial_storage_border import joint_coordinate_sparse_correction
 
 __all__ = ['joint_finite_storage_initial_pair']
 

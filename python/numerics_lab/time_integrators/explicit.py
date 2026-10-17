@@ -1,13 +1,13 @@
 """The explicit sampled march: classic fourth-order Runge-Kutta between task hits -- physics-blind.
 
-:func:`~motronics.gauss.time_integrators.multirate.integrate_sampled` marches a RESIDUAL problem with
+:func:`~numerics_lab.time_integrators.multirate.integrate_sampled` marches a RESIDUAL problem with
 the implicit integrators. A non-stiff plant written as an explicit ODE ``u' = f(u, t)`` under held
 inputs is integrated far more cheaply, and far more accurately per step, by an explicit fourth-order
 scheme: on the sampled drives this module serves, one RK4 step per sample interval agrees with a
 converged reference to ~1e-12 where one TR-BDF2 step is ~1e-3 off and a 1e-8 local-error-controlled
 TR-BDF2 is ~1e-8 off at 60x the cost (measured 2026-10-08, SRM drive, 2 ms window).
 
-The schedule is :func:`~motronics.gauss.time_integrators.multirate.schedule` -- the same task
+The schedule is :func:`~numerics_lab.time_integrators.multirate.schedule` -- the same task
 order, hits and segments the implicit march uses. Every hit is a discontinuity of the held inputs,
 so a segment's steps never straddle one: the march lands each hit exactly, fires the due tasks on
 the state reached there, and steps on. Inside a segment the step is the largest ``<= dt`` that
@@ -24,9 +24,9 @@ from collections.abc import Callable, Sequence
 import numpy as np
 from numpy.typing import NDArray
 
-from motronics.gauss.time_integrators._forms import TransientSolution
-from motronics.gauss.time_integrators.checkpoint import CheckpointHistory, TransientCheckpoint
-from motronics.gauss.time_integrators.multirate import (
+from numerics_lab.time_integrators._forms import TransientSolution
+from numerics_lab.time_integrators.checkpoint import CheckpointHistory, TransientCheckpoint
+from numerics_lab.time_integrators.multirate import (
     SampledTask,
     ScheduledTask,
     checkpointed_schedule,

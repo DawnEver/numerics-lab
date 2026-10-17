@@ -14,7 +14,7 @@ from dataclasses import replace
 import numpy as np
 from numpy.typing import NDArray
 
-from motronics.gauss.time_integrators._forms import TransientSolution
+from numerics_lab.time_integrators._forms import TransientSolution
 
 __all__ = ['decimate', 'interpolation_error']
 

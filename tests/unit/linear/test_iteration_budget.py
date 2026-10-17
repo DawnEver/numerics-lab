@@ -4,8 +4,8 @@ import numpy as np
 import pytest
 from scipy.sparse import diags
 
-from motronics.gauss import linear
-from motronics.gauss.linear import solve_linear_system
+from numerics_lab import linear
+from numerics_lab.linear import solve_linear_system
 
 
 @pytest.mark.parametrize('budget', [0, -1, True, np.bool_(True), 1.5])

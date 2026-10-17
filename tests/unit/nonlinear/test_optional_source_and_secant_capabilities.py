@@ -3,9 +3,9 @@
 import numpy as np
 import pytest
 from scipy.sparse.linalg import LinearOperator
-from tests.unit.gauss.test_nonlinear import _LinearSystem
+from tests.unit.test_nonlinear import _LinearSystem
 
-from motronics.gauss.nonlinear import (
+from numerics_lab.nonlinear import (
     BFGSStrategy,
     BroydenStrategy,
     ContinuationStrategy,
@@ -16,7 +16,7 @@ from motronics.gauss.nonlinear import (
     strategy_runs_on,
     with_time_budget,
 )
-from motronics.gauss.nonlinear import _strategies_newton as owner
+from numerics_lab.nonlinear import _strategies_newton as owner
 
 
 @pytest.mark.parametrize('budgeted', [False, True])

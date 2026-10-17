@@ -1,5 +1,5 @@
 //! Event location, checkpoint/rollback and the variable-step BDF2 form — the Rust mirror of
-//! `src/motronics/gauss/time_integrators/events.py` and its driver's step machinery.
+//! `python/numerics_lab/time_integrators/events.py` and its driver's step machinery.
 //!
 //! A switch, a comparator, a contact: several physics have instants where the problem itself
 //! changes, and a fixed-grid march past such an instant integrates a smeared version of it.

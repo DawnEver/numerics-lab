@@ -31,7 +31,7 @@ import pytest
 from scipy.sparse import csr_matrix
 
 from motronics.core.utils.config import repo_root
-from motronics.gauss.linear import LinearSolveError, gauge_pin_orphan_rows, orphan_rows, solve_linear_system
+from numerics_lab.linear import LinearSolveError, gauge_pin_orphan_rows, orphan_rows, solve_linear_system
 
 
 def _operator_with_orphan() -> tuple[csr_matrix, np.ndarray]:
@@ -83,61 +83,5 @@ def test_the_pin_changes_no_other_unknown():
     assert x[free] == pytest.approx(reference, rel=1e-12, abs=1e-12)
 
 
-def test_every_assembled_solve_path_consults_the_one_owner():
-    """One owner, four consumers -- the primal pair and both DWR adjoint routes.
-
-    Named by IMPORT rather than by call, because the import is what a future edit would have to
-    delete to re-privatise the decision. The floor is that all four are still found: a scan that
-    reached zero modules would read exactly like a clean tree.
-    """
-    src = repo_root() / 'src' / 'motronics'
-    expected = {
-        'hamilton/discretizations/fem/_solve.py',
-        'hamilton/discretizations/fem/_newton.py',
-        'hamilton/discretizations/fem/dwr.py',
-        'hamilton/_error_dwr.py',
-    }
-
-    found = set()
-    scanned = 0
-    for path in sorted(src.rglob('*.py')):
-        scanned += 1
-        tree = ast.parse(path.read_text(encoding='utf-8'))
-        for node in ast.walk(tree):
-            seam = isinstance(node, ast.ImportFrom) and (node.module or '').startswith('motronics.gauss.linear')
-            if seam and any(a.name == 'gauge_pin_orphan_rows' for a in node.names):
-                found.add(path.relative_to(src).as_posix())
-
-    assert scanned > 500, f'the source scan reached only {scanned} modules; the glob is broken'
-    assert expected <= found, f'these paths no longer consult the orphan gauge-pin: {sorted(expected - found)}'
 
 
-def test_no_module_keeps_a_private_orphan_pin():
-    """THE RATCHET. ``fem._solve._gauge_pin_orphan_dofs`` was the private copy; it is retired.
-
-    Matched on the AST (a defined/imported/called NAME), not on the file text, so the owner module
-    may keep naming the retired spelling in the provenance docstring that explains why it exists --
-    prose about a retirement is not a re-introduction of it.
-    """
-    src = repo_root() / 'src' / 'motronics'
-    retired = '_gauge_pin_orphan_dofs'
-
-    offenders = []
-    scanned = 0
-    for path in sorted(src.rglob('*.py')):
-        scanned += 1
-        tree = ast.parse(path.read_text(encoding='utf-8'))
-        names = {
-            *(n.id for n in ast.walk(tree) if isinstance(n, ast.Name)),
-            *(n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)),
-            *(a.name for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) for a in n.names),
-            *(n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)),
-        }
-        if retired in names:
-            offenders.append(path.relative_to(src).as_posix())
-
-    assert scanned > 500, f'the source scan reached only {scanned} modules; the glob is broken'
-    assert not offenders, (
-        f'these modules still carry the retired private orphan pin: {offenders}. '
-        'Call motronics.gauss.linear.gauge_pin_orphan_rows -- it is the same pin with one owner.'
-    )

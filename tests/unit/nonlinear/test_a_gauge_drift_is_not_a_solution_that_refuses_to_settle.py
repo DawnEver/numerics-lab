@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from motronics.gauss.nonlinear import increment_ratio
+from numerics_lab.nonlinear import increment_ratio
 
 _RNG = np.random.default_rng(20260906)
 _X = _RNG.normal(size=512) * 3.0 + 10.0

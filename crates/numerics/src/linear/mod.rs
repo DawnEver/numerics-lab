@@ -1,4 +1,4 @@
-//! The pluggable INNER linear-solve seam — the Rust mirror of `src/motronics/gauss/linear/`.
+//! The pluggable INNER linear-solve seam — the Rust mirror of `python/numerics_lab/linear/`.
 //!
 //! One registry of `solve(matrix, rhs) -> x` backends, so a solve can pick a Krylov method
 //! without the equation code changing. It touches no physics and no mesh: it only solves

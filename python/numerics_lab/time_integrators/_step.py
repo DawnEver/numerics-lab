@@ -9,7 +9,7 @@ import numpy as np
 import scipy.sparse as sp
 from numpy.typing import NDArray
 
-from motronics.gauss.formulation import (
+from numerics_lab.formulation import (
     AffineConstraintProjectionProblem,
     AlternativeJacobianProblem,
     DerivativeWeights,
@@ -19,17 +19,17 @@ from motronics.gauss.formulation import (
     SemiDiscreteProblem,
     StepEvaluationProblem,
 )
-from motronics.gauss.linear import reject_nonfinite_solution
-from motronics.gauss.linear.resolution import ADMISSION_BAR, FLOOR_SAFETY, row_bar, system_resolution
-from motronics.gauss.time_integrators._forms import (
+from numerics_lab.linear import reject_nonfinite_solution
+from numerics_lab.linear.resolution import ADMISSION_BAR, FLOOR_SAFETY, row_bar, system_resolution
+from numerics_lab.time_integrators._forms import (
     IntegratorState,
     StepForm,
     change_below_residual_resolution,
     residual_floor,
 )
-from motronics.gauss.time_integrators.factor_reuse import FactorCache, apply_factor, factor_matrix
-from motronics.gauss.time_integrators.local_convergence import LocalIterationCheck
-from motronics.gauss.time_integrators.prepared import (
+from numerics_lab.time_integrators.factor_reuse import FactorCache, apply_factor, factor_matrix
+from numerics_lab.time_integrators.local_convergence import LocalIterationCheck
+from numerics_lab.time_integrators.prepared import (
     PreparedCandidates,
     PreparedStageContext,
     PreparedStepAttempt,
@@ -297,7 +297,7 @@ class RowAcceptance:
     floor ``FLOOR_SAFETY eps |F_u'| |alpha1 u|``: the rate is a difference of states, so a row whose rate
     is small cannot resolve below it (Cummins 2026-10-15: a linkage row at a 1.85 us zero-vector step
     was held to 1.2e-13 under a ~1e-11 rounding, and Newton exhausted). Noise rows are judged by
-    :func:`~motronics.gauss.linear.resolution.row_bar`.
+    :func:`~numerics_lab.linear.resolution.row_bar`.
 
     THE SCREEN. Reading the scale costs two tangents, so an iterate within :data:`_NEAR` of the last
     judged one (relative, in the state's own max norm) whose residual still exceeds that one's bars by

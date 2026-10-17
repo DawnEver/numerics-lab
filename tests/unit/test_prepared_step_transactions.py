@@ -6,8 +6,8 @@ from dataclasses import dataclass, replace
 import numpy as np
 import pytest
 
-from motronics.gauss.formulation import IntegratorKind, TimeWindow
-from motronics.gauss.time_integrators import (
+from numerics_lab.formulation import IntegratorKind, TimeWindow
+from numerics_lab.time_integrators import (
     BDF1Integrator,
     GeneralizedAlphaIntegrator,
     StepNotConverged,
@@ -15,11 +15,11 @@ from motronics.gauss.time_integrators import (
     get_integrator,
     integrate_transient,
 )
-from motronics.gauss.time_integrators._forms import IntegratorState
-from motronics.gauss.time_integrators._landing import AcceptedProjectionResult, accepted_projection
-from motronics.gauss.time_integrators._step import take_step
-from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint, _checkpoint_of
-from motronics.gauss.time_integrators.prepared import restart_prepared
+from numerics_lab.time_integrators._forms import IntegratorState
+from numerics_lab.time_integrators._landing import AcceptedProjectionResult, accepted_projection
+from numerics_lab.time_integrators._step import take_step
+from numerics_lab.time_integrators.checkpoint import TransientCheckpoint, _checkpoint_of
+from numerics_lab.time_integrators.prepared import restart_prepared
 
 
 @dataclass(frozen=True)

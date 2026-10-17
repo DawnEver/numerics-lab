@@ -4,11 +4,11 @@ import json
 
 import numpy as np
 import pytest
-from tests.unit.gauss.test_nonlinear_eec_cycle_tangent import Cubic
+from tests.unit.test_nonlinear_eec_cycle_tangent import Cubic
 
-from motronics.gauss.formulation import IntegratorKind, TimeWindow
-from motronics.gauss.time_integrators import integrate_transient
-from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint
+from numerics_lab.formulation import IntegratorKind, TimeWindow
+from numerics_lab.time_integrators import integrate_transient
+from numerics_lab.time_integrators.checkpoint import TransientCheckpoint
 
 
 def _run(start, end, restart=None):

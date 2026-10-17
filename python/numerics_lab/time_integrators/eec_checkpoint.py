@@ -3,7 +3,7 @@
 import math
 from dataclasses import dataclass
 
-from motronics.gauss.time_integrators.eec_tangent import CycleTangentCSR
+from numerics_lab.time_integrators.eec_tangent import CycleTangentCSR
 
 __all__ = ['EECCheckpointState']
 

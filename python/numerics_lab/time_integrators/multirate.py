@@ -28,17 +28,17 @@ from fractions import Fraction
 import numpy as np
 from numpy.typing import NDArray
 
-from motronics.gauss.formulation import IntegratorKind, TimeWindow
-from motronics.gauss.time_integrators._forms import IntegratorState, TransientSolution
-from motronics.gauss.time_integrators._integrators import get_integrator
-from motronics.gauss.time_integrators.checkpoint import (
+from numerics_lab.formulation import IntegratorKind, TimeWindow
+from numerics_lab.time_integrators._forms import IntegratorState, TransientSolution
+from numerics_lab.time_integrators._integrators import get_integrator
+from numerics_lab.time_integrators.checkpoint import (
     CheckpointHistory,
     ScheduleCheckpointState,
     TransientCheckpoint,
 )
-from motronics.gauss.time_integrators.initial import consistent_initial_condition
-from motronics.gauss.time_integrators.instants import same_instant
-from motronics.gauss.time_integrators.march import BudgetExceeded, integrate_transient
+from numerics_lab.time_integrators.initial import consistent_initial_condition
+from numerics_lab.time_integrators.instants import same_instant
+from numerics_lab.time_integrators.march import BudgetExceeded, integrate_transient
 
 __all__ = [
     'Hold',
@@ -284,7 +284,7 @@ def integrate_sampled(
     """March ``problem`` over ``window`` with ``tasks`` firing at their hits and holding between them.
 
     ``window.dt`` bounds the continuous step inside a segment; every ``march`` keyword passes to
-    :func:`~motronics.gauss.time_integrators.march.integrate_transient`. Coincident tasks run by
+    :func:`~numerics_lab.time_integrators.march.integrate_transient`. Coincident tasks run by
     ascending priority, then fastest clock, then declaration order. The returned trajectory is the segments joined at their hits
     (each hit appears once), with every convergence label carried.
     ``consistent_start`` re-solves each segment's start after its tasks update the held inputs:

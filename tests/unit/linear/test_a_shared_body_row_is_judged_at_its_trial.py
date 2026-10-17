@@ -19,7 +19,7 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear.initial_storage_border import _row_bars, _sparse_joint_border
+from numerics_lab.linear.initial_storage_border import _row_bars, _sparse_joint_border
 
 pytestmark = pytest.mark.unit
 

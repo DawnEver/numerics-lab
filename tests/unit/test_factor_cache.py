@@ -19,10 +19,10 @@ import pytest
 from numpy.typing import NDArray
 from scipy.sparse import csr_matrix
 
-from motronics.gauss.formulation import DerivativeWeights, IntegratorKind, TimeWindow
-from motronics.gauss.time_integrators import factor_reuse, integrate_transient
-from motronics.gauss.time_integrators.factor_reuse import FactorCache
-from motronics.gauss.time_integrators.march import _default_solve
+from numerics_lab.formulation import DerivativeWeights, IntegratorKind, TimeWindow
+from numerics_lab.time_integrators import factor_reuse, integrate_transient
+from numerics_lab.time_integrators.factor_reuse import FactorCache
+from numerics_lab.time_integrators.march import _default_solve
 
 
 class _SpringBase:
@@ -158,7 +158,7 @@ def test_the_sparse_path_back_substitutes_like_spsolve(native, monkeypatch) -> N
     """With the native factor switched off, splu and spsolve are the same SuperLU call (bit-equal,
     measured 2026-07-22); with it on, the held factor is faer's and agrees to round-off.
     """
-    monkeypatch.setenv('MOTRONICS_DIRECT_NATIVE', native)
+    monkeypatch.setenv('NUMERICS_LAB_DIRECT_NATIVE', native)
     m = csr_matrix(np.array([[4.0, 1.0, 0.0], [1.0, 3.0, 0.0], [0.0, 0.0, 2.0]]))
     b = np.array([1.0, 2.0, 3.0])
     cache = FactorCache()

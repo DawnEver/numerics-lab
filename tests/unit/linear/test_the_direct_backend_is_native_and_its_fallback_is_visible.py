@@ -16,11 +16,11 @@ import pytest
 import scipy.sparse as sp
 from scipy.sparse.linalg import spsolve
 
-from motronics.gauss.linear import native_direct, solve_linear_system
-from motronics.gauss.time_integrators.factor_reuse import apply_factor, factor_matrix
+from numerics_lab.linear import native_direct, solve_linear_system
+from numerics_lab.time_integrators.factor_reuse import apply_factor, factor_matrix
 
 needs_native = pytest.mark.skipif(
-    not native_direct.native_available(), reason='motronics_native with DirectFactorization.refactor not built'
+    not native_direct.native_available(), reason='numerics_lab._native with DirectFactorization.refactor not built'
 )
 
 
@@ -183,7 +183,7 @@ def test_all_unit_rows_remain_a_real_native_factor_not_an_empty_system():
 
 
 def test_the_superlu_fallback_is_logged_and_counted(monkeypatch, caplog):
-    monkeypatch.setenv('MOTRONICS_DIRECT_NATIVE', '0')
+    monkeypatch.setenv('NUMERICS_LAB_DIRECT_NATIVE', '0')
     monkeypatch.setattr(native_direct, '_warned', set())
     a = _unsymmetric(50)
     b = np.ones(50)

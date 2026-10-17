@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from motronics.gauss.formulation import IntegratorKind, TimeWindow
-from motronics.gauss.modal_transient import integrate_modal_transient
+from numerics_lab.formulation import IntegratorKind, TimeWindow
+from numerics_lab.modal_transient import integrate_modal_transient
 
 
 @pytest.mark.parametrize('scale', [1e-12, 1.0, 1e12])

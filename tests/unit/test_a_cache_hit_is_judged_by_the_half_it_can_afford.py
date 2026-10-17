@@ -29,8 +29,8 @@ import numpy as np
 import pytest
 from scipy.linalg import lu_factor, lu_solve
 
-from motronics.gauss.linear import LinearSolveError
-from motronics.gauss.time_integrators.factor_reuse import FactorCache
+from numerics_lab.linear import LinearSolveError
+from numerics_lab.time_integrators.factor_reuse import FactorCache
 
 _KEY = ('scalar-jacobian', 1)
 

@@ -12,7 +12,7 @@ from __future__ import annotations
 import numpy as np
 from scipy.sparse import coo_matrix
 
-from motronics.gauss.linear import apply_dirichlet_triplets
+from numerics_lab.linear import apply_dirichlet_triplets
 
 
 def _dense(row, col, val, n):

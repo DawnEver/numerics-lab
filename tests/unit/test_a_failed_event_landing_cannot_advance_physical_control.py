@@ -4,15 +4,15 @@ from importlib import import_module
 
 import numpy as np
 import pytest
-from tests.unit.gauss._helpers import _RampWithToggle
+from tests.unit._helpers import _RampWithToggle
 
-from motronics.gauss.formulation import IntegratorKind, TimeWindow
-from motronics.gauss.time_integrators import _step as _step_mod
+from numerics_lab.formulation import IntegratorKind, TimeWindow
+from numerics_lab.time_integrators import _step as _step_mod
 
 
 @pytest.mark.parametrize('adaptive', [False, True])
 def test_failed_landing_cannot_call_the_physical_handler(monkeypatch, adaptive):
-    events = import_module('motronics.gauss.time_integrators.march')
+    events = import_module('numerics_lab.time_integrators.march')
     original = _step_mod._solve_step
     calls = []
 

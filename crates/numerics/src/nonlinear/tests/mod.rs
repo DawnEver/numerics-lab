@@ -1,6 +1,6 @@
 //! The port's own regressions, mirroring the Python's assertions one for one.
 //!
-//! Every test here corresponds to a named Python file under `tests/unit/gauss/`, because each of
+//! Every test here corresponds to a named Python file under `tests/unit/`, because each of
 //! those files encodes a MEASURED failure the code exists to prevent. A port that kept the
 //! arithmetic and dropped the tests would silently reintroduce them.
 

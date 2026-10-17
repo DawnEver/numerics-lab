@@ -1,0 +1,17 @@
+[package]
+name = "pybind"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# The Python extension `numerics_lab._native`: thin glue over `numerics`, no numerics of its own.
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+numerics.workspace = true
+# PyO3 and rust-numpy move together: numpy's minor tracks PyO3's exactly.
+pyo3 = { version = "0.29", features = ["extension-module"] }
+numpy = "0.29"

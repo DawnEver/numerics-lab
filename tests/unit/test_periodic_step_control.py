@@ -3,10 +3,10 @@
 import numpy as np
 import pytest
 
-from motronics.gauss.formulation import TimeWindow
-from motronics.gauss.time_integrators import _step, integrate_transient
-from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint
-from motronics.gauss.time_integrators.periodic import periodic_converged
+from numerics_lab.formulation import TimeWindow
+from numerics_lab.time_integrators import _step, integrate_transient
+from numerics_lab.time_integrators.checkpoint import TransientCheckpoint
+from numerics_lab.time_integrators.periodic import periodic_converged
 
 
 class Ramp:

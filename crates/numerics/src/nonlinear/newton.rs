@@ -284,7 +284,7 @@ impl<S: NonlinearSystem> IterationStrategy<S> for NewtonStrategy {
 /// held steps. Its own docstring records that this is bit-for-bit the iterate a per-step solve
 /// produces — it buys TIME, not accuracy — so the port calls `solve_system` on the held tangent
 /// each step and reaches the identical sequence. The factor cache belongs with the factorization,
-/// which lives in `gauss::linear`, not here.
+/// which lives in `numerics::linear`, not here.
 #[derive(Debug, Clone, Copy)]
 pub struct ModifiedNewtonStrategy {
     pub refresh_every: usize,
@@ -445,7 +445,7 @@ impl<S: NonlinearSystem> IterationStrategy<S> for HeldFactorNewtonStrategy {
 /// `solve_system` route is the correct one for every equation that supplies a tangent, and the
 /// resulting iterate is an exact Newton step converging to the same root — which is precisely what
 /// the Python's own comment says about that branch. What is missing is the JACOBIAN-FREE path,
-/// which needs a Krylov backend; that lives in `gauss::linear`, not here, and wiring it in is a
+/// which needs a Krylov backend; that lives in `numerics::linear`, not here, and wiring it in is a
 /// follow-on rather than a rewrite of this file. Until then a system with no tangent takes the
 /// Picard substitution — the Python's own breakdown behaviour, reached one step earlier.
 ///

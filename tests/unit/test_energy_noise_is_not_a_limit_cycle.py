@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from motronics.gauss.nonlinear import AssembledState, get_strategy
+from numerics_lab.nonlinear import AssembledState, get_strategy
 
 _RTOL = 0.01  # percent -- the production default
 

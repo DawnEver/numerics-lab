@@ -3,10 +3,10 @@
 import numpy as np
 import pytest
 from scipy.linalg import expm
-from tests.unit.gauss.test_trapezoid_and_tr_bdf2_are_second_order_on_rc_rl_rlc import _Linear
+from tests.unit.test_trapezoid_and_tr_bdf2_are_second_order_on_rc_rl_rlc import _Linear
 
-from motronics.gauss.formulation import TimeWindow
-from motronics.gauss.time_integrators import integrate_transient
+from numerics_lab.formulation import TimeWindow
+from numerics_lab.time_integrators import integrate_transient
 
 
 def test_offset_nominal_observations_are_exact_hits_without_ulp_sized_cells():

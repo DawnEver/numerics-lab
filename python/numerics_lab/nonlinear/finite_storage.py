@@ -9,22 +9,22 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import splu
 
-from motronics.gauss.linear.algebraic_bulk_initial import algebraic_bulk_initial_pair
-from motronics.gauss.linear.arithmetic import affine_residual_bound, certified_sparse_product
-from motronics.gauss.linear.index_two import (
+from numerics_lab.linear.algebraic_bulk_initial import algebraic_bulk_initial_pair
+from numerics_lab.linear.arithmetic import affine_residual_bound, certified_sparse_product
+from numerics_lab.linear.index_two import (
     certified_null_directions,
     index_two_frozen_rate,
 )
-from motronics.gauss.linear.initial_rate import sparse_initial_rate
-from motronics.gauss.linear.initial_sparse import (
+from numerics_lab.linear.initial_rate import sparse_initial_rate
+from numerics_lab.linear.initial_sparse import (
     SparseInitialPair,
     projected_rate_consistent,
     sparse_initial_pair,
 )
-from motronics.gauss.linear.initial_storage_border import joint_coordinate_sparse_correction
-from motronics.gauss.linear.resolution import ADMISSION_BAR, system_resolution
-from motronics.gauss.nonlinear import AssembledState, NewtonStrategy
-from motronics.gauss.nonlinear.initial_joint import joint_finite_storage_initial_pair
+from numerics_lab.linear.initial_storage_border import joint_coordinate_sparse_correction
+from numerics_lab.linear.resolution import ADMISSION_BAR, system_resolution
+from numerics_lab.nonlinear import AssembledState, NewtonStrategy
+from numerics_lab.nonlinear.initial_joint import joint_finite_storage_initial_pair
 
 __all__ = [
     'StorageRateAuthorityRequired',
@@ -761,7 +761,7 @@ def _actual_finite_storage_state(
 def _backtracked_state(state, step, target, residual_at, charge_at, storage, zero, *, shrink=0.5, armijo=1e-4):
     """``state + lam * step`` at the first ``lam`` in ``1, shrink, ...`` that decreases the state equations.
 
-    The same Armijo rule as :class:`~motronics.gauss.nonlinear._strategies_newton.NewtonStrategy`, on
+    The same Armijo rule as :class:`~numerics_lab.nonlinear._strategies_newton.NewtonStrategy`, on
     the norm of what this search solves: the projected algebraic rows and the stored-charge mismatch.
     A full step on a saturating field can overshoot into a two-cycle that never converges; near the
     root ``lam = 1`` is accepted, so the search is Newton there. When no ``lam`` decreases the norm

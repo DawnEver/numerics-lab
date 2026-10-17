@@ -25,7 +25,7 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear import (
+from numerics_lab.linear import (
     _REPAIRABLE_CONDITION_FACTOR,
     LINEAR_SOLVER_REGISTRY,
     LinearSolveError,

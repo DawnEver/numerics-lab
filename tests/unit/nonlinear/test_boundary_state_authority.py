@@ -4,8 +4,8 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear.storage_border import StorageRows
-from motronics.gauss.nonlinear import finite_storage as runtime
+from numerics_lab.linear.storage_border import StorageRows
+from numerics_lab.nonlinear import finite_storage as runtime
 
 
 @pytest.mark.parametrize('value', [1.0, 1e-30])

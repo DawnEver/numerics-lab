@@ -3,7 +3,7 @@ name: solver-iteration-methods-decoupling-and-comparison
 description: "The 2026-07-09 mesh / equation / nonlinear-iteration decoupling design, the solver-methods roadmap (pluggable registry + permanent comparison harness), the 2026-07-11 benchmark of the 12 ITERATION_REGISTRY strategies across fea/mec/sdm, and the 2026-07-14 plan that exposed --linear-solver/--preconditioner."
 created: 2026-07-09
 accessed: 2026-09-27
-merged_from: src/motronics/gauss/.claude/memory/2026/07/14/plan-wire-linear-precond-cli.md, src/motronics/gauss/.claude/memory/2026/07/11/report-solver-iteration-method-comparison.md, src/motronics/gauss/.claude/memory/2026/07/09/design-solver-iteration-decoupling.md, src/motronics/hamilton/.claude/memory/2026/07/09/roadmap-solver-methods.md
+merged_from: .claude/memory/2026/07/14/plan-wire-linear-precond-cli.md, .claude/memory/2026/07/11/report-solver-iteration-method-comparison.md, .claude/memory/2026/07/09/design-solver-iteration-decoupling.md, src/motronics/hamilton/.claude/memory/2026/07/09/roadmap-solver-methods.md
 metadata:
   type: plan
 ---
@@ -22,7 +22,7 @@ metadata:
 
 ## Members, newest first (full text; the older ones are the History above refers to)
 
-### Member `src/motronics/gauss/.claude/memory/2026/07/14/plan-wire-linear-precond-cli.md`
+### Member `.claude/memory/2026/07/14/plan-wire-linear-precond-cli.md`
 
 Original frontmatter:
 
@@ -73,7 +73,7 @@ via `-s`. Same pattern for the linear/preconditioner registries. Existing CLI pa
 `choices=sorted(ITERATION_REGISTRY)` on `--iteration-strategy` — the dynamic `choices` list auto-syncs
 the `--help` text without a separate test.
 
-### Member `src/motronics/gauss/.claude/memory/2026/07/11/report-solver-iteration-method-comparison.md`
+### Member `.claude/memory/2026/07/11/report-solver-iteration-method-comparison.md`
 
 Original frontmatter:
 
@@ -208,7 +208,7 @@ damped-Picard field (correctness gate `test_fea_newton`).
   end-to-end — recommended next step for a production benchmark (queued as a follow-up).
 - Reproduce: `PYTHONPATH="$PWD/src:$PWD" python tmp/bench.py`.
 
-### Member `src/motronics/gauss/.claude/memory/2026/07/09/design-solver-iteration-decoupling.md`
+### Member `.claude/memory/2026/07/09/design-solver-iteration-decoupling.md`
 
 Original frontmatter:
 

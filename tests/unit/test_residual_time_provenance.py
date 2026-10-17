@@ -3,11 +3,11 @@
 import numpy as np
 import pytest
 
-from motronics.gauss.formulation import TimeWindow
-from motronics.gauss.time_integrators import _step, integrate_transient
-from motronics.gauss.time_integrators.initial import consistent_initial_condition
-from motronics.gauss.time_integrators.march import StepNotConverged
-from motronics.gauss.time_integrators.multirate import SampledTask, integrate_sampled
+from numerics_lab.formulation import TimeWindow
+from numerics_lab.time_integrators import _step, integrate_transient
+from numerics_lab.time_integrators.initial import consistent_initial_condition
+from numerics_lab.time_integrators.march import StepNotConverged
+from numerics_lab.time_integrators.multirate import SampledTask, integrate_sampled
 
 
 class _Jump:

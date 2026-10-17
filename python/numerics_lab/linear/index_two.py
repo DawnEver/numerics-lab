@@ -24,8 +24,8 @@ import scipy.sparse as sp
 from scipy.linalg import null_space
 from scipy.sparse.csgraph import connected_components
 
-from motronics.gauss.linear.arithmetic import certified_sparse_product, sparse_product_bound
-from motronics.gauss.linear.initial_rate import sparse_initial_rate
+from numerics_lab.linear.arithmetic import certified_sparse_product, sparse_product_bound
+from numerics_lab.linear.initial_rate import sparse_initial_rate
 
 __all__ = ['certified_null_directions', 'index_two_directions', 'index_two_frozen_rate']
 

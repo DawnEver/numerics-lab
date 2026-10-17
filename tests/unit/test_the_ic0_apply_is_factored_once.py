@@ -19,7 +19,7 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import spsolve_triangular
 
-from motronics.gauss.linear import make_preconditioner, solve_linear_system
+from numerics_lab.linear import make_preconditioner, solve_linear_system
 
 #: Two SuperLU sweeps measured ~15 matvecs; 2x headroom for a shared box.
 _IC0_APPLY_MATVEC_BUDGET = 30

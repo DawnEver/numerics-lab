@@ -18,8 +18,8 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear.index_two import index_two_directions, index_two_frozen_rate
-from motronics.gauss.linear.initial_rate import sparse_initial_rate
+from numerics_lab.linear.index_two import index_two_directions, index_two_frozen_rate
+from numerics_lab.linear.initial_rate import sparse_initial_rate
 
 pytestmark = pytest.mark.unit
 

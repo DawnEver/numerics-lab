@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from motronics.gauss.time_integrators.periodic import periodic_fixed_point
+from numerics_lab.time_integrators.periodic import periodic_fixed_point
 
 
 def test_a_slow_affine_map_is_solved_exactly_in_a_few_periods() -> None:
@@ -44,7 +44,7 @@ def test_an_invalid_periodic_tolerance_is_refused(tol) -> None:
 
 @pytest.mark.parametrize('period', [0.0, -1.0, np.nan, np.inf])
 def test_an_invalid_forcing_period_is_refused_before_marching(period) -> None:
-    from motronics.gauss.time_integrators.periodic import smooth_phase  # noqa: PLC0415
+    from numerics_lab.time_integrators.periodic import smooth_phase  # noqa: PLC0415
 
     with pytest.raises(ValueError, match='period'):
         smooth_phase(period, ())
@@ -53,9 +53,9 @@ def test_an_invalid_forcing_period_is_refused_before_marching(period) -> None:
 @pytest.mark.parametrize('integrator', ['bdf1', 'bdf2', 'trapezoid', 'tr_bdf2'])
 def test_the_steady_state_driver_restarts_off_every_edge_and_lands_the_closed_form(integrator) -> None:
     """``u' = -u + s(t)``, ``s`` a 0/1 square wave of period 1 (on for [0, 0.5)): exact periodic orbit."""
-    from motronics.gauss.formulation import TimeWindow  # noqa: PLC0415
-    from motronics.gauss.time_integrators import StepTolerance, integrate_transient  # noqa: PLC0415
-    from motronics.gauss.time_integrators.periodic import periodic_steady_state, smooth_phase  # noqa: PLC0415
+    from numerics_lab.formulation import TimeWindow  # noqa: PLC0415
+    from numerics_lab.time_integrators import StepTolerance, integrate_transient  # noqa: PLC0415
+    from numerics_lab.time_integrators.periodic import periodic_steady_state, smooth_phase  # noqa: PLC0415
 
     class _Square:
         def residual(self, u, u_dot, u_ddot, t):

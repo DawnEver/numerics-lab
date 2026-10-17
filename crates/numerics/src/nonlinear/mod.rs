@@ -1,5 +1,5 @@
 //! Pluggable nonlinear-iteration strategies — the Rust mirror of
-//! `src/motronics/gauss/nonlinear/`.
+//! `python/numerics_lab/nonlinear/`.
 //!
 //! The governing equation knows how to ASSEMBLE (given the current iterate, produce the system
 //! matrix, the energy, and whatever payload the caller returns); the STRATEGY knows how to

@@ -3,7 +3,7 @@
 Hiptmair-Xu / AMS is NOT applicable here -- it preconditions the curl-curl (edge-element,
 H(curl)) operator, which this codebase does not have (the FEA solve is the SPD 2D scalar
 nodal Poisson ``-div(nu grad A) = J``). See
-``src/motronics/gauss/.claude/memory/2026/07/10/finding-hiptmair-xu-assessment.md`` and the module docstring of
+``.claude/memory/2026/07/10/finding-hiptmair-xu-assessment.md`` and the module docstring of
 ``gauss/linear/ssor.py`` (SSOR relocated there as a physics-blind algebraic primitive).
 
 These tests characterize the honest in-scope increment instead: an additive SSOR
@@ -18,7 +18,7 @@ import pytest
 import scipy.sparse as sp
 from scipy.sparse.linalg import cg, spsolve
 
-from motronics.gauss.linear import (
+from numerics_lab.linear import (
     PRECONDITIONER_REGISTRY,
     make_preconditioner,
     solve_linear_system,

@@ -15,8 +15,8 @@ from functools import lru_cache
 import numpy as np
 from numpy.typing import NDArray
 
-from motronics.gauss.formulation import NEWMARK_BETA, NEWMARK_GAMMA, DerivativeWeights, IntegratorKind
-from motronics.gauss.time_integrators._forms import IntegratorState, ITimeIntegrator, StepForm
+from numerics_lab.formulation import NEWMARK_BETA, NEWMARK_GAMMA, DerivativeWeights, IntegratorKind
+from numerics_lab.time_integrators._forms import IntegratorState, ITimeIntegrator, StepForm
 
 __all__ = [
     'INTEGRATOR_REGISTRY',

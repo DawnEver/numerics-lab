@@ -23,7 +23,7 @@ import numpy as np
 import scipy.sparse as sp
 from numpy.typing import NDArray
 
-from motronics.gauss.formulation import DerivativeWeights
+from numerics_lab.formulation import DerivativeWeights
 
 __all__ = ['ConsistentStart', 'InconsistentInitialCondition', 'consistent_initial_condition']
 

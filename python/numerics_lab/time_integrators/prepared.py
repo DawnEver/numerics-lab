@@ -12,14 +12,14 @@ from typing import Protocol, runtime_checkable
 
 from numpy.typing import NDArray
 
-from motronics.gauss.formulation import SemiDiscreteProblem
-from motronics.gauss.time_integrators._forms import (
+from numerics_lab.formulation import SemiDiscreteProblem
+from numerics_lab.time_integrators._forms import (
     IntegratorState,
     ITimeIntegrator,
     ProjectedRestartIntegrator,
     StepForm,
 )
-from motronics.gauss.time_integrators._landing import AcceptedProjectionResult
+from numerics_lab.time_integrators._landing import AcceptedProjectionResult
 
 __all__ = [
     'PreparedCandidates',

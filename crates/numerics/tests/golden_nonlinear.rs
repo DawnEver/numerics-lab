@@ -1,7 +1,7 @@
 //! The nonlinear port judged against the PYTHON, through the committed golden TRAJECTORIES.
 //!
-//! `goldens/nonlinear.json` is generated from `src/motronics/gauss/nonlinear/` and is read by
-//! both languages: `tests/unit/gauss/test_nonlinear_port_golden.py` asserts the live Python still
+//! `goldens/nonlinear.json` is generated from `python/numerics_lab/nonlinear/` and is read by
+//! both languages: `tests/unit/test_nonlinear_port_golden.py` asserts the live Python still
 //! produces it (that is the freeze protocol, made executable), and this file asserts the Rust port
 //! produces it too. Neither half alone is the proof.
 //!
@@ -21,7 +21,7 @@
 //! closed-form arithmetic in f64 — it is a floor under the operation-ordering differences a hand
 //! port makes (numpy reaching a length-3 dot through BLAS where the Rust writes the loop out).
 
-use gauss::nonlinear::{
+use numerics::nonlinear::{
     get_strategy, AssembledState, IterationStrategy, NonlinearError, NonlinearSystem, RawState,
     SolveOptions, StateOf, KNOWN_STRATEGIES,
 };

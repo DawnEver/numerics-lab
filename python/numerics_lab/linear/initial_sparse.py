@@ -7,16 +7,16 @@ import scipy.sparse as sp
 from scipy.sparse.csgraph import maximum_bipartite_matching
 from scipy.sparse.linalg import splu
 
-from motronics.gauss.linear.arithmetic import certified_sparse_product
-from motronics.gauss.linear.initial_rate import (
+from numerics_lab.linear.arithmetic import certified_sparse_product
+from numerics_lab.linear.initial_rate import (
     _independent_exact_columns,
     _independent_exact_rows,
     normalize_sparse_rows,
 )
-from motronics.gauss.linear.initial_rate_border import complete_rate_border
-from motronics.gauss.linear.initial_storage_border import stored_initial_correction
-from motronics.gauss.linear.resolution import row_bar, system_resolution
-from motronics.gauss.linear.storage_border import free_pinned_columns
+from numerics_lab.linear.initial_rate_border import complete_rate_border
+from numerics_lab.linear.initial_storage_border import stored_initial_correction
+from numerics_lab.linear.resolution import row_bar, system_resolution
+from numerics_lab.linear.storage_border import free_pinned_columns
 
 __all__ = ['SparseInitialPair', 'projected_rate_consistent', 'sparse_complete_initial_rate', 'sparse_initial_pair']
 

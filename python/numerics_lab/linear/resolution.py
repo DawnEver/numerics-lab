@@ -11,7 +11,7 @@ transformer_3ph_concentric and the moving-band networks): the transient step's l
 joint border's row bars and the projected-rate consistency check. They all ask this module now.
 
 The resolution is ``FLOOR_SAFETY * eps`` of the system scale -- the same rounding floor
-:func:`motronics.gauss.time_integrators._forms.residual_floor` states. It replaces a row's bar ONLY
+:func:`numerics_lab.time_integrators._forms.residual_floor` states. It replaces a row's bar ONLY
 where that row is HOMOGENEOUS (its own forcing exactly zero: no source, no declared data) and its
 operands are themselves under it (:func:`row_bar`). Such a row's true value is exactly zero, so
 anything there is rounding and is judged as zero. A row with its own nonzero forcing is real at any

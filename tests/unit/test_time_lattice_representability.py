@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from motronics.gauss.time_integrators._time_lattice import adaptive_lattice
+from numerics_lab.time_integrators._time_lattice import adaptive_lattice
 
 
 @pytest.mark.parametrize(

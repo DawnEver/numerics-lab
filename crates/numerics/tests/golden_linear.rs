@@ -1,6 +1,6 @@
 //! The linear-solve port judged against the PYTHON, through the committed golden vectors.
 //!
-//! The golden is written by `tests/unit/gauss/test_linear_port_golden.py`, which separately
+//! The golden is written by `tests/unit/test_linear_port_golden.py`, which separately
 //! asserts the live Python still produces it — that half is the freeze, this half is the port.
 //!
 //! # The one claim this file does NOT make
@@ -31,12 +31,12 @@
 //! crossover (31,901 -> 0.81x, 32,572 -> 1.70x, 35,430 -> 0.78x) was `SupernodalThreshold::AUTO`
 //! picking the simplicial kernel. With supernodal forced, one reused numeric factor, Cholesky on an
 //! exactly symmetric operator, one refinement step and a Schur border for dense rows,
-//! `gauss::linear::direct::DirectFactorization` is the Python `direct` backend's default through
+//! `numerics::linear::direct::DirectFactorization` is the Python `direct` backend's default through
 //! `gauss.linear.native_direct` (SciPy stays the logged fallback). The refinement step makes this
 //! side agree with the Python BETTER than before, so the bars below are unchanged.
 
-use gauss::sparse::{Coo, Csr};
-use gauss::linear::{
+use numerics::sparse::{Coo, Csr};
+use numerics::linear::{
     check_direct_residual, direct, solve_linear_system, LinearSolveError, LinearSolver,
     DIRECT_RESIDUAL_RTOL,
 };
@@ -164,7 +164,7 @@ fn iccg_and_auto_agree_with_committed_python_direct_answers() {
         let want = floats(&case["solutions"]["direct"]);
         let auto = solve_linear_system(&a, &b, Some("auto"), None, None).unwrap();
         agree(&auto, &want, KRYLOV_AGREEMENT_RTOL, &format!("{name}.auto"));
-        if gauss::linear::Preconditioner::build("ic0", &a).is_ok() {
+        if numerics::linear::Preconditioner::build("ic0", &a).is_ok() {
             let iccg = solve_linear_system(&a, &b, Some("iccg"), None, None).unwrap();
             agree(&iccg, &want, KRYLOV_AGREEMENT_RTOL, &format!("{name}.iccg"));
             iccg_cases += 1;

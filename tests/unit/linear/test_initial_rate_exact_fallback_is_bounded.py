@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear import initial_rate
+from numerics_lab.linear import initial_rate
 
 
 def test_large_singular_rate_requires_owned_sparse_subsystem_without_rationalizing(monkeypatch):

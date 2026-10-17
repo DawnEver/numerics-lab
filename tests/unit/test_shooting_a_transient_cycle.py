@@ -3,9 +3,9 @@
 import numpy as np
 import pytest
 
-from motronics.gauss.formulation import IntegratorKind, TimeWindow
-from motronics.gauss.time_integrators import integrate_transient
-from motronics.gauss.time_integrators.periodic_march import shoot_transient_cycle
+from numerics_lab.formulation import IntegratorKind, TimeWindow
+from numerics_lab.time_integrators import integrate_transient
+from numerics_lab.time_integrators.periodic_march import shoot_transient_cycle
 
 
 class DrivenDecay:

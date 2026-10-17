@@ -1,4 +1,4 @@
-//! Dirichlet pinning, mirroring `tests/unit/gauss/test_dirichlet_triplets.py`.
+//! Dirichlet pinning, mirroring `tests/unit/test_dirichlet_triplets.py`.
 
 use crate::linear::dirichlet::{apply_dirichlet_triplets, pin_rows, DirichletGroup};
 use crate::sparse::Coo;

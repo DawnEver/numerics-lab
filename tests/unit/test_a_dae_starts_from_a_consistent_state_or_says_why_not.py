@@ -5,9 +5,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from motronics.gauss.formulation import DerivativeWeights, IntegratorKind, TimeWindow
-from motronics.gauss.time_integrators import integrate_transient
-from motronics.gauss.time_integrators.initial import InconsistentInitialCondition, consistent_initial_condition
+from numerics_lab.formulation import DerivativeWeights, IntegratorKind, TimeWindow
+from numerics_lab.time_integrators import integrate_transient
+from numerics_lab.time_integrators.initial import InconsistentInitialCondition, consistent_initial_condition
 
 _R, _C = 2.0, 0.5
 

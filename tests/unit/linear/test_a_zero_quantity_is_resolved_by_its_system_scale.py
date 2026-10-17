@@ -16,10 +16,10 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear.initial_sparse import projected_rate_consistent
-from motronics.gauss.linear.initial_storage_border import _row_bars
-from motronics.gauss.linear.resolution import system_resolution
-from motronics.gauss.time_integrators._forms import change_below_residual_resolution
+from numerics_lab.linear.initial_sparse import projected_rate_consistent
+from numerics_lab.linear.initial_storage_border import _row_bars
+from numerics_lab.linear.resolution import system_resolution
+from numerics_lab.time_integrators._forms import change_below_residual_resolution
 
 pytestmark = pytest.mark.unit
 

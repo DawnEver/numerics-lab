@@ -4,7 +4,7 @@ import numpy as np
 from scipy.linalg import null_space
 from scipy.sparse import csr_matrix
 
-from motronics.gauss.linear.initial_sparse import SparseInitialPair
+from numerics_lab.linear.initial_sparse import SparseInitialPair
 
 __all__ = ['complete_dae_initial_rate', 'initial_subspaces', 'linear_dae_initial_pair', 'linear_dae_initial_state']
 

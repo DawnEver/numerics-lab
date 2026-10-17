@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from motronics.gauss.time_integrators._forms import TransientSolution
-from motronics.gauss.time_integrators.decimate import decimate
+from numerics_lab.time_integrators._forms import TransientSolution
+from numerics_lab.time_integrators.decimate import decimate
 
 
 def test_decimation_reindexes_residual_times_with_retained_rates():

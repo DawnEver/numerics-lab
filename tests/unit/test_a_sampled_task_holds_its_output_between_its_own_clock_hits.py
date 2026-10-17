@@ -12,8 +12,8 @@ import math
 import numpy as np
 import pytest
 
-from motronics.gauss.formulation import IntegratorKind, TimeWindow
-from motronics.gauss.time_integrators import (
+from numerics_lab.formulation import IntegratorKind, TimeWindow
+from numerics_lab.time_integrators import (
     BudgetExceeded,
     Hold,
     RateTransition,
@@ -322,7 +322,7 @@ def test_sample_hits_preserve_continuous_velocity_and_acceleration(kind) -> None
 
 
 def test_the_budget_covers_all_segments_and_discrete_task_time(monkeypatch) -> None:
-    from motronics.gauss.time_integrators import march  # noqa: PLC0415
+    from numerics_lab.time_integrators import march  # noqa: PLC0415
 
     clock = [0.0]
     monkeypatch.setattr(march.time, 'perf_counter', lambda: clock[0])
@@ -343,7 +343,7 @@ def test_the_budget_covers_all_segments_and_discrete_task_time(monkeypatch) -> N
 
 
 def test_consistent_sample_restart_recomputes_the_rate_after_the_hold_changes(monkeypatch) -> None:
-    from motronics.gauss.time_integrators import multirate  # noqa: PLC0415
+    from numerics_lab.time_integrators import multirate  # noqa: PLC0415
 
     drive = Hold(0.0)
     rates = []

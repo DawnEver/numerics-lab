@@ -5,11 +5,11 @@ from copy import deepcopy
 
 import numpy as np
 import pytest
-from tests.unit.gauss.test_antiperiodic_eec import Affine
+from tests.unit.test_antiperiodic_eec import Affine
 
-from motronics.gauss.formulation import IntegratorKind, TimeWindow
-from motronics.gauss.time_integrators import integrate_transient
-from motronics.gauss.time_integrators.checkpoint import EECCheckpointState, TransientCheckpoint
+from numerics_lab.formulation import IntegratorKind, TimeWindow
+from numerics_lab.time_integrators import integrate_transient
+from numerics_lab.time_integrators.checkpoint import EECCheckpointState, TransientCheckpoint
 
 
 def _run(t0, t1, *, integrator=IntegratorKind.BDF2, sign=1, restart=None, callback=None, period=None):

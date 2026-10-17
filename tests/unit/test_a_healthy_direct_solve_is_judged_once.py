@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from motronics.gauss.linear import LinearSolveError, refinement, settle_direct_solution
+from numerics_lab.linear import LinearSolveError, refinement, settle_direct_solution
 
 
 def test_a_healthy_solve_takes_one_residual_and_returns_the_same_bits(monkeypatch) -> None:

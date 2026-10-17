@@ -31,7 +31,7 @@ import pytest
 import scipy.sparse as sp
 from scipy.sparse.linalg import splu
 
-from motronics.gauss.linear import (
+from numerics_lab.linear import (
     LinearSolveError,
     refinement_residual,
     repair_direct_solution,

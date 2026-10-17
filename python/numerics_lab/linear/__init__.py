@@ -8,7 +8,7 @@ newton-krylov and by large 3D / eddy-current systems) without the equation code 
 
 First principle (``AGENTS.md``): IMPLEMENT every method and characterize it. The ``direct`` backend is
 faer's pattern-cached factorisation when the native wheel provides it and ``spsolve`` VERBATIM when it
-does not (see :mod:`~motronics.gauss.linear.native_direct` -- the two agree to round-off, not
+does not (see :mod:`~numerics_lab.linear.native_direct` -- the two agree to round-off, not
 bit-for-bit, and the SciPy fallback is logged, never silent); the iterative
 backends are additive peers, each of which must reach the SAME solution as ``direct`` within its
 tolerance (the linear analogue of the nonlinear "converge-to-reference" contract).
@@ -21,8 +21,8 @@ handed to the Krylov backends as ``M``. This module touches no physics and no me
 
 The seam has TWO SIBLINGS, split out of this file on 2026-09-17 at the 800-line line and
 re-exported UNCHANGED, so the surface below is the one this module has always published:
-:mod:`~motronics.gauss.linear.errors` owns :class:`LinearSolveError`, and
-:mod:`~motronics.gauss.linear.refinement` owns the direct-solve guard -- the residual TRIGGER,
+:mod:`~numerics_lab.linear.errors` owns :class:`LinearSolveError`, and
+:mod:`~numerics_lab.linear.refinement` owns the direct-solve guard -- the residual TRIGGER,
 the refinement VERDICT, and the conditioning ceiling that decides whether a move is this
 system's own or one a backend that never answered it produced.
 """
@@ -48,23 +48,23 @@ from scipy.sparse.linalg import (
     spsolve,
 )
 
-from motronics.gauss.linear.amg import amg_preconditioner
-from motronics.gauss.linear.constrained.fixed_values import apply_dirichlet_csr, apply_dirichlet_triplets
-from motronics.gauss.linear.constrained.null_space_pinning import (
+from numerics_lab.linear.amg import amg_preconditioner
+from numerics_lab.linear.constrained.fixed_values import apply_dirichlet_csr, apply_dirichlet_triplets
+from numerics_lab.linear.constrained.null_space_pinning import (
     constraint_rows,
     floats_on_a_constant,
     gauge_pin_floating_constant,
     gauge_pin_orphan_rows,
     orphan_rows,
 )
-from motronics.gauss.linear.constrained.pin_rows import pin_rows
+from numerics_lab.linear.constrained.pin_rows import pin_rows
 
 #: ``errors`` (2026-09-17) -- THE SEAM'S OWN ERROR TYPE, and a TRUE LEAF. Both the backends above
 #: and the direct-solve guard in ``refinement`` raise it, so it can sit in neither without a cycle;
 #: it imports nothing at all, which is what makes it legal here.
-from motronics.gauss.linear.errors import LinearSolveError
-from motronics.gauss.linear.ic0 import IC0Operator, ic0_preconditioner, iccg_system
-from motronics.gauss.linear.native_direct import native_solve
+from numerics_lab.linear.errors import LinearSolveError
+from numerics_lab.linear.ic0 import IC0Operator, ic0_preconditioner, iccg_system
+from numerics_lab.linear.native_direct import native_solve
 
 #: ``refinement`` (2026-09-17) -- THE DIRECT-SOLVE GUARD: the residual TRIGGER, the refinement
 #: VERDICT, the repair that turns an ill-conditioned-but-SOLVABLE system into its answer, and the
@@ -73,13 +73,13 @@ from motronics.gauss.linear.native_direct import native_solve
 #: THE THREE PRIVATE CONSTANTS a test reaches for are re-exported with a redundant alias, which is
 #: the spelling ``ruff`` reads as a deliberate re-export rather than as an unused import (an
 #: ``F401`` suppression would be the alternative, and suppressions may only shrink here).
-from motronics.gauss.linear.refinement import _DIRECT_REFINEMENT_RTOL as _DIRECT_REFINEMENT_RTOL
-from motronics.gauss.linear.refinement import _DIRECT_RESIDUAL_RTOL as _DIRECT_RESIDUAL_RTOL
-from motronics.gauss.linear.refinement import _REPAIRABLE_CONDITION_FACTOR as _REPAIRABLE_CONDITION_FACTOR
+from numerics_lab.linear.refinement import _DIRECT_REFINEMENT_RTOL as _DIRECT_REFINEMENT_RTOL
+from numerics_lab.linear.refinement import _DIRECT_RESIDUAL_RTOL as _DIRECT_RESIDUAL_RTOL
+from numerics_lab.linear.refinement import _REPAIRABLE_CONDITION_FACTOR as _REPAIRABLE_CONDITION_FACTOR
 
 #: The PUBLIC half: the same names, signatures and semantics, so every ``from
-#: motronics.gauss.linear import ...`` in the tree is unaffected.
-from motronics.gauss.linear.refinement import (
+#: numerics_lab.linear import ...`` in the tree is unaffected.
+from numerics_lab.linear.refinement import (
     condition_estimate,
     describe_refinement_trajectory,
     direct_refinement_correction,
@@ -91,7 +91,7 @@ from motronics.gauss.linear.refinement import (
     repair_direct_solution,
     settle_direct_solution,
 )
-from motronics.gauss.linear.ssor import ssor_preconditioner
+from numerics_lab.linear.ssor import ssor_preconditioner
 
 try:  # heavy optional dep (Intel MKL, the multi-threaded sparse LU -- MATLAB-parity on
     # the solver). The registry entry exists only when pypardiso is installed; a
@@ -178,14 +178,14 @@ def reject_nonfinite_solution(x: np.ndarray, backend: str) -> np.ndarray:
 
 
 def _direct(matrix, rhs, **_iterative_only):
-    """Sparse direct factorization -- faer through :mod:`~motronics.gauss.linear.native_direct`, else ``spsolve``.
+    """Sparse direct factorization -- faer through :mod:`~numerics_lab.linear.native_direct`, else ``spsolve``.
 
     THE NATIVE PATH FIRST (2026-09-26): a real sparse operator goes to the pattern-cached faer
     factorisation (supernodal LU, or Cholesky when the values are verified exactly symmetric),
     which measured faster than SuperLU at every production size. It is a DIFFERENT factorisation,
     so it agrees with ``spsolve`` to round-off and not bit-for-bit; both sit behind the same
     residual guard in :func:`solve_linear_system`. When the extension is absent, switched off
-    (``MOTRONICS_DIRECT_NATIVE=0``) or the operator is outside its reach (complex, dense), the
+    (``NUMERICS_LAB_DIRECT_NATIVE=0``) or the operator is outside its reach (complex, dense), the
     SciPy ``spsolve`` below runs -- logged once and counted in ``native_direct.DIRECT_SOLVES``,
     never silently.
 
@@ -228,7 +228,7 @@ def _direct_symmetric(matrix, rhs, **_iterative_only):
     values are verified exactly symmetric. MEASURED 2026-10-02 on a spm_slotted sdm Newton tangent
     (n = 31,212, nnz = 286,760): 0.07 s against symmetric-mode SuperLU's 0.31 s, the answers 7.8e-14
     apart (relative); SuperLU's factor was 115 s of a two-position sdm sweep's profile. The SuperLU
-    half below stays the fallback, counted and warned by :mod:`~motronics.gauss.linear.native_direct`.
+    half below stays the fallback, counted and warned by :mod:`~numerics_lab.linear.native_direct`.
     """
     native = native_solve(matrix, rhs)
     if native is not None:

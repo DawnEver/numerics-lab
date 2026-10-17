@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear import native_direct
+from numerics_lab.linear import native_direct
 
 
 @pytest.mark.skipif(not native_direct.native_available(), reason='native direct backend unavailable')

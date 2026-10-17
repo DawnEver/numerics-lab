@@ -23,10 +23,10 @@ import itertools
 
 import numpy as np
 import pytest
-from tests.unit.gauss._helpers import _RampWithToggle
+from tests.unit._helpers import _RampWithToggle
 
-from motronics.gauss.formulation import IntegratorKind, TimeWindow
-from motronics.gauss.time_integrators import integrate_transient
+from numerics_lab.formulation import IntegratorKind, TimeWindow
+from numerics_lab.time_integrators import integrate_transient
 
 
 @pytest.mark.parametrize('time_tol', [0.0, -1e-9, np.nan, np.inf])

@@ -13,9 +13,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from motronics.gauss.formulation import IntegratorKind, TimeWindow
-from motronics.gauss.time_integrators import StepTolerance, integrate_transient
-from motronics.gauss.time_integrators.checkpoint import (
+from numerics_lab.formulation import IntegratorKind, TimeWindow
+from numerics_lab.time_integrators import StepTolerance, integrate_transient
+from numerics_lab.time_integrators.checkpoint import (
     TransientCheckpoint,
     read_checkpoint_file,
     write_checkpoint_file,

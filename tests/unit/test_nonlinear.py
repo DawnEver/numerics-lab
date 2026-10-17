@@ -9,7 +9,7 @@ first principle) while damped-Picard's under-relaxation still tames it.
 import numpy as np
 import pytest
 
-from motronics.gauss.nonlinear import (
+from numerics_lab.nonlinear import (
     ITERATION_REGISTRY,
     AssembledState,
     CoefficientDampedPicardStrategy,

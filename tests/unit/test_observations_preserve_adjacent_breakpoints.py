@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from motronics.gauss.formulation import TimeWindow
-from motronics.gauss.time_integrators import integrate_transient
+from numerics_lab.formulation import TimeWindow
+from numerics_lab.time_integrators import integrate_transient
 
 
 class _Ramp:

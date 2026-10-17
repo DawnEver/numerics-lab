@@ -14,11 +14,11 @@ import json
 import numpy as np
 import pytest
 
-from motronics.gauss.formulation import IntegratorKind, TimeWindow
-from motronics.gauss.time_integrators import Hold, SampledTask, integrate_explicit_sampled, integrate_sampled
-from motronics.gauss.time_integrators.checkpoint import read_checkpoint_file, write_checkpoint_file
-from motronics.gauss.time_integrators.waveform_relaxation import waveform_relaxation
-from motronics.gauss.time_integrators.zoh import march_zoh, zoh_discretize
+from numerics_lab.formulation import IntegratorKind, TimeWindow
+from numerics_lab.time_integrators import Hold, SampledTask, integrate_explicit_sampled, integrate_sampled
+from numerics_lab.time_integrators.checkpoint import read_checkpoint_file, write_checkpoint_file
+from numerics_lab.time_integrators.waveform_relaxation import waveform_relaxation
+from numerics_lab.time_integrators.zoh import march_zoh, zoh_discretize
 
 _KEY = 'sampled-resume'
 _T1, _DT, _TS = 1.0, 0.01, 0.07

@@ -4,7 +4,7 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import splu
 
-from motronics.gauss.linear.border_rank import border_affine_space
+from numerics_lab.linear.border_rank import border_affine_space
 
 __all__ = ['complete_rate_border']
 

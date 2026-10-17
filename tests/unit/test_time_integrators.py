@@ -14,9 +14,9 @@ import math
 import numpy as np
 import pytest
 
-from motronics.gauss import time_integrators
-from motronics.gauss.formulation import IntegratorKind, SemiDiscreteProblem, TimeWindow
-from motronics.gauss.time_integrators import (
+from numerics_lab import time_integrators
+from numerics_lab.formulation import IntegratorKind, SemiDiscreteProblem, TimeWindow
+from numerics_lab.time_integrators import (
     INTEGRATOR_REGISTRY,
     BDF1Integrator,
     BDF2Integrator,
@@ -286,7 +286,7 @@ def test_an_exhausted_newton_ceiling_labels_the_solution(caplog) -> None:
 
     problem = _QuadraticDrift()
     study = TimeWindow(t0=0.0, t1=0.5, dt=0.1, integrator=IntegratorKind.BDF2)
-    with caplog.at_level('WARNING', logger='motronics.gauss.time_integrators'):
+    with caplog.at_level('WARNING', logger='numerics_lab.time_integrators'):
         coarse = integrate_transient(problem, study, np.array([1.0]), max_newton=1, tol=1e-12, on_nonconverged='label')
     assert not coarse.converged
     assert coarse.nonconverged_times, 'an exhausted step must be named on the solution'

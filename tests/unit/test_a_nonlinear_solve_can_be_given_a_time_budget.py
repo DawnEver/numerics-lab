@@ -28,8 +28,8 @@ import numpy as np
 import pytest
 from tests.bound_names import bound
 
-from motronics.gauss.nonlinear import IterationBudgetExceeded, with_time_budget
-from motronics.gauss.nonlinear._seam import _TimeBudgetedSystem
+from numerics_lab.nonlinear import IterationBudgetExceeded, with_time_budget
+from numerics_lab.nonlinear._seam import _TimeBudgetedSystem
 
 pytestmark = pytest.mark.unit
 

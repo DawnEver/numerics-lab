@@ -4,11 +4,11 @@ import json
 
 import numpy as np
 import pytest
-from tests.unit.gauss.test_time_integrators import DecayProblem
+from tests.unit.test_time_integrators import DecayProblem
 
-from motronics.gauss.formulation import IntegratorKind, TimeWindow
-from motronics.gauss.time_integrators import integrate_transient
-from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint, model_digest
+from numerics_lab.formulation import IntegratorKind, TimeWindow
+from numerics_lab.time_integrators import integrate_transient
+from numerics_lab.time_integrators.checkpoint import TransientCheckpoint, model_digest
 
 
 def test_checkpoint_roundtrips_without_executable_payload():

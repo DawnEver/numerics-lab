@@ -55,7 +55,7 @@ import itertools
 import numpy as np
 import pytest
 
-from motronics.gauss.nonlinear import AssembledState, get_strategy
+from numerics_lab.nonlinear import AssembledState, get_strategy
 
 pytestmark = pytest.mark.unit
 

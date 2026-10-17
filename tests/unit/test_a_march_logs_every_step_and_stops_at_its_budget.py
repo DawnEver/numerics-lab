@@ -13,8 +13,8 @@ import json
 import numpy as np
 import pytest
 
-from motronics.gauss.formulation import IntegratorKind, TimeWindow
-from motronics.gauss.time_integrators import BudgetExceeded, RunBudget, StepTolerance, integrate_transient
+from numerics_lab.formulation import IntegratorKind, TimeWindow
+from numerics_lab.time_integrators import BudgetExceeded, RunBudget, StepTolerance, integrate_transient
 
 
 class _Decay:
@@ -83,7 +83,7 @@ def test_a_memory_budget_aborts_and_a_generous_one_does_not() -> None:
 
 
 def test_a_wall_budget_stops_discarded_trials_at_the_last_accepted_state(monkeypatch) -> None:
-    from motronics.gauss.time_integrators import march  # noqa: PLC0415
+    from numerics_lab.time_integrators import march  # noqa: PLC0415
 
     clock = [0.0]
     monkeypatch.setattr(march.time, 'perf_counter', lambda: clock[0])

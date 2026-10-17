@@ -7,8 +7,8 @@ import numpy as np
 from scipy.sparse import csc_matrix
 from scipy.sparse.linalg import eigsh
 
-from motronics.gauss.modal_basis import semidefinite_modes
-from motronics.gauss.time_integrators import TransientSolution, get_integrator, integrate_transient
+from numerics_lab.modal_basis import semidefinite_modes
+from numerics_lab.time_integrators import TransientSolution, get_integrator, integrate_transient
 
 __all__ = ['ModalTransientResult', 'integrate_modal_transient']
 

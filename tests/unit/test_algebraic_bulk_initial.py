@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from motronics.gauss.linear.algebraic_bulk_initial import algebraic_bulk_initial_pair
+from numerics_lab.linear.algebraic_bulk_initial import algebraic_bulk_initial_pair
 
 
 @pytest.mark.parametrize('inductance', [1e-9, 1.0, 1e9])

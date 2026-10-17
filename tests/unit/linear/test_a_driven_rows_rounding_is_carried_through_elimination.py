@@ -12,7 +12,7 @@ from fractions import Fraction
 import numpy as np
 import scipy.sparse as sp
 
-from motronics.gauss.linear.initial_storage_border import _driven_allowance_image
+from numerics_lab.linear.initial_storage_border import _driven_allowance_image
 
 
 def _exact_adjoint(block, row):

@@ -17,7 +17,7 @@ saturation error propagates into every downstream metric (airgap Br/Bt, torque, 
 voltage), so this front gates all "align with femm" work at loaded/saturated operating points.
 
 ## Current state (file:line)
-- Iteration seam: `src/motronics/gauss/nonlinear/__init__.py` — `DampedPicardStrategy` (:162),
+- Iteration seam: `python/numerics_lab/nonlinear/__init__.py` — `DampedPicardStrategy` (:162),
   `_energy_error_pct` (:155), `_RTOL_ENERGY_PCT=0.01` (:49), `_ALPHA_MIN=0.1` (:47),
   `ITERATION_REGISTRY` (:898), `get_strategy` (:915).
 - FEA default path is NOT the generic strategy: `discretizations/fem/_newton.py`

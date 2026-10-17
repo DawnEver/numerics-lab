@@ -1,17 +1,17 @@
 """The linear-solve port's golden vectors — one file, read by BOTH languages.
 
-Companion to `tests/unit/gauss/test_transforms_port_golden.py`; read that module for why the
+Companion to `tests/unit/test_transforms_port_golden.py`; read that module for why the
 comparison goes through a committed data file rather than across the FFI, and why the Python half
 of the pair IS the migration plan's freeze protocol made executable.
 
 ## What this golden can and cannot promise
 
-`src/motronics/gauss/linear/__init__.py` documents its `direct` backend as bit-for-bit
+`python/numerics_lab/linear/__init__.py` documents its `direct` backend as bit-for-bit
 `scipy.sparse.linalg.spsolve` (SuperLU). **No Rust LU can inherit that promise** — bit-identity is
 a property of an implementation, not of the mathematics — so the Rust `direct` (faer's sparse LU)
 is a DIFFERENT backend that is CHARACTERIZED against this file rather than equated to it. What is
 frozen here is therefore the SOLUTION and the residual it achieves, and the Rust side judges
-itself at a residual-based tolerance stated in `rust/crates/gauss/tests/golden_linear.rs`.
+itself at a residual-based tolerance stated in `crates/numerics/tests/golden_linear.rs`.
 
 ## The floors this file holds
 
@@ -27,10 +27,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import scipy.sparse as sp
-from tests.port_goldens import load_golden, register
+from tests.port_goldens import GOLDENS, load_golden, register
 
-from motronics.core.utils.config import repo_root
-from motronics.gauss.linear import (
+from numerics_lab.linear import (
     LINEAR_SOLVER_REGISTRY,
     PRECONDITIONER_REGISTRY,
     LinearSolveError,
@@ -39,7 +38,7 @@ from motronics.gauss.linear import (
     solve_linear_system,
 )
 
-_GOLDEN = repo_root() / 'rust' / 'crates' / 'gauss' / 'tests' / 'goldens' / 'linear.json'
+_GOLDEN = GOLDENS / 'linear.json'
 
 #: The backends both sides register. `pardiso` is deliberately absent: the Python entry exists only
 #: when the optional pypardiso (Intel MKL) is installed, it is not installed on this box, and the
@@ -139,9 +138,9 @@ def _build() -> dict:
     zero_a, zero_b = _zero_row()
     return {
         'note': (
-            'Generated from src/motronics/gauss/linear/. Read by BOTH '
-            'tests/unit/gauss/test_linear_port_golden.py and '
-            'rust/crates/gauss/tests/golden_linear.rs. The Rust `direct` is faer, NOT spsolve: '
+            'Generated from python/numerics_lab/linear/. Read by BOTH '
+            'tests/unit/test_linear_port_golden.py and '
+            'crates/numerics/tests/golden_linear.rs. The Rust `direct` is faer, NOT spsolve: '
             'it is characterized against these solutions at a residual-based tolerance, never '
             'equated to them bit-for-bit.'
         ),

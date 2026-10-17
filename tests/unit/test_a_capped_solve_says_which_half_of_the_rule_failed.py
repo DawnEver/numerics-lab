@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from motronics.gauss.nonlinear import AssembledState, get_strategy
+from numerics_lab.nonlinear import AssembledState, get_strategy
 
 _RTOL = 0.01  # percent -- the production default
 _INCREMENT_BAR = _RTOL / 100.0  # the fraction the second half of the rule compares against

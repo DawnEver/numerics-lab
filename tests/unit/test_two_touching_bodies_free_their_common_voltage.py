@@ -20,8 +20,8 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear.arithmetic import certified_sparse_product
-from motronics.gauss.linear.index_two import certified_null_directions, index_two_directions, index_two_frozen_rate
+from numerics_lab.linear.arithmetic import certified_sparse_product
+from numerics_lab.linear.index_two import certified_null_directions, index_two_directions, index_two_frozen_rate
 
 pytestmark = pytest.mark.unit
 

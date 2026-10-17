@@ -35,7 +35,7 @@ import pytest
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
-from motronics.gauss.linear import (
+from numerics_lab.linear import (
     _DIRECT_REFINEMENT_RTOL,
     _DIRECT_RESIDUAL_RTOL,
     LinearSolveError,

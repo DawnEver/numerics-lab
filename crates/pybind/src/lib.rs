@@ -1,13 +1,13 @@
-//! `motronics_native.gauss` — the physics-free numerical runtime's Python surface.
+//! `numerics_lab._native` — the Rust engine's Python surface.
 //!
-//! Thin glue only: NumPy arrays in, NumPy arrays out, calling [`gauss`]. No numerics live
+//! Thin glue only: NumPy arrays in, NumPy arrays out, calling [`numerics`]. No numerics live
 //! here. The sparse operator arrives as COO triplets because that is the shape
-//! `scipy.sparse.coo_matrix` hands out on the Python side, and `contracts` owns the
+//! `scipy.sparse.coo_matrix` hands out on the Python side, and `numerics::sparse` owns the
 //! COO -> CSR conversion.
 
-use gauss::sparse::{Coo, Csr};
-use gauss::linear::direct::DirectFactorization;
-use gauss::linear::{check_direct_residual, requires_symmetric, solve_linear_system};
+use numerics::sparse::{Coo, Csr};
+use numerics::linear::direct::DirectFactorization;
+use numerics::linear::{check_direct_residual, requires_symmetric, solve_linear_system};
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -100,7 +100,7 @@ pub fn py_solve_linear_system<'py>(
 ///
 /// The pattern is CHECKED, never assumed: the constructor refuses a non-canonical CSR (columns not
 /// ascending / not unique, which `Coo::to_csr` would silently reorder into a different value
-/// order), and `gauss`'s own `DirectFactorization::solve` refuses a changed pattern.
+/// order), and `numerics`'s own `DirectFactorization::solve` refuses a changed pattern.
 #[pyclass(name = "DirectFactorization")]
 pub struct PyDirectFactorization {
     /// The analysed operator; only its VALUES move between solves.
@@ -275,19 +275,11 @@ pub fn py_requires_symmetric(name: &str) -> bool {
     requires_symmetric(name)
 }
 
-/// Build and populate the `gauss` submodule.
-///
-/// # Errors
-/// Propagates any PyO3 registration failure.
-pub fn register<'py>(parent: &Bound<'py, PyModule>) -> PyResult<Bound<'py, PyModule>> {
-    let m = PyModule::new(parent.py(), "gauss")?;
-    m.add_function(wrap_pyfunction!(py_solve_linear_system, &m)?)?;
-    m.add_function(wrap_pyfunction!(py_requires_symmetric, &m)?)?;
+/// The extension module `numerics_lab._native`.
+#[pymodule]
+fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(py_solve_linear_system, m)?)?;
+    m.add_function(wrap_pyfunction!(py_requires_symmetric, m)?)?;
     m.add_class::<PyDirectFactorization>()?;
-    m.add(
-        "__doc__",
-        "Physics-free numerical runtime: sparse linear solves (direct LU + Krylov).",
-    )?;
-    parent.add_submodule(&m)?;
-    Ok(m)
+    Ok(())
 }

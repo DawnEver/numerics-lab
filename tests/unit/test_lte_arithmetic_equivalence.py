@@ -4,7 +4,7 @@ import math
 
 import numpy as np
 
-from motronics.gauss.time_integrators.march import StepTolerance, _lte_ratio
+from numerics_lab.time_integrators.march import StepTolerance, _lte_ratio
 
 
 def test_lte_ratio_is_bit_identical_on_irregular_per_variable_histories():

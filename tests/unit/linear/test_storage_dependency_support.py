@@ -3,7 +3,7 @@
 import numpy as np
 import scipy.sparse as sp
 
-from motronics.gauss.linear.storage_border import storage_border_rows
+from numerics_lab.linear.storage_border import storage_border_rows
 
 
 def test_charge_dependency_does_not_mix_disconnected_inductor_or_field_linkage_rows():

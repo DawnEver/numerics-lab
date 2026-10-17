@@ -5,7 +5,7 @@ from numbers import Integral, Real
 
 import numpy as np
 
-from motronics.gauss.time_integrators.instants import canonical, is_future
+from numerics_lab.time_integrators.instants import canonical, is_future
 
 __all__ = [
     'AcceptedProjectionResult',

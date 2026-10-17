@@ -37,7 +37,7 @@ uniform-spacing assumption: BDF1 has no second state, and the second-order struc
 propagate ``v`` / ``a`` with formulas already valid at arbitrary ``dt``. The variable form is
 used ONLY when the spacings differ (``prev_dt != dt_step``); otherwise the integrator's own
 ``prepare`` is called, so an event-free march is bit-identical to
-:func:`~motronics.gauss.time_integrators.integrate_transient`.
+:func:`~numerics_lab.time_integrators.integrate_transient`.
 
 AND THE COMPANION TRAP, which the variable form does NOT fix: an event is an instant where the
 problem CHANGES, so the pre-event history estimates the post-event derivative with contaminated
@@ -86,25 +86,25 @@ import numpy as np
 import psutil
 from numpy.typing import NDArray
 
-from motronics.gauss.formulation import DerivativeWeights, TimeWindow
-from motronics.gauss.time_integrators._fixed_lattice import fixed_lattice_step_size, fixed_lattice_targets
-from motronics.gauss.time_integrators._forms import (
+from numerics_lab.formulation import DerivativeWeights, TimeWindow
+from numerics_lab.time_integrators._fixed_lattice import fixed_lattice_step_size, fixed_lattice_targets
+from numerics_lab.time_integrators._forms import (
     IntegratorState,
     TransientSolution,
     _default_solve,
     seeded_bdf2_state,
 )
-from motronics.gauss.time_integrators._integrators import get_integrator
-from motronics.gauss.time_integrators._landing import (
+from numerics_lab.time_integrators._integrators import get_integrator
+from numerics_lab.time_integrators._landing import (
     AcceptedProjectionResult,
     accepted_landing,
     accepted_observation,
     accepted_projection,
     next_deadline,
 )
-from motronics.gauss.time_integrators._step import HeldFactor, ProblemCapabilities, StepOutcome, take_step
-from motronics.gauss.time_integrators._time_lattice import adaptive_lattice
-from motronics.gauss.time_integrators.checkpoint import (
+from numerics_lab.time_integrators._step import HeldFactor, ProblemCapabilities, StepOutcome, take_step
+from numerics_lab.time_integrators._time_lattice import adaptive_lattice
+from numerics_lab.time_integrators.checkpoint import (
     EECCheckpointState,
     StepControlCheckpointState,
     _checkpoint_of,
@@ -112,11 +112,11 @@ from motronics.gauss.time_integrators.checkpoint import (
     restore_history_checkpoint,
     validate_history_owner,
 )
-from motronics.gauss.time_integrators.eec_tangent import CycleTangentCSR
-from motronics.gauss.time_integrators.event_checkpoint import EventCheckpointState
-from motronics.gauss.time_integrators.factor_reuse import FactorCache
-from motronics.gauss.time_integrators.instants import same_instant
-from motronics.gauss.time_integrators.periodic import (
+from numerics_lab.time_integrators.eec_tangent import CycleTangentCSR
+from numerics_lab.time_integrators.event_checkpoint import EventCheckpointState
+from numerics_lab.time_integrators.factor_reuse import FactorCache
+from numerics_lab.time_integrators.instants import same_instant
+from numerics_lab.time_integrators.periodic import (
     bdf2_boundary_moment,
     canonical_eec_window,
     explicit_error_correction,
@@ -124,7 +124,7 @@ from motronics.gauss.time_integrators.periodic import (
     periodic_converged,
     validate_eec_restart,
 )
-from motronics.gauss.time_integrators.prepared import PreparedCandidates, PreparedStepProblem, restart_prepared
+from numerics_lab.time_integrators.prepared import PreparedCandidates, PreparedStepProblem, restart_prepared
 
 logger = logging.getLogger(__name__)
 
@@ -625,7 +625,7 @@ def integrate_transient(
     ``rate_state_overrides``.
 
     ``restart`` / ``checkpoint_key`` / ``on_checkpoint`` resume from and stream a portable
-    :class:`~motronics.gauss.time_integrators.checkpoint.TransientCheckpoint` after every accepted
+    :class:`~numerics_lab.time_integrators.checkpoint.TransientCheckpoint` after every accepted
     state: integrator history, material history (``checkpoint_history`` protocol), and the step
     plan's own clock -- the nominal locator cursor, the parent lattice origin, or the EEC cycle.
     A resumed march reproduces the uninterrupted one.

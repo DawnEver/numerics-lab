@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear import make_preconditioner, solve_linear_system
+from numerics_lab.linear import make_preconditioner, solve_linear_system
 
 
 def test_ic0_is_exact_on_tridiagonal_spd():

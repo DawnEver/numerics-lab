@@ -4,8 +4,8 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import LinearOperator, splu
 
-from motronics.gauss.linear.constrained.fixed_values import apply_dirichlet_csr
-from motronics.gauss.linear.constrained.null_space_pinning import constraint_rows
+from numerics_lab.linear.constrained.fixed_values import apply_dirichlet_csr
+from numerics_lab.linear.constrained.null_space_pinning import constraint_rows
 
 __all__ = ['IC0Operator', 'ic0_preconditioner', 'iccg_system']
 
@@ -83,7 +83,7 @@ class IC0Operator(LinearOperator):
     """``(L L.T)^-1`` applied by two PRE-FACTORED triangular sweeps.
 
     ``spsolve_triangular`` re-validates, re-sorts and re-multiplies its operand on every call --
-    ~89 matvecs of work for two sweeps (ruling 30, `tests/unit/gauss/test_the_ic0_apply_is_factored_once.py`).
+    ~89 matvecs of work for two sweeps (ruling 30, `tests/unit/test_the_ic0_apply_is_factored_once.py`).
     SuperLU on ``L`` itself, natural column order and diagonal pivots, IS ``L`` (no fill, no
     permutation -- checked, never assumed); its plain solve sweeps ``L`` and its transposed solve
     sweeps ``L.T``, both compiled, once set up.

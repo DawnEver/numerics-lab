@@ -4,8 +4,8 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear.initial_rate import normalize_sparse_rows, sparse_initial_rate
-from motronics.gauss.linear.initial_storage_border import _frozen_rate_forcing, stored_initial_correction
+from numerics_lab.linear.initial_rate import normalize_sparse_rows, sparse_initial_rate
+from numerics_lab.linear.initial_storage_border import _frozen_rate_forcing, stored_initial_correction
 
 
 @pytest.mark.parametrize('coefficient', [1e-300, 1e300])

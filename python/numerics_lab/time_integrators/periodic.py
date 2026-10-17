@@ -39,9 +39,9 @@ from numbers import Integral, Real
 import numpy as np
 from numpy.typing import NDArray
 
-from motronics.gauss.formulation import DerivativeWeights
-from motronics.gauss.time_integrators._forms import TransientSolution
-from motronics.gauss.time_integrators.instants import same_instant
+from numerics_lab.formulation import DerivativeWeights
+from numerics_lab.time_integrators._forms import TransientSolution
+from numerics_lab.time_integrators.instants import same_instant
 
 __all__ = [
     'PeriodicFixedPoint',

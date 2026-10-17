@@ -1,7 +1,7 @@
 """The DIRECT-SOLVE GUARD -- when a direct solve's answer can be trusted, and how it is refused.
 
-Split out of :mod:`motronics.gauss.linear` on 2026-09-17 at the 800-line line. The seam itself did
-not move: :func:`~motronics.gauss.linear.solve_linear_system` is still the entry point, the
+Split out of :mod:`numerics_lab.linear` on 2026-09-17 at the 800-line line. The seam itself did
+not move: :func:`~numerics_lab.linear.solve_linear_system` is still the entry point, the
 registry still chooses the backend, and every name below is re-exported from the package head
 UNCHANGED, so no call site was touched.
 
@@ -36,7 +36,7 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import LinearOperator, MatrixRankWarning, onenormest, splu
 
-from motronics.gauss.linear.errors import LinearSolveError
+from numerics_lab.linear.errors import LinearSolveError
 
 __all__ = [
     'condition_estimate',
@@ -506,7 +506,7 @@ def repair_direct_solution(matrix, rhs, x) -> tuple[np.ndarray, tuple[float, ...
     # change is safe to make in a shared solver. The guard ACCEPTS this category already (a large
     # residual with a tiny refinement move is cond*eps, not a failed solve), so refining it would
     # move an answer that was never in question -- which is exactly what the first draft of this
-    # function did, and `tests/unit/gauss/test_nonlinear_port_golden.py`'s frozen trajectories
+    # function did, and `tests/unit/test_nonlinear_port_golden.py`'s frozen trajectories
     # moved with it. The move is still REPORTED, so the verdict below costs no factorization.
     # ONE DECISION WITH A WINDOW, not two: repair only a move that is BOTH past the acceptance bar
     # and explicable as THIS system's own conditioning. Below `_DIRECT_REFINEMENT_RTOL` the guard
@@ -707,7 +707,7 @@ def reject_unsolved_direct_system(matrix, rhs, x, backend: str, *, refinement: f
 
     The half of the singular guard that catches FINITE garbage: SuperLU emits a
     :class:`MatrixRankWarning` on a zero pivot and then returns either NaNs (the belt and
-    :func:`~motronics.gauss.linear.reject_nonfinite_solution` catch those) or a finite vector that
+    :func:`~numerics_lab.linear.reject_nonfinite_solution` catch those) or a finite vector that
     does not satisfy ``A x = b``.
     Measured on the production CLI at ``lipo_inductor --set mesh.mesh_size="6mm"``: order 157, condition
     estimate 1.5e17, relative residual **1.6e+01**.

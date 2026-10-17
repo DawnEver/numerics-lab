@@ -176,7 +176,7 @@ def resolve_constraint_chains(constraints):
     move that bar. The two do not agree on SUPPORT, and the sparse side is the clean one: a global
     dense LU fills, leaving roundoff (largest 3.2e-17, down to 1e-86) on 255 of the 13,575 rows
     where the algebra has an exact zero. The sparse form invents no target at all, which is what
-    ``tests/unit/gauss/test_the_constraint_closure_is_sparse_not_a_dense_inverse.py`` asserts
+    ``tests/unit/test_the_constraint_closure_is_sparse_not_a_dense_inverse.py`` asserts
     rather than identical support -- pinning that would pin a LAPACK artefact.
 
     Only the nodes actually entangled are solved; every other row is returned untouched, and a

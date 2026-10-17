@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear.initial_sparse import SparseInitialPair, sparse_complete_initial_rate
+from numerics_lab.linear.initial_sparse import SparseInitialPair, sparse_complete_initial_rate
 
 
 def test_second_acceleration_operator_does_not_replace_first_derivative_operator():

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from motronics.gauss.nonlinear._seam import (
+from numerics_lab.nonlinear._seam import (
     _RTOL_ENERGY_PCT,
     AssembledState,
     IterationResult,

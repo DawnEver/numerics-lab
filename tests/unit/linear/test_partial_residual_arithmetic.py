@@ -3,8 +3,8 @@
 import numpy as np
 import scipy.sparse as sp
 
-from motronics.gauss.formulation import ResidualAssemblyBound
-from motronics.gauss.linear.arithmetic import matrix_vector_roundoff, transport_residual_bound
+from numerics_lab.formulation import ResidualAssemblyBound
+from numerics_lab.linear.arithmetic import matrix_vector_roundoff, transport_residual_bound
 
 
 def test_actual_mapping_preserves_partial_known_authority_and_counts_its_own_arithmetic():

@@ -13,7 +13,7 @@ import math
 import numpy as np
 import pytest
 
-from motronics.gauss.time_integrators import SampledTask, ScheduledTask, integrate_explicit_sampled
+from numerics_lab.time_integrators import SampledTask, ScheduledTask, integrate_explicit_sampled
 
 _TAU = 0.2
 

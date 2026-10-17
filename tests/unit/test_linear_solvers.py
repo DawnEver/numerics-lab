@@ -10,8 +10,8 @@ import pytest
 import scipy.sparse as sp
 from scipy.sparse.linalg import splu, spsolve
 
-from motronics.gauss import linear
-from motronics.gauss.linear import (
+from numerics_lab import linear
+from numerics_lab.linear import (
     LINEAR_SOLVER_REGISTRY,
     PRECONDITIONER_REGISTRY,
     LinearSolveError,
@@ -47,7 +47,7 @@ def _nonsymmetric_system(n=60, seed=1):
 
 def test_direct_is_bit_for_bit_spsolve(monkeypatch):
     """With the native factor switched off, ``direct`` and the default route ARE raw ``spsolve``."""
-    monkeypatch.setenv('MOTRONICS_DIRECT_NATIVE', '0')
+    monkeypatch.setenv('NUMERICS_LAB_DIRECT_NATIVE', '0')
     A, b = _spd_system()
     ref = spsolve(A, b)
     np.testing.assert_array_equal(get_linear_solver('direct')(A, b), ref)
@@ -212,7 +212,7 @@ def test_the_symmetric_direct_backend_takes_the_native_cholesky_first(monkeypatc
     before = native_direct.DIRECT_SOLVES['faer-cholesky']
     x = solve_linear_system(A, b, linear_solver='direct-symmetric')
     assert native_direct.DIRECT_SOLVES['faer-cholesky'] == before + 1
-    monkeypatch.setenv('MOTRONICS_DIRECT_NATIVE', '0')
+    monkeypatch.setenv('NUMERICS_LAB_DIRECT_NATIVE', '0')
     y = solve_linear_system(A, b, linear_solver='direct-symmetric')
     assert native_direct.DIRECT_SOLVES['faer-cholesky'] == before + 1  # the planted control: SuperLU answered
     np.testing.assert_allclose(x, y, rtol=0, atol=1e-12 * np.abs(y).max())

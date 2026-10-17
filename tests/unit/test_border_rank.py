@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from motronics.gauss.linear.border_rank import border_affine_space
+from numerics_lab.linear.border_rank import border_affine_space
 
 
 @pytest.mark.parametrize('scale', [1e-18, 1.0, 1e18])

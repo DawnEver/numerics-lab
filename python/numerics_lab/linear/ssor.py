@@ -3,7 +3,7 @@
 SSOR is a classic *algebraic* preconditioner: it is built entirely from the matrix's own
 lower / upper triangles and diagonal, touching no mesh, discretization, or curl/gradient
 topology. It therefore lives in ``gauss/`` (the physics-blind numerical runtime) rather
-than in any physics package, and the shared :data:`~motronics.gauss.linear.PRECONDITIONER_REGISTRY`
+than in any physics package, and the shared :data:`~numerics_lab.linear.PRECONDITIONER_REGISTRY`
 registers it as a default-available ``'ssor'`` option with a module-level import (no cycle).
 
 Why SSOR is the right auxiliary preconditioner for the nodal magnetostatic Krylov path
@@ -12,7 +12,7 @@ operator ``curl(nu curl A)`` discretized with **edge (Nedelec) elements** (an H(
 whose huge gradient near-null-space stalls plain CG/ILU/AMG). This codebase has NO such
 system -- the FEA solve is the SPD 2D scalar nodal Poisson ``-div(nu grad A) = J`` (scalar
 node potential, 3x3 nodal Laplacian element matrix), so AMS has nothing to precondition and
-the assessment (`src/motronics/gauss/.claude/memory/2026/07/10/finding-hiptmair-xu-assessment.md`) DEFERS it
+the assessment (`.claude/memory/2026/07/10/finding-hiptmair-xu-assessment.md`) DEFERS it
 until a curl-curl / eddy-current / 3D formulation exists.
 
 What DOES help the nodal Krylov path is a stronger *symmetric* auxiliary preconditioner than

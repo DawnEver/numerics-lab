@@ -4,10 +4,10 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 
-from motronics.gauss.formulation import IntegratorKind
-from motronics.gauss.time_integrators import integrate_transient
-from motronics.gauss.time_integrators.checkpoint import owns_history
-from motronics.gauss.time_integrators.shooting import periodic_shooting
+from numerics_lab.formulation import IntegratorKind
+from numerics_lab.time_integrators import integrate_transient
+from numerics_lab.time_integrators.checkpoint import owns_history
+from numerics_lab.time_integrators.shooting import periodic_shooting
 
 __all__ = ['TransientShootingResult', 'shoot_transient_cycle']
 

@@ -13,10 +13,10 @@ import numpy as np
 import scipy.sparse as sp
 from numpy.typing import NDArray
 
-from motronics.gauss.formulation import DerivativeWeights
-from motronics.gauss.linear import solve_linear_system
-from motronics.gauss.linear.resolution import FLOOR_SAFETY, row_bar, system_resolution
-from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint
+from numerics_lab.formulation import DerivativeWeights
+from numerics_lab.linear import solve_linear_system
+from numerics_lab.linear.resolution import FLOOR_SAFETY, row_bar, system_resolution
+from numerics_lab.time_integrators.checkpoint import TransientCheckpoint
 
 __all__ = [
     'ITimeIntegrator',
@@ -31,7 +31,7 @@ __all__ = [
 ]
 
 
-#: Safety factor on the estimated roundoff floor, owned by :mod:`motronics.gauss.linear.resolution`
+#: Safety factor on the estimated roundoff floor, owned by :mod:`numerics_lab.linear.resolution`
 #: and DELIBERATELY the same 64 as the DC operating point's ``laplace.circuit.core.mna_solves._FLOOR_SAFETY``.
 _FLOOR_SAFETY = FLOOR_SAFETY
 
@@ -90,7 +90,7 @@ def change_below_residual_resolution(
     Row ``i`` cannot resolve a change below ``_FLOOR_SAFETY * eps`` of its own ``(|J| . |u|)_i``; a
     HOMOGENEOUS row (``forcing``, the residual at the zero state, exactly zero) whose operands are
     themselves under the SYSTEM's resolution is noise and is judged as zero
-    (:func:`~motronics.gauss.linear.resolution.row_bar`). A change under that on EVERY row cannot be
+    (:func:`~numerics_lab.linear.resolution.row_bar`). A change under that on EVERY row cannot be
     confirmed or corrected by another Newton iteration: it is rounding in the iterate. Judged only
     by its own operands, a field row whose operands are all rounding has no scale of its own --
     MEASURED 2026-10-14 on transformer_3ph_concentric t = 2.05e-7: nodal A at 2.7e-40 moved 2% per

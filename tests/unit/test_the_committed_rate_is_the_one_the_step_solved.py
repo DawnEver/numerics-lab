@@ -2,11 +2,11 @@
 
 import numpy as np
 import pytest
-from tests.unit.gauss._helpers import _RampWithToggle
-from tests.unit.gauss.test_time_integrators import DecayProblem
+from tests.unit._helpers import _RampWithToggle
+from tests.unit.test_time_integrators import DecayProblem
 
-from motronics.gauss.formulation import IntegratorKind, TimeWindow
-from motronics.gauss.time_integrators import integrate_transient
+from numerics_lab.formulation import IntegratorKind, TimeWindow
+from numerics_lab.time_integrators import integrate_transient
 
 
 @pytest.mark.parametrize('adaptive', [False, True])

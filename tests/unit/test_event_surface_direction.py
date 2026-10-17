@@ -2,10 +2,10 @@
 
 import numpy as np
 import pytest
-from tests.unit.gauss._helpers import _RampWithToggle
+from tests.unit._helpers import _RampWithToggle
 
-from motronics.gauss.formulation import IntegratorKind, TimeWindow
-from motronics.gauss.time_integrators import EventSurface, integrate_transient
+from numerics_lab.formulation import IntegratorKind, TimeWindow
+from numerics_lab.time_integrators import EventSurface, integrate_transient
 
 
 @pytest.mark.parametrize(('direction', 'slope'), [(1, -1), (-1, 1)])

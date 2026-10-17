@@ -4,9 +4,9 @@ import numpy as np
 from scipy.linalg import null_space
 from scipy.sparse import csr_matrix
 
-from motronics.gauss.linear.border_rank import border_affine_space
-from motronics.gauss.linear.initial_constraints import initial_subspaces, linear_dae_initial_state
-from motronics.gauss.nonlinear import AssembledState, NewtonStrategy
+from numerics_lab.linear.border_rank import border_affine_space
+from numerics_lab.linear.initial_constraints import initial_subspaces, linear_dae_initial_state
+from numerics_lab.nonlinear import AssembledState, NewtonStrategy
 
 __all__ = ['nonlinear_dae_initial_state']
 

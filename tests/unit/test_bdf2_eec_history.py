@@ -4,10 +4,10 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from tests.unit.gauss.test_antiperiodic_eec import Affine
+from tests.unit.test_antiperiodic_eec import Affine
 
-from motronics.gauss.formulation import IntegratorKind, TimeWindow
-from motronics.gauss.time_integrators import integrate_transient
+from numerics_lab.formulation import IntegratorKind, TimeWindow
+from numerics_lab.time_integrators import integrate_transient
 
 
 def _phasor(dt):

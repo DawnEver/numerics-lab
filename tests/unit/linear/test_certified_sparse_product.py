@@ -10,7 +10,7 @@ rates 1e26).
 import numpy as np
 import scipy.sparse as sp
 
-from motronics.gauss.linear.arithmetic import certified_sparse_product
+from numerics_lab.linear.arithmetic import certified_sparse_product
 
 
 def test_a_cancellation_residue_is_not_a_coefficient():

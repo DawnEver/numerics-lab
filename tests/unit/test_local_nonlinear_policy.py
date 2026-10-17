@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from motronics.gauss.nonlinear.local import local_change, newton_linear_tolerance
+from numerics_lab.nonlinear.local import local_change, newton_linear_tolerance
 
 
 def test_small_element_and_zero_crossing_are_not_hidden():

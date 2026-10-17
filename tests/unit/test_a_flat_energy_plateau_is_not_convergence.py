@@ -31,7 +31,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from motronics.gauss.nonlinear import ITERATION_REGISTRY, AssembledState, NewtonTangentUnavailable, get_strategy
+from numerics_lab.nonlinear import ITERATION_REGISTRY, AssembledState, NewtonTangentUnavailable, get_strategy
 
 _X_STAR = 10.0
 _PLATEAU_ENERGY = 100.0

@@ -18,8 +18,8 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear.storage_border import StorageRows
-from motronics.gauss.nonlinear.finite_storage import finite_storage_actual_rate_initial_pair
+from numerics_lab.linear.storage_border import StorageRows
+from numerics_lab.nonlinear.finite_storage import finite_storage_actual_rate_initial_pair
 
 pytestmark = pytest.mark.unit
 

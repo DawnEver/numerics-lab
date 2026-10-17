@@ -5,9 +5,9 @@ import json
 import numpy as np
 import pytest
 
-from motronics.gauss.formulation import IntegratorKind, TimeWindow
-from motronics.gauss.time_integrators import integrate_transient
-from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint, restore_history_checkpoint
+from numerics_lab.formulation import IntegratorKind, TimeWindow
+from numerics_lab.time_integrators import integrate_transient
+from numerics_lab.time_integrators.checkpoint import TransientCheckpoint, restore_history_checkpoint
 
 
 class RememberingProblem:

@@ -3,11 +3,11 @@
 This is the temporal counterpart of ``gauss/nonlinear`` (iteration strategies) and
 ``gauss/linear`` (linear-solve backends): a registry of pluggable TIME INTEGRATORS that a
 transient study marches with, decoupled from any physics. The orthogonality hinge is
-:class:`~motronics.gauss.formulation.DerivativeWeights`: an analysis formulation
+:class:`~numerics_lab.formulation.DerivativeWeights`: an analysis formulation
 supplies ONLY the triple ``(alpha0, alpha1, alpha2)`` weighting the ``u`` / ``u_dot`` /
 ``u_ddot`` operators; a time integrator is exactly the machinery that PRODUCES those weights
 per step (plus the history-dependent affine offsets) and advances a
-:class:`~motronics.gauss.formulation.SemiDiscreteProblem` one step.
+:class:`~numerics_lab.formulation.SemiDiscreteProblem` one step.
 
 The load-bearing idea: an implicit integrator writes each derivative at the new step as an
 AFFINE function of the unknown ``u_{n+1}``,
@@ -29,7 +29,7 @@ mesh, no material, no solver.
 
 from __future__ import annotations
 
-from motronics.gauss.time_integrators._forms import (
+from numerics_lab.time_integrators._forms import (
     IntegratorState,
     ITimeIntegrator,
     StepForm,
@@ -37,7 +37,7 @@ from motronics.gauss.time_integrators._forms import (
     residual_floor,
     residual_floor_of_magnitude,
 )
-from motronics.gauss.time_integrators._integrators import (
+from numerics_lab.time_integrators._integrators import (
     INTEGRATOR_REGISTRY,
     BDF1Integrator,
     BDF2Integrator,
@@ -47,17 +47,17 @@ from motronics.gauss.time_integrators._integrators import (
     TRBDF2Integrator,
     get_integrator,
 )
-from motronics.gauss.time_integrators._step import (
+from numerics_lab.time_integrators._step import (
     HELD_STALL_RATIO,
     HeldFactor,
     TrialNotEvaluable,
     _solve_step,
     directional_line_search,
 )
-from motronics.gauss.time_integrators.explicit import integrate_explicit_sampled
-from motronics.gauss.time_integrators.factor_reuse import FactorCache
-from motronics.gauss.time_integrators.instants import canonical, is_future, same_instant
-from motronics.gauss.time_integrators.march import (
+from numerics_lab.time_integrators.explicit import integrate_explicit_sampled
+from numerics_lab.time_integrators.factor_reuse import FactorCache
+from numerics_lab.time_integrators.instants import canonical, is_future, same_instant
+from numerics_lab.time_integrators.march import (
     BudgetExceeded,
     EventSurface,
     RunBudget,
@@ -65,7 +65,7 @@ from motronics.gauss.time_integrators.march import (
     StepTolerance,
     integrate_transient,
 )
-from motronics.gauss.time_integrators.multirate import (
+from numerics_lab.time_integrators.multirate import (
     Hold,
     RateTransition,
     SampledTask,

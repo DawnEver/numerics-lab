@@ -16,7 +16,7 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.linalg import expm
 
-from motronics.gauss.time_integrators.checkpoint import (
+from numerics_lab.time_integrators.checkpoint import (
     CheckpointHistory,
     ScheduleCheckpointState,
     TransientCheckpoint,

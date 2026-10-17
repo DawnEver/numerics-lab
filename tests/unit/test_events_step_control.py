@@ -14,8 +14,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from motronics.gauss.formulation import IntegratorKind, TimeWindow
-from motronics.gauss.time_integrators import integrate_transient
+from numerics_lab.formulation import IntegratorKind, TimeWindow
+from numerics_lab.time_integrators import integrate_transient
 
 
 class _SharpLayer:
@@ -166,9 +166,9 @@ def test_an_event_inside_a_quadratic_ramp_costs_no_accuracy_at_all() -> None:
     problem = _Quadratic()
     study = TimeWindow(t0=0.0, t1=2.0, dt=0.3, integrator=IntegratorKind.BDF2)
     # The form itself, on an exact history, steps a quadratic exactly (direct check, u(0.75)).
-    from motronics.gauss.time_integrators._forms import IntegratorState
-    from motronics.gauss.time_integrators._integrators import _bdf2_variable_form
-    from motronics.gauss.time_integrators._step import _solve_step
+    from numerics_lab.time_integrators._forms import IntegratorState
+    from numerics_lab.time_integrators._integrators import _bdf2_variable_form
+    from numerics_lab.time_integrators._step import _solve_step
 
     state = IntegratorState(us=[np.array([0.045]), np.array([0.18])], t=0.6)
     form = _bdf2_variable_form(state, 0.15, 0.3, 0.75)

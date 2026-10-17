@@ -3,9 +3,9 @@
 import numpy as np
 import pytest
 
-from motronics.gauss.formulation import IntegratorKind, TimeWindow
-from motronics.gauss.modal_transient import integrate_modal_transient
-from motronics.gauss.time_integrators import integrate_transient
+from numerics_lab.formulation import IntegratorKind, TimeWindow
+from numerics_lab.modal_transient import integrate_modal_transient
+from numerics_lab.time_integrators import integrate_transient
 
 
 def test_full_basis_preserves_nonproportional_damping_and_dynamic_force():

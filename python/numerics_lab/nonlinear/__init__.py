@@ -1,6 +1,6 @@
 """Pluggable nonlinear-iteration strategies, decoupled from the governing equation.
 
-Design ``src/motronics/gauss/.claude/memory/2026/07/09/design-solver-iteration-decoupling.md`` (a179884): the
+Design ``.claude/memory/2026/07/09/design-solver-iteration-decoupling.md`` (a179884): the
 governing equation knows how to ASSEMBLE (given the current iterate, produce the system matrix,
 the energy, and whatever payload the caller returns); the STRATEGY knows how to ITERATE (Picard,
 damped-Picard, Newton). They meet at the small :class:`NonlinearSystem` protocol, so a solver
@@ -17,7 +17,7 @@ This module drives the iterate only; it never assembles physics or touches a mes
 
 from __future__ import annotations
 
-from motronics.gauss.nonlinear._seam import (
+from numerics_lab.nonlinear._seam import (
     DEFAULT_SOLVE_BUDGET_S,
     AssembledState,
     IterationBudgetExceeded,
@@ -34,7 +34,7 @@ from motronics.gauss.nonlinear._seam import (
     unwrap_system,
     with_time_budget,
 )
-from motronics.gauss.nonlinear._strategies_newton import (
+from numerics_lab.nonlinear._strategies_newton import (
     ContinuationStrategy,
     HeldFactorNewtonStrategy,
     ModifiedNewtonStrategy,
@@ -42,12 +42,12 @@ from motronics.gauss.nonlinear._strategies_newton import (
     NewtonLineSearchStrategy,
     NewtonStrategy,
 )
-from motronics.gauss.nonlinear._strategies_picard import (
+from numerics_lab.nonlinear._strategies_picard import (
     CoefficientDampedPicardStrategy,
     DampedPicardStrategy,
     PicardStrategy,
 )
-from motronics.gauss.nonlinear._strategies_quasi import AndersonStrategy, BFGSStrategy, BroydenStrategy, LBFGSStrategy
+from numerics_lab.nonlinear._strategies_quasi import AndersonStrategy, BFGSStrategy, BroydenStrategy, LBFGSStrategy
 
 __all__ = [
     'DEFAULT_ITERATION_STRATEGY',

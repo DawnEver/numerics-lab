@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from motronics.gauss.nonlinear.initial_constraints import nonlinear_dae_initial_state
+from numerics_lab.nonlinear.initial_constraints import nonlinear_dae_initial_state
 
 
 def residual(state):

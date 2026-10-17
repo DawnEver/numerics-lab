@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from motronics.gauss.time_integrators._landing import AcceptedProjectionResult
+from numerics_lab.time_integrators._landing import AcceptedProjectionResult
 
 
 @pytest.mark.parametrize('name', ['state', 'rate', 'acceleration'])

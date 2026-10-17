@@ -1,6 +1,6 @@
 """``increment_ratio`` reported EXACTLY ZERO for every one-component step, and six strategies believed it.
 
-THE DEFECT, STATED AS ITS ARITHMETIC. :func:`~motronics.gauss.nonlinear.increment_ratio` carries a
+THE DEFECT, STATED AS ITS ARITHMETIC. :func:`~numerics_lab.nonlinear.increment_ratio` carries a
 gauge relaxation: in 2-D magnetostatics the unknown ``A`` is defined only up to an additive
 constant unless a Dirichlet row pins it, so an increment that is PURE CONSTANT MODE is not
 movement, and the function reports the mean-removed part instead when the shape part is negligible
@@ -38,7 +38,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from motronics.gauss.nonlinear import increment_ratio
+from numerics_lab.nonlinear import increment_ratio
 
 
 def test_a_one_component_step_reports_its_actual_size() -> None:

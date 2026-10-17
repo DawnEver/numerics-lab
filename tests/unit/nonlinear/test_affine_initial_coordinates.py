@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from motronics.gauss.nonlinear.initial_constraints import nonlinear_dae_initial_state
+from numerics_lab.nonlinear.initial_constraints import nonlinear_dae_initial_state
 
 
 @pytest.mark.parametrize('source', [0.1, -0.1, 0.3, 1e-12])

@@ -4,9 +4,9 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear.initial_sparse import projected_rate_consistent
-from motronics.gauss.linear.storage_border import StorageRows
-from motronics.gauss.nonlinear.finite_storage import finite_storage_initial_pair
+from numerics_lab.linear.initial_sparse import projected_rate_consistent
+from numerics_lab.linear.storage_border import StorageRows
+from numerics_lab.nonlinear.finite_storage import finite_storage_initial_pair
 
 
 @pytest.mark.parametrize('scale', [1e-9, 1.0, 1e9])

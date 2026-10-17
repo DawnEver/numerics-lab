@@ -4,9 +4,9 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear import refinement as module
-from motronics.gauss.linear.errors import LinearSolveError
-from motronics.gauss.linear.refinement import refine_factored_solution
+from numerics_lab.linear import refinement as module
+from numerics_lab.linear.errors import LinearSolveError
+from numerics_lab.linear.refinement import refine_factored_solution
 
 pytestmark = pytest.mark.unit
 

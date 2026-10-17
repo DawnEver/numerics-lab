@@ -1,6 +1,6 @@
 """The native direct factorisation behind the ``direct`` backend -- faer, pattern-cached.
 
-``motronics_native.gauss.DirectFactorization`` (``rust/crates/gauss/src/linear/direct.rs``) is a
+``numerics_lab._native.DirectFactorization`` (``crates/numerics/src/linear/direct.rs``) is a
 supernodal LU, or a supernodal Cholesky when the operator is verified EXACTLY symmetric, whose
 symbolic analysis is paid once per sparsity pattern and whose numeric storage is reused. A Newton
 loop reassembles one mesh, so its pattern is constant and only the values move; this module holds
@@ -19,9 +19,9 @@ on the same pattern, so it records the generation it was factorised at and re-fa
 values if another solve has since overwritten the shared storage -- a stale factor is never
 back-substituted.
 
-THE FALLBACK IS VISIBLE. When the extension is absent, predates ``refactor``, or is switched off
-with ``MOTRONICS_DIRECT_NATIVE=0`` (the A/B selector, an env var for the same reason as
-``fem/_native.py``'s), the ``direct`` backend runs SciPy ``spsolve`` and says so: one WARNING per
+THE FALLBACK IS VISIBLE. When the native path is switched off with
+``NUMERICS_LAB_DIRECT_NATIVE=0`` (the A/B selector), the ``direct`` backend runs SciPy ``spsolve``
+and says so: one WARNING per
 process naming the reason, and every solve is counted by backend in :data:`DIRECT_SOLVES`. A
 complex or non-sparse operator is outside the native's reach and is counted as ``superlu`` too.
 """
@@ -35,23 +35,17 @@ from collections import Counter, OrderedDict
 import numpy as np
 import scipy.sparse as sp
 
-from motronics.gauss.linear.constrained.fixed_values import lift_dirichlet_rhs
-from motronics.gauss.linear.errors import LinearSolveError
+from numerics_lab.linear.constrained.fixed_values import lift_dirichlet_rhs
+from numerics_lab.linear.errors import LinearSolveError
 
-try:
-    from motronics_native import gauss as _native_gauss
-except ImportError as _exc:  # the optional native extension; the SuperLU fallback says why
-    _native_gauss = None
-    _NATIVE_IMPORT_ERROR = str(_exc)
-else:
-    _NATIVE_IMPORT_ERROR = ''
+from numerics_lab import _native
 
 __all__ = ['DIRECT_SOLVES', 'NativeFactor', 'native_available', 'native_factor', 'native_solve']
 
 logger = logging.getLogger(__name__)
 
-#: ``MOTRONICS_DIRECT_NATIVE=0`` forces SciPy SuperLU -- the A/B selector, read per call.
-_ENV = 'MOTRONICS_DIRECT_NATIVE'
+#: ``NUMERICS_LAB_DIRECT_NATIVE=0`` forces SciPy SuperLU -- the A/B selector, read per call.
+_ENV = 'NUMERICS_LAB_DIRECT_NATIVE'
 
 #: Analyses held at once. A Newton loop alternates at most a secant and a tangent pattern, a
 #: coupled march adds one more; beyond that an evicted pattern simply re-analyses.
@@ -68,15 +62,7 @@ def _extension_or_reason():
     """``(DirectFactorization class, None)`` or ``(None, why the native path cannot run)``."""
     if os.environ.get(_ENV, '1') == '0':
         return None, f'{_ENV}=0'
-    if _native_gauss is None:
-        return None, f'motronics_native.gauss is not importable ({_NATIVE_IMPORT_ERROR})'
-    # A STALE BUILD lacks the class or its `refactor`: both are plain attribute reads that raise.
-    try:
-        cls = _native_gauss.DirectFactorization
-        _ = cls.refactor
-    except AttributeError:
-        return None, 'the installed motronics_native predates DirectFactorization.refactor'
-    return cls, None
+    return _native.DirectFactorization, None
 
 
 def native_available() -> bool:

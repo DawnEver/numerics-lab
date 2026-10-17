@@ -1,4 +1,4 @@
-//! Physics-free numerical runtime — the Rust mirror of `src/motronics/gauss/`.
+//! Physics-free numerical runtime — the Rust mirror of `python/numerics_lab/`.
 //!
 //! Nonlinear iteration, linear solves and time integration. It touches
 //! no physics and no mesh: everything here is "given a system, drive the iterate".

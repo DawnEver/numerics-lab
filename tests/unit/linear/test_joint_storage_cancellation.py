@@ -4,9 +4,9 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear import initial_storage_border as owner
-from motronics.gauss.linear.initial_storage_border import stored_initial_correction
-from motronics.gauss.linear.storage_border import free_pinned_columns
+from numerics_lab.linear import initial_storage_border as owner
+from numerics_lab.linear.initial_storage_border import stored_initial_correction
+from numerics_lab.linear.storage_border import free_pinned_columns
 
 
 def _large_sparse_joint_equations(count=300):

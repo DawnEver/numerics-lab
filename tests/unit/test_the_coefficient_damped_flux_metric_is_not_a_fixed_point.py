@@ -44,7 +44,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from motronics.gauss.nonlinear import AssembledState, get_strategy
+from numerics_lab.nonlinear import AssembledState, get_strategy
 
 _A_PINNED = 10.0
 _B_STAR = 5.0

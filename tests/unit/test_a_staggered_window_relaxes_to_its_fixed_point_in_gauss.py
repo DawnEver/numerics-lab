@@ -1,6 +1,6 @@
 """The ONE outer fixed point a staggered couple iterates lives in gauss, and its bar is the GAP.
 
-:func:`~motronics.gauss.time_integrators.waveform_relaxation.waveform_relaxation` owns the loop the
+:func:`~numerics_lab.time_integrators.waveform_relaxation.waveform_relaxation` owns the loop the
 staggered composers used to carry privately. Its stopping test is the unrelaxed fixed-point gap
 ``max|G(x) - x|`` -- a test on the relaxed step could be met by lowering ``relaxation`` alone.
 """
@@ -12,7 +12,7 @@ import itertools
 import numpy as np
 import pytest
 
-from motronics.gauss.time_integrators.waveform_relaxation import waveform_relaxation
+from numerics_lab.time_integrators.waveform_relaxation import waveform_relaxation
 
 
 def test_a_contraction_converges_to_its_fixed_point_and_reports_the_gap_trace() -> None:

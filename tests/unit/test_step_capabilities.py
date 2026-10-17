@@ -3,9 +3,9 @@
 import numpy as np
 import pytest
 
-import motronics.gauss.time_integrators._step as step
-from motronics.gauss.time_integrators._integrators import INTEGRATOR_REGISTRY, TrapezoidIntegrator
-from motronics.gauss.time_integrators._step import ProblemCapabilities, take_step
+import numerics_lab.time_integrators._step as step
+from numerics_lab.time_integrators._integrators import INTEGRATOR_REGISTRY, TrapezoidIntegrator
+from numerics_lab.time_integrators._step import ProblemCapabilities, take_step
 
 
 class LinearProblem:

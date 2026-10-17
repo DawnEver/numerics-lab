@@ -3,7 +3,7 @@
 //!
 //! # This is NOT `spsolve`, and the port cannot inherit that promise
 //!
-//! `src/motronics/gauss/linear/__init__.py` documents its SciPy `direct` backend as
+//! `python/numerics_lab/linear/__init__.py` documents its SciPy `direct` backend as
 //! `scipy.sparse.linalg.spsolve` — "bit-for-bit" with the SuperLU the goldens were frozen on.
 //! That claim is about SuperLU's exact pivot sequence, its column ordering, and the order in
 //! which it accumulates each update. **No other factorisation can inherit it** — not `faer`, not a
@@ -12,7 +12,7 @@
 //!
 //! So this backend is a DIFFERENT backend and is CHARACTERIZED rather than equated: the golden
 //! pins the Python's solution and this side is judged against it at a RESIDUAL-based tolerance,
-//! not by bit equality. See `rust/crates/gauss/tests/golden_linear.rs` for the tolerance and its
+//! not by bit equality. See `crates/numerics/tests/golden_linear.rs` for the tolerance and its
 //! reasoning. Nothing here claims to match `spsolve`.
 //!
 //! # The singular guard, both halves

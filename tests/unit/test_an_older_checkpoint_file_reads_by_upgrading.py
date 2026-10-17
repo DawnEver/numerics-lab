@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-from motronics.gauss.time_integrators import checkpoint as module
-from motronics.gauss.time_integrators.checkpoint import TransientCheckpoint, read_checkpoint_file, write_checkpoint_file
+from numerics_lab.time_integrators import checkpoint as module
+from numerics_lab.time_integrators.checkpoint import TransientCheckpoint, read_checkpoint_file, write_checkpoint_file
 
 
 def _written(tmp_path):
@@ -23,7 +23,7 @@ def test_an_older_envelope_reads_through_its_declared_step(tmp_path, monkeypatch
     assert steps == [1]
 
 
-@pytest.mark.parametrize('schema', ['motronics-transient-checkpoint/v2', 'motronics-transient-checkpoint/vx', 'x/v1'])
+@pytest.mark.parametrize('schema', ['numerics-lab-transient-checkpoint/v2', 'numerics-lab-transient-checkpoint/vx', 'x/v1'])
 def test_an_unknown_envelope_is_refused(tmp_path, schema) -> None:
     path = _written(tmp_path)
     data = json.loads(path.read_text(encoding='utf-8'))

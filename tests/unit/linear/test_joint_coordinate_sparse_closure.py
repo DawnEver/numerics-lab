@@ -6,8 +6,8 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear import initial_storage_border
-from motronics.gauss.linear.initial_storage_border import joint_coordinate_sparse_correction
+from numerics_lab.linear import initial_storage_border
+from numerics_lab.linear.initial_storage_border import joint_coordinate_sparse_correction
 
 
 def _original_joint_rows():

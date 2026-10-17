@@ -19,9 +19,9 @@ import math
 import numpy as np
 import pytest
 
-from motronics.gauss.formulation import IntegratorKind, TimeWindow
-from motronics.gauss.time_integrators import StepTolerance, integrate_transient
-from motronics.gauss.time_integrators._integrators import get_integrator
+from numerics_lab.formulation import IntegratorKind, TimeWindow
+from numerics_lab.time_integrators import StepTolerance, integrate_transient
+from numerics_lab.time_integrators._integrators import get_integrator
 
 
 @pytest.mark.parametrize('kind', [IntegratorKind.BDF1, IntegratorKind.TRAPEZOID, IntegratorKind.TR_BDF2])

@@ -3,9 +3,9 @@
 import numpy as np
 import pytest
 
-import motronics.gauss.time_integrators as runtime
-from motronics.gauss.formulation import TimeWindow
-from motronics.gauss.time_integrators import _step
+import numerics_lab.time_integrators as runtime
+from numerics_lab.formulation import TimeWindow
+from numerics_lab.time_integrators import _step
 
 
 class QuadraticTrajectory:

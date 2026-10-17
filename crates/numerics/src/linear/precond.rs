@@ -1,6 +1,6 @@
 //! The preconditioner registry — Jacobi, ILU(0) and SSOR, the Rust mirror of the Python's
-//! `PRECONDITIONER_REGISTRY` (`src/motronics/gauss/linear/__init__.py`,
-//! `src/motronics/gauss/linear/ssor.py`).
+//! `PRECONDITIONER_REGISTRY` (`python/numerics_lab/linear/__init__.py`,
+//! `python/numerics_lab/linear/ssor.py`).
 //!
 //! A preconditioner is an approximation of `A^{-1}` handed to a Krylov backend as `M`. It
 //! accelerates convergence and MUST NOT change the converged solution — that is the property the

@@ -13,10 +13,10 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from tests.unit.gauss._helpers import _RampWithToggle
+from tests.unit._helpers import _RampWithToggle
 
-from motronics.gauss.formulation import IntegratorKind, TimeWindow
-from motronics.gauss.time_integrators import integrate_transient
+from numerics_lab.formulation import IntegratorKind, TimeWindow
+from numerics_lab.time_integrators import integrate_transient
 
 
 def test_time_breakpoints_land_on_the_grid_and_do_not_change_a_breakpointless_march() -> None:

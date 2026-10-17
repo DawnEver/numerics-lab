@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from motronics.gauss.time_integrators import BDF1Integrator, _solve_step
+from numerics_lab.time_integrators import BDF1Integrator, _solve_step
 
 
 class _MixedUnits:

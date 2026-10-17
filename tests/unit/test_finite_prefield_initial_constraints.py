@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from motronics.gauss.nonlinear.initial_constraints import nonlinear_dae_initial_state
+from numerics_lab.nonlinear.initial_constraints import nonlinear_dae_initial_state
 
 
 def test_finite_storage_allows_proven_storage_row_rotation_without_changing_algebraic_rate_space():

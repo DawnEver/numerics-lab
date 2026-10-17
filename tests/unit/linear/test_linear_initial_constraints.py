@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from motronics.gauss.linear.initial_constraints import linear_dae_initial_pair, linear_dae_initial_state
+from numerics_lab.linear.initial_constraints import linear_dae_initial_pair, linear_dae_initial_state
 
 
 def test_storage_forces_a_unique_preferred_state_without_changing_the_stored_value():

@@ -3,8 +3,8 @@
 import numpy as np
 import scipy.sparse as sp
 
-from motronics.gauss.linear.storage_border import storage_border_rows
-from motronics.gauss.nonlinear.finite_storage import finite_storage_right_state
+from numerics_lab.linear.storage_border import storage_border_rows
+from numerics_lab.nonlinear.finite_storage import finite_storage_right_state
 
 
 def test_saturating_algebraic_root_preserves_storage_while_shared_line_search_prevents_overshoot():

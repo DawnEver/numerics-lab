@@ -1,13 +1,11 @@
 [package]
-name = "gauss"
+name = "numerics"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
-# Mirrors `src/motronics/gauss/` -- the physics-free numerical engine, the LEAF of the crate DAG:
-# it depends on no workspace crate, so it can leave the workspace as `numerics-lab` unchanged.
-# Enforced by crates/contracts/tests/crate_dag.rs.
+# The Rust core of numerics-lab, exposed to Python by crates/pybind as numerics_lab._native.
 [dependencies]
 # Direct sparse LU (ruling D4 -- scipy may be replaced). Pure Rust, no SuiteSparse build step.
 # It is faer that raises the workspace rust-version floor to 1.84; see ../../Cargo.toml.

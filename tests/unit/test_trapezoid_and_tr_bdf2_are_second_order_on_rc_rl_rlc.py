@@ -15,8 +15,8 @@ import numpy as np
 import pytest
 from scipy.linalg import expm
 
-from motronics.gauss.formulation import IntegratorKind, TimeWindow
-from motronics.gauss.time_integrators import INTEGRATOR_REGISTRY, _step, integrate_transient
+from numerics_lab.formulation import IntegratorKind, TimeWindow
+from numerics_lab.time_integrators import INTEGRATOR_REGISTRY, _step, integrate_transient
 
 
 class _Linear:

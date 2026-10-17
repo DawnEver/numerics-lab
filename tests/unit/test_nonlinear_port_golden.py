@@ -1,18 +1,18 @@
 """The nonlinear-strategy port's golden ITERATION TRAJECTORIES — one file, read by BOTH languages.
 
 `.claude/memory/2026/09/03/plan-rust-migration-execution.md` ports
-`src/motronics/gauss/nonlinear/` to `rust/crates/gauss/src/nonlinear/`. Two implementations of
+`python/numerics_lab/nonlinear/` to `crates/numerics/src/nonlinear/`. Two implementations of
 one iteration scheme need a way to be compared, and the obvious one — call the Rust from Python
 across the FFI — is not available on this workstation: a second native extension cannot be
 installed into MAIN's venv from a lane (`.claude/rules/workflow.md`: "never mutate a shared
 resource the other party learns about by accident").
 
 So the comparison goes through a committed DATA file instead.
-`rust/crates/gauss/tests/goldens/nonlinear.json` holds the fixtures and what the PYTHON does on
+`crates/numerics/tests/goldens/nonlinear.json` holds the fixtures and what the PYTHON does on
 them. Two tests read it:
 
 * this one, asserting the live Python still produces those trajectories;
-* `rust/crates/gauss/tests/golden_nonlinear.rs` (Rust), asserting the port does too.
+* `crates/numerics/tests/golden_nonlinear.rs` (Rust), asserting the port does too.
 
 Together they are the equivalence proof. Separately, the first one IS the freeze protocol
 (plan §3) made executable: prose cannot stop `nonlinear/` taking a behaviour change while the
@@ -43,12 +43,11 @@ import re
 
 import numpy as np
 import pytest
-from tests.port_goldens import load_golden, register
+from tests.port_goldens import GOLDENS, load_golden, register
 
-from motronics.core.utils.config import repo_root
-from motronics.gauss.nonlinear import ITERATION_REGISTRY, AssembledState, get_strategy
+from numerics_lab.nonlinear import ITERATION_REGISTRY, AssembledState, get_strategy
 
-_GOLDEN = repo_root() / 'rust' / 'crates' / 'gauss' / 'tests' / 'goldens' / 'nonlinear.json'
+_GOLDEN = GOLDENS / 'nonlinear.json'
 
 #: `coefficient-damped` is driven on its own fixture: it needs the raw pre-fold pair (`raw_state` /
 #: `fold_raw`) and REFUSES a system without it, so it cannot share the generic one. Named here
@@ -125,7 +124,7 @@ class _AffineSystem:
         # than a convenience. `newton-krylov` has two branches: a tangent it cannot apply routes
         # through `solve_system`, and NO tangent goes Jacobian-free through GMRES. The Rust port
         # implements the first and NOT the second (see `NewtonKrylovStrategy`'s docs: a Krylov
-        # backend lives in `gauss::linear`, not in the strategy). Handing every fixture a tangent
+        # backend lives in `numerics::linear`, not in the strategy). Handing every fixture a tangent
         # keeps the golden a statement about what the port claims to do. Measured while building
         # this file: with `None` here the two sides disagreed by 1e-9 on the very first increment
         # -- GMRES's own `rtol=1e-8`, not a porting error, and exactly the branch that is missing.
@@ -268,9 +267,9 @@ def _build() -> dict:
     nu_result = get_strategy(_RAW_ONLY).solve(nu, max_iter=4, rtol_energy_pct=_RTOL_PCT)
     return {
         'note': (
-            'Generated from src/motronics/gauss/nonlinear/. Read by BOTH '
-            'tests/unit/gauss/test_nonlinear_port_golden.py (does the Python still agree?) and '
-            'rust/crates/gauss/tests/golden_nonlinear.rs (does the port agree?). See the Python '
+            'Generated from python/numerics_lab/nonlinear/. Read by BOTH '
+            'tests/unit/test_nonlinear_port_golden.py (does the Python still agree?) and '
+            'crates/numerics/tests/golden_nonlinear.rs (does the port agree?). See the Python '
             "test's docstring; the per-iteration traces are the point, not the final x."
         ),
         'rtol_energy_pct': _RTOL_PCT,

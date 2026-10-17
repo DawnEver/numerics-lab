@@ -3,7 +3,7 @@ name: hiptmair-xu-ams-preconditioner
 description: "WS-Research plan 7 (AMS for curl-curl with Nedelec edge elements) and the 2026-07-10 close-out: not applicable to the 2D scalar-A formulation; defer until a 3D or H(curl) solver exists."
 created: 2026-07-09
 accessed: 2026-09-27
-merged_from: src/motronics/gauss/.claude/memory/2026/07/10/finding-hiptmair-xu-assessment.md, src/motronics/gauss/.claude/memory/2026/07/09/plan-research-hiptmair-xu-precond.md
+merged_from: .claude/memory/2026/07/10/finding-hiptmair-xu-assessment.md, .claude/memory/2026/07/09/plan-research-hiptmair-xu-precond.md
 metadata:
   type: project
 ---
@@ -16,7 +16,7 @@ metadata:
 
 ## Members, newest first (full text; the older ones are the History above refers to)
 
-### Member `src/motronics/gauss/.claude/memory/2026/07/10/finding-hiptmair-xu-assessment.md`
+### Member `.claude/memory/2026/07/10/finding-hiptmair-xu-assessment.md`
 
 Original frontmatter:
 
@@ -111,10 +111,10 @@ not-applicable**, exactly as the overnight handoff flagged and the plan's own pr
 
 #### Artifacts
 - Probe: `playground/hiptmair_xu_probe.py` (Part A conditioning table + Part B discrete-gradient PoC).
-- Source plan: `src/motronics/gauss/.claude/memory/2026/07/09/plan-research-hiptmair-xu-precond.md` (leave `status: open`
+- Source plan: `.claude/memory/2026/07/09/plan-research-hiptmair-xu-precond.md` (leave `status: open`
   as a strategic roadmap item; this finding records it is intentionally deferred, not abandoned).
 
-### Member `src/motronics/gauss/.claude/memory/2026/07/09/plan-research-hiptmair-xu-precond.md`
+### Member `.claude/memory/2026/07/09/plan-research-hiptmair-xu-precond.md`
 
 Original frontmatter:
 

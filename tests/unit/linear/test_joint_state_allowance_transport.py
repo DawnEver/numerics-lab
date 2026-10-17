@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear.initial_storage_border import _validate_joint_correction
+from numerics_lab.linear.initial_storage_border import _validate_joint_correction
 
 
 def _validate(residual, partial=None, *, stored=False):

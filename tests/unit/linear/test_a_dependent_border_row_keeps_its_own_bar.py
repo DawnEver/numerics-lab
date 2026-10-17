@@ -18,7 +18,7 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear.initial_storage_border import _sparse_joint_border, _weighted_by_row_bars
+from numerics_lab.linear.initial_storage_border import _sparse_joint_border, _weighted_by_row_bars
 
 pytestmark = pytest.mark.unit
 
@@ -134,7 +134,7 @@ def test_a_joint_correction_that_already_holds_is_not_rate_re_solved(monkeypatch
     Cummins admission 338: the border met body 5's net-current row exactly, and the frozen-state
     rate re-solve put it back at 2.1x its bar (the dependent row's rounding image), every iteration.
     """
-    from motronics.gauss.linear import initial_storage_border as owner  # noqa: PLC0415
+    from numerics_lab.linear import initial_storage_border as owner  # noqa: PLC0415
 
     def planted_re_solve(*_args, **_kwargs):
         msg = 'PLANTED: the rate re-solve must not run'
@@ -179,7 +179,7 @@ def test_a_weak_retained_row_takes_its_residual_from_the_eliminated_rows_by_thei
     Cummins admission 338: body 5's Schur row is 2e-5 of its neighbours, so no retained row can
     hold its 2.6x-bar residual; the eliminated rows (bars far larger) can.
     """
-    from motronics.gauss.linear.initial_storage_border import _eliminated_share  # noqa: PLC0415
+    from numerics_lab.linear.initial_storage_border import _eliminated_share  # noqa: PLC0415
 
     block = sp.csr_matrix(np.array([[2.0, 0.0, 0.0], [0.0, 4.0, 0.0], [0.0, 0.0, 1.0]]))
     left = sp.csr_matrix(np.array([[1.0, 1.0, 1.0]]))

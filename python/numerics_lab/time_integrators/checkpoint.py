@@ -13,9 +13,9 @@ from typing import Protocol, runtime_checkable
 
 import numpy as np
 
-from motronics.gauss.formulation import HistoryProblem
-from motronics.gauss.time_integrators.eec_checkpoint import EECCheckpointState
-from motronics.gauss.time_integrators.event_checkpoint import EventCheckpointState
+from numerics_lab.formulation import HistoryProblem
+from numerics_lab.time_integrators.eec_checkpoint import EECCheckpointState
+from numerics_lab.time_integrators.event_checkpoint import EventCheckpointState
 
 __all__ = [
     'CHECKPOINTED_MARCHES',
@@ -470,26 +470,26 @@ class TransientCheckpoint:
 #: one private march left outside gauss is the layering test's named ``_DEBT``, and it is not on the contract.``tests/architecture/layering/test_every_march_is_on_the_checkpoint_contract.py``
 #: derives the march set from source and holds it equal to this one, both sides.
 CHECKPOINTED_MARCHES: frozenset[str] = frozenset({
-    'motronics.gauss.time_integrators.march:integrate_transient',
-    'motronics.gauss.time_integrators.multirate:integrate_sampled',
-    'motronics.gauss.time_integrators.explicit:integrate_explicit_sampled',
-    'motronics.gauss.time_integrators.zoh:march_zoh',
+    'numerics_lab.time_integrators.march:integrate_transient',
+    'numerics_lab.time_integrators.multirate:integrate_sampled',
+    'numerics_lab.time_integrators.explicit:integrate_explicit_sampled',
+    'numerics_lab.time_integrators.zoh:march_zoh',
 })
 
 #: FIXED POINTS OVER A MARCH, not marches: each iterates WHOLE windows or periods of a checkpointed march,
 #: so there is no instant inside one to resume at. Its resumable state is its own iterate, which it already
 #: takes back as its seed (a periodic state, a relaxed waveform).
 FIXED_POINTS_OVER_A_MARCH: frozenset[str] = frozenset({
-    'motronics.gauss.time_integrators.waveform_relaxation:waveform_relaxation',
-    'motronics.gauss.time_integrators.shooting:periodic_shooting',
-    'motronics.gauss.time_integrators.periodic:periodic_fixed_point',
-    'motronics.gauss.time_integrators.periodic:periodic_steady_state',
-    'motronics.gauss.time_integrators.periodic_march:shoot_transient_cycle',
+    'numerics_lab.time_integrators.waveform_relaxation:waveform_relaxation',
+    'numerics_lab.time_integrators.shooting:periodic_shooting',
+    'numerics_lab.time_integrators.periodic:periodic_fixed_point',
+    'numerics_lab.time_integrators.periodic:periodic_steady_state',
+    'numerics_lab.time_integrators.periodic_march:shoot_transient_cycle',
 })
 
 #: The sealed file envelope's version: the ONE on-disk form of a :class:`TransientCheckpoint`.
 CHECKPOINT_FILE_SCHEMA_VERSION = 1
-_CHECKPOINT_FILE_PREFIX = 'motronics-transient-checkpoint/v'
+_CHECKPOINT_FILE_PREFIX = 'numerics-lab-transient-checkpoint/v'
 CHECKPOINT_FILE_SCHEMA = f'{_CHECKPOINT_FILE_PREFIX}{CHECKPOINT_FILE_SCHEMA_VERSION}'
 
 #: Older envelope version -> the step taking its sealed ``checkpoint`` mapping one version on

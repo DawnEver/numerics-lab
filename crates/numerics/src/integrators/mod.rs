@@ -1,4 +1,4 @@
-//! Time integrators — the Rust mirror of `src/motronics/gauss/time_integrators/`.
+//! Time integrators — the Rust mirror of `python/numerics_lab/time_integrators/`.
 //!
 //! # The affine-weights contract, which is the whole design
 //!

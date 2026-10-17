@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from motronics.gauss.time_integrators.shooting import periodic_shooting
+from numerics_lab.time_integrators.shooting import periodic_shooting
 
 
 def test_affine_cycle_map_returns_its_fixed_point():

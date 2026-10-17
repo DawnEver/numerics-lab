@@ -1,13 +1,13 @@
 //! Master-slave constraint chains, resolved so no master is itself constrained.
 //!
-//! Port of `resolve_constraint_chains` in `src/motronics/gauss/linear/constrained/master_slave.py`, and it
+//! Port of `resolve_constraint_chains` in `python/numerics_lab/linear/constrained/master_slave.py`, and it
 //! lives HERE because that is where the Python has it.
 //!
 //! # It arrived here as a MOVE, which is the point
 //!
 //! The first Rust caller was the MEC boundary-fold reduction, and the port landed in
 //! `hamilton_mec::constraints` with its own docstring recording the placement as DEBT: "when a
-//! second Rust caller appears it MOVES to `gauss::linear::constraints` rather than being copied,
+//! second Rust caller appears it MOVES to `numerics::linear::constraints` rather than being copied,
 //! because a second copy is the exact defect the Python consolidation removed." The second
 //! caller is the FEA hanging-node fold (`hamilton_fem::solve`), so the move happened rather than
 //! the copy, and `hamilton_mec` re-exports from here. That is the whole reason the debt was

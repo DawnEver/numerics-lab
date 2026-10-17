@@ -1,6 +1,6 @@
 """The exact zero-order-hold march of a linear plant under sampled feedback is gauss's, once.
 
-:func:`~motronics.gauss.time_integrators.zoh.march_zoh` closes each held-input interval in closed
+:func:`~numerics_lab.time_integrators.zoh.march_zoh` closes each held-input interval in closed
 form, so a scalar decay ``dx/dt = -a x + b u`` with a constant held ``u`` lands on the analytic
 solution at every sample to roundoff, and a feedback law reads the state AT the sample it acts on.
 """
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from motronics.gauss.time_integrators.zoh import march_zoh, zoh_discretize
+from numerics_lab.time_integrators.zoh import march_zoh, zoh_discretize
 
 
 def test_a_held_constant_input_lands_on_the_analytic_step_response() -> None:

@@ -12,9 +12,9 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import LinearOperator, aslinearoperator, gmres, splu
 
-from motronics.gauss.linear import reject_nonfinite_solution
-from motronics.gauss.linear.native_direct import native_factor
-from motronics.gauss.nonlinear._seam import (
+from numerics_lab.linear import reject_nonfinite_solution
+from numerics_lab.linear.native_direct import native_factor
+from numerics_lab.nonlinear._seam import (
     _RTOL_ENERGY_PCT,
     AssembledState,
     FactorizableSystem,
@@ -31,8 +31,8 @@ from motronics.gauss.nonlinear._seam import (
     require_secant_system,
     unwrap_system,
 )
-from motronics.gauss.nonlinear._strategies_picard import DampedPicardStrategy
-from motronics.gauss.nonlinear.local import (
+from numerics_lab.nonlinear._strategies_picard import DampedPicardStrategy
+from numerics_lab.nonlinear.local import (
     local_change,
     newton_linear_tolerance,
 )

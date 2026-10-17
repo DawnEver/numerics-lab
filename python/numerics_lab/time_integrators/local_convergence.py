@@ -4,8 +4,8 @@ from numbers import Real
 
 import numpy as np
 
-from motronics.gauss.nonlinear.local import local_change
-from motronics.gauss.time_integrators._forms import _FLOOR_SAFETY
+from numerics_lab.nonlinear.local import local_change
+from numerics_lab.time_integrators._forms import _FLOOR_SAFETY
 
 __all__ = ['LocalIterationCheck', 'validate_local_atols']
 

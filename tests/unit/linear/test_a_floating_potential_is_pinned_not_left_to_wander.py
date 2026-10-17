@@ -37,7 +37,7 @@ import numpy as np
 import pytest
 from scipy.sparse import csr_matrix
 
-from motronics.gauss.linear import (
+from numerics_lab.linear import (
     constraint_rows,
     floats_on_a_constant,
     gauge_pin_floating_constant,

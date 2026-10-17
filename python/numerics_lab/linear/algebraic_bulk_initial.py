@@ -6,9 +6,9 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import splu
 
-from motronics.gauss.linear.border_rank import border_affine_space
-from motronics.gauss.linear.initial_sparse import SparseInitialPair
-from motronics.gauss.linear.storage_border import storage_border_rows
+from numerics_lab.linear.border_rank import border_affine_space
+from numerics_lab.linear.initial_sparse import SparseInitialPair
+from numerics_lab.linear.storage_border import storage_border_rows
 
 __all__ = ['algebraic_bulk_initial_pair']
 

@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear.initial_rate import sparse_initial_rate
+from numerics_lab.linear.initial_rate import sparse_initial_rate
 
 _N = 600
 

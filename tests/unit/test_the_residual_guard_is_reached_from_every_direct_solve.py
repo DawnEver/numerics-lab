@@ -2,7 +2,7 @@
 
 # What was actually wrong, measured rather than assumed
 
-The guard is NOT missing. ``motronics.gauss.linear.solve_linear_system`` has carried both halves
+The guard is NOT missing. ``numerics_lab.linear.solve_linear_system`` has carried both halves
 since the seam landed -- the ``MatrixRankWarning`` belt in ``_direct`` and the residual suspenders
 in the caller -- and the production CLI already refuses the system the 2026-09-04 migration note
 named:
@@ -55,8 +55,8 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear import LinearSolveError, direct_relative_residual, solve_linear_system
-from motronics.gauss.time_integrators.march import _default_solve
+from numerics_lab.linear import LinearSolveError, direct_relative_residual, solve_linear_system
+from numerics_lab.time_integrators.march import _default_solve
 
 GOLDEN = Path(__file__).parent / 'goldens' / 'lipo_inductor_m6_singular_157.npz'
 

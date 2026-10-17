@@ -27,7 +27,7 @@ calls (measured bit-equal on 200 random 5x5 systems), and ``splu`` is the SuperL
 makes -- so a hit returns the same bits the uncached solve would have.
 
 WHAT A HEALTHY HIT *IS* JUDGED BY, added 2026-09-06: FINITENESS, via
-:func:`~motronics.gauss.linear.reject_nonfinite_solution`. A hit used to return back-substitution
+:func:`~numerics_lab.linear.reject_nonfinite_solution`. A hit used to return back-substitution
 output entirely unchecked, so an inf/NaN answer from a reused factor left this class silently --
 the exact shape ``invariant.md`` forbids ("never silently wrong"). The reason it was missing is
 that the guard's cheap half had no public spelling: it was ``gauss.linear._check_finite``, private
@@ -48,7 +48,7 @@ circuit march exactly the work this class exists to remove; that is not a guard,
 of the feature. What makes the gap narrow rather than convenient is that the cache starts EMPTY:
 the first solve of any march is a miss, so a system that is singular from the start is refused
 before any hit can back-substitute against it. Pinned in
-``tests/unit/gauss/test_a_singular_march_is_refused_where_it_is_factored.py``. What is NOT covered
+``tests/unit/test_a_singular_march_is_refused_where_it_is_factored.py``. What is NOT covered
 is a matrix that becomes singular WITHOUT moving its key -- which is the NAMED HOLE below in a
 different costume, and has the same owner: the key.
 
@@ -74,8 +74,8 @@ from scipy.linalg import LinAlgWarning, lu_factor, lu_solve
 from scipy.linalg.lapack import dgetrf, dgetrs
 from scipy.sparse.linalg import splu
 
-from motronics.gauss.linear import reject_nonfinite_solution, settle_direct_solution
-from motronics.gauss.linear.native_direct import native_factor
+from numerics_lab.linear import reject_nonfinite_solution, settle_direct_solution
+from numerics_lab.linear.native_direct import native_factor
 
 __all__ = ['FactorCache', 'apply_factor', 'factor_matrix']
 
@@ -160,7 +160,7 @@ class FactorCache:
         self.factorizations = 0
         self.judged = 0
         #: The CACHED matrix itself, kept (not rebuilt) so the marcher can compute
-        #: :func:`~motronics.gauss.time_integrators.residual_floor` against the system a HIT just
+        #: :func:`~numerics_lab.time_integrators.residual_floor` against the system a HIT just
         #: solved. Holding one reference costs what holding one factorization already costs; the
         #: thing a hit exists to avoid is BUILDING the matrix, and this never builds one.
         self.matrix: object = None
@@ -208,7 +208,7 @@ class FactorCache:
         self.factorizations += 1
         # THE MISS IS DELIBERATELY *NOT* FINITENESS-CHECKED FIRST. It has the matrix, so
         # `reject_unsolved_direct_system` below can name the ORDER and both statistics -- and
-        # `tests/unit/gauss/test_a_singular_march_is_refused_where_it_is_factored.py` pins exactly
+        # `tests/unit/test_a_singular_march_is_refused_where_it_is_factored.py` pins exactly
         # that. Measured 2026-09-06: adding the cheap check here fired first on a singular MNA and
         # replaced a refusal naming n and the residual with one naming neither. A guard that
         # preempts a better-informed guard is a regression even when it refuses the same system.

@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from motronics.gauss.linear.initial_sparse import SparseInitialPair, sparse_complete_initial_rate, sparse_initial_pair
+from numerics_lab.linear.initial_sparse import SparseInitialPair, sparse_complete_initial_rate, sparse_initial_pair
 
 
 @pytest.mark.parametrize('capacitance', [1.0, 1e-9])
