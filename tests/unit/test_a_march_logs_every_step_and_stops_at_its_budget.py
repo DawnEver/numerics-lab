@@ -75,11 +75,22 @@ def test_a_wall_budget_aborts_with_the_state_reached() -> None:
     assert info.value.t_reached == pytest.approx(0.0)
 
 
+def _resident() -> int:
+    return 1 << 30
+
+
 def test_a_memory_budget_aborts_and_a_generous_one_does_not() -> None:
-    with pytest.raises(BudgetExceeded, match='rss'):
-        integrate_transient(_Decay(), _STUDY, np.ones(1), budget=RunBudget(memory_bytes=1))
-    sol = integrate_transient(_Decay(), _STUDY, np.ones(1), budget=RunBudget(wall_seconds=3600.0, memory_bytes=1 << 50))
+    with pytest.raises(BudgetExceeded, match='resident'):
+        integrate_transient(_Decay(), _STUDY, np.ones(1), budget=RunBudget(memory_bytes=1, resident_bytes=_resident))
+    generous = RunBudget(wall_seconds=3600.0, memory_bytes=1 << 50, resident_bytes=_resident)
+    sol = integrate_transient(_Decay(), _STUDY, np.ones(1), budget=generous)
     assert sol.times[-1] == pytest.approx(0.5)
+
+
+def test_a_memory_budget_needs_the_callers_probe() -> None:
+    # The engine reads no process memory itself (numpy and scipy only), so the caller supplies it.
+    with pytest.raises(ValueError, match='resident_bytes'):
+        RunBudget(memory_bytes=1 << 30)
 
 
 def test_a_wall_budget_stops_discarded_trials_at_the_last_accepted_state(monkeypatch) -> None:
@@ -115,7 +126,7 @@ def test_an_invalid_wall_budget_is_refused(seconds) -> None:
 @pytest.mark.parametrize('size', [-1, 0])
 def test_an_invalid_memory_budget_is_refused(size) -> None:
     with pytest.raises(ValueError, match='memory_bytes'):
-        RunBudget(memory_bytes=size)
+        RunBudget(memory_bytes=size, resident_bytes=_resident)
 
 
 def test_the_solution_carries_the_newton_work_every_logged_solve_did() -> None:

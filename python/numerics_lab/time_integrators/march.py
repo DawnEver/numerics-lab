@@ -83,7 +83,6 @@ from datetime import UTC, datetime
 from numbers import Integral, Real
 
 import numpy as np
-import psutil
 from numpy.typing import NDArray
 
 from numerics_lab.formulation import DerivativeWeights, TimeWindow
@@ -196,6 +195,9 @@ class StepNotConverged(RuntimeError):
 class RunBudget:
     """Hard limits on one march: wall-clock seconds and resident memory bytes (``None`` = unlimited).
 
+    The engine reads no process memory itself; a memory limit comes with ``resident_bytes``, the
+    caller's probe of the resident set (e.g. ``lambda: psutil.Process().memory_info().rss``).
+
     Checked before and after each trial solve, and after every accepted step. An individual
     Newton/linear solve is not preempted. A march over budget RAISES :class:`BudgetExceeded` with the
     state it reached -- a run reaped by the OS reports nothing, a run that stops itself reports where.
@@ -203,6 +205,7 @@ class RunBudget:
 
     wall_seconds: float | None = None
     memory_bytes: int | None = None
+    resident_bytes: Callable[[], int] | None = None
 
     def __post_init__(self) -> None:
         if self.wall_seconds is not None and (not math.isfinite(self.wall_seconds) or self.wall_seconds < 0):
@@ -211,14 +214,17 @@ class RunBudget:
         if self.memory_bytes is not None and self.memory_bytes <= 0:
             msg = f'memory_bytes must be positive, got {self.memory_bytes}'
             raise ValueError(msg)
+        if self.memory_bytes is not None and self.resident_bytes is None:
+            msg = 'a memory_bytes limit needs resident_bytes, the caller-supplied resident-set probe'
+            raise ValueError(msg)
 
     def check(self, started: float, t_reached: float, u_reached, steps: int) -> None:
         """Check one run's budget against its last accepted state, including discarded work."""
         reason = None
         if self.wall_seconds is not None and time.perf_counter() - started > self.wall_seconds:
             reason = f'wall > {self.wall_seconds:g} s'
-        elif self.memory_bytes is not None and _rss_bytes() > self.memory_bytes:
-            reason = f'rss > {self.memory_bytes} B'
+        elif self.memory_bytes is not None and self.resident_bytes() > self.memory_bytes:
+            reason = f'resident > {self.memory_bytes} B'
         if reason is not None:
             raise BudgetExceeded(reason, t_reached, u_reached, steps)
 
@@ -229,10 +235,6 @@ class BudgetExceeded(RuntimeError):
     def __init__(self, reason: str, t_reached: float, u_reached, steps: int) -> None:
         super().__init__(f'run budget exceeded ({reason}) at t={t_reached:g} after {steps} accepted steps')
         self.reason, self.t_reached, self.u_reached, self.steps = reason, t_reached, u_reached, steps
-
-
-def _rss_bytes() -> int:
-    return int(psutil.Process().memory_info().rss)
 
 
 def march_log_record(body: str, **attributes) -> dict:

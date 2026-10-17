@@ -40,9 +40,7 @@ from numerics_lab.linear import (
 
 _GOLDEN = GOLDENS / 'linear.json'
 
-#: The backends both sides register. `pardiso` is deliberately absent: the Python entry exists only
-#: when the optional pypardiso (Intel MKL) is installed, it is not installed on this box, and the
-#: Rust port therefore has nothing to characterize against. An ABSENCE with a reason.
+#: The backends both sides register.
 _SOLVERS = ('direct', 'cg', 'minres', 'gmres', 'bicgstab', 'qmr')
 _PRECONDITIONERS = ('jacobi', 'ilu', 'ssor')
 

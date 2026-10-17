@@ -87,7 +87,7 @@ def test_time_breakpoints_outside_the_study_window_are_refused() -> None:
         def jacobian(self, u, u_dot, u_ddot, t, weights):
             return np.array([[weights.alpha1.real]])
 
-    with pytest.raises(ValueError, match='study window'):
+    with pytest.raises(ValueError, match='march window'):
         integrate_transient(_Linear(), study, np.array([0.0]), time_breakpoints=(1.5,))
     with pytest.raises(ValueError, match='strictly increasing'):
         integrate_transient(_Linear(), study, np.array([0.0]), time_breakpoints=(0.2, 0.2))

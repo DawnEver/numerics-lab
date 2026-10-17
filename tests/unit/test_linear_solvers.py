@@ -10,7 +10,6 @@ import pytest
 import scipy.sparse as sp
 from scipy.sparse.linalg import splu, spsolve
 
-from numerics_lab import linear
 from numerics_lab.linear import (
     LINEAR_SOLVER_REGISTRY,
     PRECONDITIONER_REGISTRY,
@@ -92,8 +91,6 @@ def test_warm_start_reaches_same_solution():
 
 
 def test_registry_covers_the_roadmap_backends():
-    # 'pardiso' joins when pypardiso (the optional MKL) is installed (MANUAL-640,
-    # perf #3): the registry must never lose a roadmap backend.
     expected = {'direct', 'cg', 'minres', 'gmres', 'bicgstab', 'qmr'}
     assert expected <= set(LINEAR_SOLVER_REGISTRY)
     assert set(PRECONDITIONER_REGISTRY) == {'jacobi', 'ilu', 'ssor', 'ic0', 'amg'}
@@ -163,22 +160,12 @@ def test_high_residual_direct_solve_is_rejected(monkeypatch):
         solve_linear_system(A, b, linear_solver='direct')
 
 
-def test_pardiso_registers_when_installed_and_is_hinted_when_not():
-    """MANUAL-640 (perf #3): the pypardiso (Intel MKL) entry -- the multi-threaded
-    sparse direct solver, the MATLAB-parity gap on the laplace/hamilton solve share.
-    The entry exists only when pypardiso is installed; a request without it is
-    refused by name WITH the install hint, never a silent fallback.
-    """
-    if linear._pardiso_spsolve is not None:
-        assert 'pardiso' in LINEAR_SOLVER_REGISTRY
-        A, b = _spd_system(n=8)
-        x = solve_linear_system(A, b, linear_solver='pardiso')
-        np.testing.assert_allclose(A @ x, b, rtol=1e-10, atol=1e-10)
-    else:
-        assert 'pardiso' not in LINEAR_SOLVER_REGISTRY
-        A, b = _spd_system(n=8)
-        with pytest.raises(KeyError, match='pip install pypardiso'):
-            solve_linear_system(A, b, linear_solver='pardiso')
+def test_pardiso_is_not_a_backend() -> None:
+    """Plan ruling R1: the engine depends on numpy and scipy only, so the MKL PARDISO entry is gone."""
+    assert 'pardiso' not in LINEAR_SOLVER_REGISTRY
+    A, b = _spd_system(n=8)
+    with pytest.raises(KeyError, match="unknown linear solver 'pardiso'"):
+        solve_linear_system(A, b, linear_solver='pardiso')
 
 
 def test_the_symmetric_ordering_fills_less_than_colamd_on_a_2d_stiffness():

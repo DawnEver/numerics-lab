@@ -24,13 +24,10 @@ constraint -- and not (b), a formulation that needs a gauge nobody had stated.
 
 from __future__ import annotations
 
-import ast
-
 import numpy as np
 import pytest
 from scipy.sparse import csr_matrix
 
-from motronics.core.utils.config import repo_root
 from numerics_lab.linear import LinearSolveError, gauge_pin_orphan_rows, orphan_rows, solve_linear_system
 
 
@@ -81,7 +78,3 @@ def test_the_pin_changes_no_other_unknown():
     pinned = gauge_pin_orphan_rows(mat, rhs)
     x = np.asarray(solve_linear_system(pinned, rhs)).reshape(-1)
     assert x[free] == pytest.approx(reference, rel=1e-12, abs=1e-12)
-
-
-
-

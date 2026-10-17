@@ -93,13 +93,6 @@ from numerics_lab.linear.refinement import (
 )
 from numerics_lab.linear.ssor import ssor_preconditioner
 
-try:  # heavy optional dep (Intel MKL, the multi-threaded sparse LU -- MATLAB-parity on
-    # the solver). The registry entry exists only when pypardiso is installed; a
-    # 'pardiso' request without it is refused by name with the install hint below.
-    from pypardiso import spsolve as _pardiso_spsolve
-except ImportError:
-    _pardiso_spsolve = None
-
 __all__ = [
     'LINEAR_SOLVER_REGISTRY',
     'PRECONDITIONER_REGISTRY',
@@ -298,21 +291,9 @@ def requires_symmetric(name: str) -> bool:
     return name in _SYMMETRIC_SOLVERS
 
 
-def _pardiso(matrix, rhs, **_iterative_only):
-    """Intel MKL PARDISO sparse LU -- the multi-threaded direct solver (MATLAB-parity).
-
-    The direct counterpart of scipy's single-threaded SuperLU: PARDISO threads the
-    factorization, the same gap laplace has vs MATLAB today (whose sparse LU threads).
-    The singular guard rides with the caller's :func:`reject_nonfinite_solution` + the relative-residual
-    belt (extended to this name in :func:`solve_linear_system`), exactly like ``direct``.
-    """
-    return _pardiso_spsolve(matrix, rhs)
-
-
 # name -> LinearSolver. 'direct' is the bit-for-bit default (spsolve); the Krylov peers each reach the
 # same solution within _KRYLOV_RTOL. cg/minres want a symmetric/SPD operator (the magnetostatic
 # secant stiffness is SPD-ish); gmres/bicgstab/qmr handle general (non-symmetric, e.g. eddy-current).
-# 'pardiso' joins when pypardiso is installed (the optional MKL entry above).
 LINEAR_SOLVER_REGISTRY: dict[str, LinearSolver] = {
     'auto': lambda matrix, rhs, **kwargs: solve_linear_system(
         matrix,
@@ -332,8 +313,6 @@ LINEAR_SOLVER_REGISTRY: dict[str, LinearSolver] = {
     'qmr': _krylov(qmr),
 }
 _SYMMETRIC_SOLVERS = frozenset({'cg', 'iccg', 'minres'})
-if _pardiso_spsolve is not None:
-    LINEAR_SOLVER_REGISTRY['pardiso'] = _pardiso
 
 
 def _jacobi_preconditioner(matrix) -> LinearOperator:
@@ -380,8 +359,7 @@ def get_linear_solver(name: str | None) -> LinearSolver:
     try:
         return LINEAR_SOLVER_REGISTRY[name]
     except KeyError as e:
-        hint = " ('pardiso' needs the optional pypardiso package: pip install pypardiso)" if name == 'pardiso' else ''
-        msg = f'unknown linear solver {name!r}; known: {sorted(LINEAR_SOLVER_REGISTRY)}{hint}'
+        msg = f'unknown linear solver {name!r}; known: {sorted(LINEAR_SOLVER_REGISTRY)}'
         raise KeyError(msg) from e
 
 
@@ -456,14 +434,14 @@ def solve_linear_system(
         msg = 'ICCG requires the IC0 preconditioner'
         raise ValueError(msg)
     backend = get_linear_solver(name)
-    if M is None and name not in ('direct', 'direct-symmetric', 'pardiso'):
+    if M is None and name not in ('direct', 'direct-symmetric'):
         M = (
             prebuilt
             if prebuilt is not None
             else make_preconditioner('ic0' if name == 'iccg' else preconditioner, matrix)
         )
     try:
-        tolerances = {} if name in ('direct', 'direct-symmetric', 'pardiso') else {'rtol': rtol, 'atol': atol}
+        tolerances = {} if name in ('direct', 'direct-symmetric') else {'rtol': rtol, 'atol': atol}
         if max_iterations is not None:
             tolerances['max_iterations'] = int(max_iterations)
         x = reject_nonfinite_solution(np.asarray(backend(matrix, rhs, x0=x0, M=M, **tolerances)), name)
@@ -477,7 +455,7 @@ def solve_linear_system(
     # Only the direct backends need this (SuperLU and PARDISO alike) -- the Krylov backends
     # already raise on a non-zero convergence ``info`` and asserting their (looser) residual
     # here would clash with their own stop criterion.
-    if name in ('direct', 'direct-symmetric', 'pardiso'):
+    if name in ('direct', 'direct-symmetric'):
         # REPAIR, THEN JUDGE, both against the same unchanged bar. `repair_direct_solution` returns
         # `x` untouched unless the residual trigger fires, so this is free for every solve that
         # passes today; when it does fire, the steps it takes are the ones the verdict below was

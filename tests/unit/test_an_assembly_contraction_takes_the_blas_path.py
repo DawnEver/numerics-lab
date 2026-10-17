@@ -31,17 +31,12 @@ declaration one the code must consult.
 
 from __future__ import annotations
 
-import ast
 import time
-from pathlib import Path
 
 import numpy as np
 import pytest
 
 from numerics_lab.contract import contract
-
-
-
 
 
 @pytest.mark.parametrize(
@@ -97,7 +92,3 @@ def test_the_HELPER_IS_FASTER_THAN_THE_NAIVE_PATH_BY_A_STATED_RATIO() -> None:
     fast = timed(lambda: contract('qid,qjd,q->ij', gradients, gradients, measure))
     assert fast > 0.0
     assert naive / fast >= 5.0, f'the helper is only {naive / fast:.1f}x the naive path, not the 35.5x measured'
-
-
-
-

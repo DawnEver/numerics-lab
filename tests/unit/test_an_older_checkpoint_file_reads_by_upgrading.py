@@ -23,7 +23,9 @@ def test_an_older_envelope_reads_through_its_declared_step(tmp_path, monkeypatch
     assert steps == [1]
 
 
-@pytest.mark.parametrize('schema', ['numerics-lab-transient-checkpoint/v2', 'numerics-lab-transient-checkpoint/vx', 'x/v1'])
+@pytest.mark.parametrize(
+    'schema', ['numerics-lab-transient-checkpoint/v2', 'numerics-lab-transient-checkpoint/vx', 'x/v1']
+)
 def test_an_unknown_envelope_is_refused(tmp_path, schema) -> None:
     path = _written(tmp_path)
     data = json.loads(path.read_text(encoding='utf-8'))

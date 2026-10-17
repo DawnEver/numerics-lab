@@ -35,10 +35,9 @@ from collections import Counter, OrderedDict
 import numpy as np
 import scipy.sparse as sp
 
+from numerics_lab import _native
 from numerics_lab.linear.constrained.fixed_values import lift_dirichlet_rhs
 from numerics_lab.linear.errors import LinearSolveError
-
-from numerics_lab import _native
 
 __all__ = ['DIRECT_SOLVES', 'NativeFactor', 'native_available', 'native_factor', 'native_solve']
 
