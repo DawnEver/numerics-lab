@@ -38,7 +38,7 @@ def test_a_singular_gram_matrix_is_factored_with_the_reported_jitter() -> None:
 
 
 def test_a_clearly_indefinite_matrix_is_refused() -> None:
-    with pytest.raises(LinAlgError, match='jitter'):
+    with pytest.raises(LinearSolveError, match='jitter'):
         jittered_cholesky(np.diag([1.0, -1.0]))
 
 
@@ -73,7 +73,7 @@ def test_the_sparse_kkt_agrees_with_the_dense() -> None:
 def test_rank_deficient_constraints_are_refused_dense_and_sparse() -> None:
     h, a, c, d = _problem()
     a[2] = a[0]
-    with pytest.raises(LinAlgError, match='singular'):
+    with pytest.raises(LinearSolveError, match='singular'):
         solve_kkt(h, a, c, d)
     with pytest.raises(LinearSolveError):
         solve_kkt(sp.csr_matrix(h), sp.csr_matrix(a), c, d)

@@ -13,6 +13,8 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.linalg import LinAlgError, cho_solve, cholesky
 
+from numerics_lab.linear.errors import LinearSolveError
+
 __all__ = ['JitteredCholesky', 'jittered_cholesky']
 
 
@@ -34,7 +36,7 @@ def jittered_cholesky(
     """Factor ``a``; on failure retry with ``jitter = initial * mean(diag(a)) * growth**k``, ``k = 0, 1, ...``.
 
     The ladder is scaled by the mean diagonal so the jitter is relative to the matrix. Raises
-    :class:`scipy.linalg.LinAlgError` when the last rung still fails: a matrix that far from
+    :class:`~numerics_lab.linear.errors.LinearSolveError` when the last rung still fails: a matrix that far from
     positive definite is not a rounding accident.
     """
     a = np.asarray(a, dtype=float)
@@ -57,4 +59,4 @@ def jittered_cholesky(
         except LinAlgError:
             jitter *= growth
     msg = f'not positive definite even with jitter {jitter / growth:.3e} ({max_tries} rungs from {initial * scale:.3e})'
-    raise LinAlgError(msg)
+    raise LinearSolveError(msg)
