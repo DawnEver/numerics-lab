@@ -1,20 +1,17 @@
-//! Dirichlet pinning — pure algebra, no physics, no mesh.
+//! Fixed values (Dirichlet pinning) — pure algebra, no physics, no mesh.
 //!
-//! The Rust mirror of `python/numerics_lab/linear/constrained/fixed_values.py` and
-//! `python/numerics_lab/linear/constrained/pin_rows.py`. Neither function ever referenced an element, a
-//! material or a chart, which is why they are `gauss` citizens on the Python side and stay
-//! `gauss` citizens here. The two exist separately because they pin DIFFERENT representations:
-//! [`apply_dirichlet_triplets`] works on an assembly's COO stream, [`pin_rows`] on a matrix that
+//! The Rust mirror of `python/numerics_lab/linear/constrained/fixed_values.py`. It pins an
+//! assembly's COO stream ([`apply_dirichlet_triplets`]); [`super::pin_rows`] pins a matrix that
 //! is already built.
 //!
 //! # The one thing deliberately NOT ported: the complex dtype
 //!
 //! The Python's `apply_dirichlet_triplets` is dtype-agnostic on purpose — `studies/harmonic`
 //! pins a COMPLEX phasor through it, and a real-only implementation would silently truncate the
-//! phase. `contracts::sparse` is `f64` throughout (ruling D3's data structures are real), so a
+//! phase. `crate::sparse` is `f64` throughout (ruling D3's data structures are real), so a
 //! complex pin has no Rust representation to be faithful to yet. The real path is ported; the
 //! complex path is NOT, and it is named here rather than left to be discovered by a harmonic
-//! solve that loses its imaginary part. When `contracts` grows a complex operator, this function
+//! solve that loses its imaginary part. When `crate::sparse` grows a complex operator, this function
 //! is the first caller that needs it.
 
 use crate::sparse::{Coo, Csr, SparseError};
@@ -135,50 +132,4 @@ pub fn apply_dirichlet_triplets(
         }
     }
     (rows, cols, values)
-}
-
-/// Replace each pinned row by the identity row (zero row, unit diagonal).
-///
-/// The Python operates on a `scipy.sparse.lil_matrix` in place, because LIL is the one format
-/// where replacing a row is O(row). There is no LIL in `contracts::sparse` — and adding one to
-/// serve a single operation would be a format that exists for a caller rather than for a
-/// question — so this REBUILDS through [`Coo`], which is the write format and the one place
-/// duplicates are summed.
-///
-/// It was consolidated out of FOUR hand-copied Python copies that had already drifted (one cast
-/// the row index, three did not, and nothing compared them). One implementation is the point.
-///
-/// # Errors
-/// [`SparseError::NotSquare`], or [`SparseError::IndexOutOfBounds`] when a pinned index is
-/// outside the matrix.
-pub fn pin_rows(matrix: &Csr, pinned: &[u32]) -> Result<Csr, SparseError> {
-    let (n_rows, n_cols) = matrix.shape();
-    if n_rows != n_cols {
-        return Err(SparseError::NotSquare { n_rows, n_cols });
-    }
-    let mut is_pinned = vec![false; n_rows];
-    for &dof in pinned {
-        let d = dof as usize;
-        if d >= n_rows {
-            return Err(SparseError::IndexOutOfBounds {
-                row: d,
-                col: d,
-                n_rows,
-                n_cols,
-            });
-        }
-        is_pinned[d] = true;
-    }
-    let mut out = Coo::with_capacity(n_rows, n_cols, matrix.nnz() + pinned.len());
-    let (indptr, indices, values) = (matrix.indptr(), matrix.indices(), matrix.values());
-    for r in 0..n_rows {
-        if is_pinned[r] {
-            out.push(r as u32, r as u32, 1.0)?;
-            continue;
-        }
-        for i in indptr[r] as usize..indptr[r + 1] as usize {
-            out.push(r as u32, indices[i], values[i])?;
-        }
-    }
-    out.to_csr()
 }

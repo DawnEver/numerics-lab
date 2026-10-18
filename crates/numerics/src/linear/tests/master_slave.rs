@@ -1,4 +1,4 @@
-use crate::linear::constraints::{resolve_constraint_chains, ConstraintError};
+use crate::linear::constrained::master_slave::{resolve_constraint_chains, ConstraintError};
 
 #[test]
 fn a_set_with_no_chain_comes_back_untouched() {

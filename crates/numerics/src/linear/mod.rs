@@ -21,7 +21,7 @@
 //!    `pypardiso` (Intel MKL) is installed, and it is not installed on this box — so there is no
 //!    baseline to characterize against and nothing to port. It is an ABSENCE with a reason, not
 //!    an omission. When it arrives it joins as a peer of `direct`, under the same residual guard.
-//! 4. **The complex Dirichlet path** is not portable to an `f64` operator; see [`dirichlet`].
+//! 4. **The complex Dirichlet path** is not portable to an `f64` operator; see [`constrained::fixed_values`].
 //!
 //! # The two-sided singular guard
 //!
@@ -31,9 +31,8 @@
 //! vector that passes every finiteness check. Both apply to `faer`'s LU exactly as they applied
 //! to SuperLU's.
 
-pub mod constraints;
+pub mod constrained;
 pub mod direct;
-pub mod dirichlet;
 pub mod krylov;
 pub mod precond;
 
@@ -42,8 +41,9 @@ mod tests;
 
 use crate::sparse::{Csr, SparseError};
 
-pub use constraints::{resolve_constraint_chains, Constraint, ConstraintError};
-pub use dirichlet::{apply_dirichlet_triplets, pin_rows, DirichletGroup};
+pub use constrained::fixed_values::{apply_dirichlet_triplets, DirichletGroup};
+pub use constrained::master_slave::{resolve_constraint_chains, Constraint, ConstraintError};
+pub use constrained::pin_rows::pin_rows;
 pub use krylov::{
     KrylovFailure, KrylovOutcome, Method, GMRES_RESTART, KRYLOV_ATOL, KRYLOV_MAXITER_FACTOR,
     KRYLOV_RTOL,
@@ -295,8 +295,8 @@ pub fn solve_linear_system_with_tolerances(
                     },
                 ));
             }
-            let (matrix, rhs, pinned) =
-                dirichlet::lift_identity_rows(matrix, rhs).map_err(LinearSolveError::Shape)?;
+            let (matrix, rhs, pinned) = constrained::fixed_values::lift_identity_rows(matrix, rhs)
+                .map_err(LinearSolveError::Shape)?;
             let mut seed = x0.map_or_else(|| vec![0.0; rhs.len()], <[f64]>::to_vec);
             if seed.len() != rhs.len() {
                 return Err(LinearSolveError::Shape(SparseError::ShapeMismatch {
