@@ -244,8 +244,8 @@ wheels = [
 
 [[package]]
 name = "lab-commons"
-version = "0.3.1.dev662+g96a90c8b8"
-source = { git = "https://gitea.mingyangbao.site/Tianjie-Zou-Team/lab-commons.git#96a90c8b82b0c48227baf4e4929fb8e231fec7c5" }
+version = "0.3.1.dev666+gbfdfede5b"
+source = { git = "https://gitea.mingyangbao.site/Tianjie-Zou-Team/lab-commons.git#bfdfede5b48e7bd07035ff0b007f5d973e2bb12d" }
 
 [package.optional-dependencies]
 dev = [
