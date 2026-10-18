@@ -12,7 +12,8 @@ def test_independent_weak_equation_is_not_discarded_by_a_global_rank_cutoff(scal
     rhs = np.array([3.0, 2 * scale + 4.0, 2 * scale])
     answer, free = border_affine_space(matrix, rhs, mandatory_rows=(2,))
     assert free.shape == (3, 0)
-    assert np.array_equal(answer[:2], [1.0, 2.0])
+    # The bar is relative: the elimination order (and so the last ulp) is the LAPACK build's, not the claim's.
+    np.testing.assert_allclose(answer[:2], [1.0, 2.0], rtol=4 * np.finfo(float).eps, atol=0.0)
     # At enormous row units the input itself cannot retain the added 4.0.
     assert answer[2] == rhs[1] - 2 * scale
 

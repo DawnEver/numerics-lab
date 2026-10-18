@@ -281,7 +281,8 @@ def test_original_rate_validation_retries_exact_dependencies_lost_by_row_scaling
     rate, unique = initial_rate.sparse_initial_rate(matrix, rhs)
     assert rate[0] == 0.0
     assert unique.tolist() == [True, False, False, False]
-    np.testing.assert_allclose(matrix @ rate, rhs, rtol=1e-10, atol=0.0)
+    # A zero row's residual is judged at the system's scale: atol=0 there would demand bit-exact cancellation.
+    np.testing.assert_allclose(matrix @ rate, rhs, rtol=1e-10, atol=1e-10 * np.abs(rhs).max())
 
 
 def test_exact_rate_retry_retains_tiny_original_constraint_contradictions():
