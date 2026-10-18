@@ -135,3 +135,26 @@ def test_a_computed_entry_inside_its_supplied_error_bound_is_never_a_pivot():
 def test_entry_errors_require_a_finite_nonnegative_aligned_bound(errors):
     with pytest.raises(ValueError, match='entry error'):
         border_affine_space(np.eye(2), np.zeros(2), entry_errors=errors)
+
+
+def test_a_computed_entry_inside_its_error_bound_never_anchors_a_coordinate_at_zero():
+    """dcm_pmdc_rect / dcm_pmdc_pear / dcm_spm_bldc (2026-10-17): a Schur row ``-9.1e-12 x0 - 137 x1 = 0`` whose
+    ``x0`` entry is inside its 1.5e-9 formation bound. Once ``x1`` is anchored, the exact-support scan read the
+    row as the singleton ``x0 = 0``, chained it through ``x0 - x2 = 0`` and refused a driven row as a contradicted
+    stored state. A noise entry is a POSSIBLE zero, so it proves nothing; ``x0`` stays free and the row admits.
+    """
+    matrix = np.array([
+        [-9.094947017729282e-12, -137.24416462050308, 0.0],
+        [0.0, 4.46981229743835e-06, 0.0],
+        [1.0, 0.0, -1.0],
+        [0.0, 0.0, 1.0],
+    ])
+    rhs = np.array([0.0, 0.0, 0.0, 14.56])
+    errors = np.zeros_like(matrix)
+    errors[0, 0] = 1.5239131365770421e-09
+    answer, _free = border_affine_space(matrix, rhs, entry_errors=errors)
+    assert answer[2] == pytest.approx(14.56)
+    assert answer[1] == 0.0
+    # PLANTED CONTROL: the same entry, taken as EXACT, does anchor x0 -- and the driven row is a contradiction.
+    with pytest.raises(ValueError, match='homogeneous anchors'):
+        border_affine_space(matrix, rhs)

@@ -11,6 +11,7 @@ adaptive-step/refine accuracy tests in ``test_events_step_control.py``.
 
 from __future__ import annotations
 
+import math
 from importlib import import_module
 from unittest.mock import patch
 
@@ -421,3 +422,49 @@ def test_the_event_root_is_solved_once_not_once_for_ranking_and_again_for_landin
         )
     assert len(solution.events) == 1
     assert problem.root_residuals == 2, 'a redundant candidate solve reassembled the field at the same event root'
+
+
+def test_a_polish_that_only_creeps_linearly_hands_back_to_the_exact_newton() -> None:
+    """The polish must BEAT the Newton it replaced, not merely lower the residual (lipo_inductor, 2026-10-17).
+
+    MEASURED on `lipo_inductor --scenario current_loop` at t = 12.4 ms: the exact Newton's global phase into
+    saturation ran at ratios 0.995 / 0.987, the polish engaged the magnetic secant (5.6e-3 off the exact
+    Jacobian), and the secant then lowered the residual by ~0.88 every iteration -- never capped, never
+    raised -- until the 50-iteration ceiling, while one exact step from that iterate took 6.7e-5 -> 4.8e-10.
+    Here the alternative is ``8 J``: a chord that contracts by exactly 7/8 per iteration, forever.
+    """
+    from numerics_lab.time_integrators._forms import IntegratorState
+    from numerics_lab.time_integrators._integrators import _bdf2_variable_form
+    from numerics_lab.time_integrators._step import HELD_STALL_RATIO, _solve_step
+
+    class _CreepingSecant:
+        has_tangent_jacobian = True
+
+        def __init__(self) -> None:
+            self.alternative_calls = 0
+
+        def residual(self, u_arg, u_dot, u_ddot, t):
+            return u_arg / (1.0 + u_arg * u_arg) ** 0.24
+
+        def jacobian(self, u_arg, u_dot, u_ddot, t, weights):
+            q = 1.0 + u_arg * u_arg
+            return np.diag(q**-0.24 - 0.48 * u_arg * u_arg * q**-1.24)
+
+        def jacobian_tangent(self, u_arg, u_dot, u_ddot, t, weights):
+            self.alternative_calls += 1
+            return 8.0 * self.jacobian(u_arg, u_dot, u_ddot, t, weights)
+
+    def solve(j, r):
+        return np.linalg.solve(np.asarray(j), r)
+
+    state = IntegratorState(us=[np.zeros(1), np.zeros(1)], t=0.0)
+    form = _bdf2_variable_form(state, 0.1, 0.1, 0.1)
+    problem = _CreepingSecant()
+    _u, converged, iterations, residual, _on_floor = _solve_step(
+        problem, form, np.array([20.0]), solve=solve, max_newton=50, tol=1e-10
+    )
+    assert problem.alternative_calls > 0, 'the precondition: the slow global phase must engage the polish'
+    # PLANTED CONTROL: held to the 7/8 chord the step would need log(1e-10)/log(7/8) > 170 iterations.
+    assert HELD_STALL_RATIO < 7.0 / 8.0 and math.log(1e-10) / math.log(7.0 / 8.0) > 50
+    assert converged, f'the step exhausted at residual {residual:g} after {iterations} iterations'
+    assert problem.alternative_calls <= 2

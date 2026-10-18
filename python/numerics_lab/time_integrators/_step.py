@@ -506,6 +506,7 @@ def _solve_step(
     slow = 0
     tangent_active = False
     polish_spent = False
+    polish_slow = 0
     capped = False
     # The last tangent BUILT (never rebuilt for this purpose): the exhaustion check below needs
     # the matrix, not its norm, because the floor is a per-row ``|J| . |u|``. On a factor-cache
@@ -569,6 +570,14 @@ def _solve_step(
                 converged = True
                 on_floor = True
                 break
+            # THE POLISH MUST BEAT THE NEWTON IT REPLACED, not merely lower the residual: an alternative
+            # that only contracts linearly (two iterations above HELD_STALL_RATIO, the held factor's own
+            # bar) is a chord, and the exact Newton it displaced finishes quadratically. Measured on
+            # lipo_inductor's current loop at t = 12.4 ms: the secant crept at 0.88 to the 50-iteration
+            # ceiling, while one exact step from its iterate took 6.7e-5 -> 4.8e-10.
+            polish_slow = polish_slow + 1 if (tangent_active and ratio > HELD_STALL_RATIO) else 0
+            if polish_slow >= 2:
+                tangent_active, polish_spent, slow, polish_slow = False, True, 0, 0
             if slow >= 2 and tangent_helpful and not polish_spent:
                 tangent_active = True
         prev_residual = residual

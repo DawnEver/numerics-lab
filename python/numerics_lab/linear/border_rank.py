@@ -6,8 +6,14 @@ import scipy.sparse as sp
 __all__ = ['border_affine_space', 'homogeneous_zero_coordinates']
 
 
-def homogeneous_zero_coordinates(matrix, rhs, *, row_order=None):
-    """Prove exact zero coordinates from original homogeneous support alone."""
+def homogeneous_zero_coordinates(matrix, rhs, *, row_order=None, entry_errors=None):
+    """Prove exact zero coordinates from original homogeneous support alone.
+
+    A homogeneous row whose remaining support is ONE entry proves that coordinate zero -- if the entry is
+    one. ``entry_errors`` bounds a COMPUTED matrix's entries (a Schur border's formation error), and an
+    entry inside ``16 max(shape)`` of its bound (the eliminator's own reliability test) is a possible zero:
+    the row may be ``0 = 0``, so it proves nothing and its column stays free.
+    """
     original = sp.csr_matrix(matrix, copy=True)
     original.sum_duplicates()
     original.eliminate_zeros()
@@ -15,6 +21,16 @@ def homogeneous_zero_coordinates(matrix, rhs, *, row_order=None):
     if rhs.shape != (original.shape[0],) or not np.isfinite(rhs).all() or not np.isfinite(original.data).all():
         msg = 'homogeneous anchors require finite original equations'
         raise ValueError(msg)
+    if entry_errors is None:
+        reliable = None
+    else:
+        errors = np.asarray(entry_errors, dtype=float)
+        if errors.shape != original.shape:
+            msg = 'homogeneous anchors require entry error bounds aligned with the equations'
+            raise ValueError(msg)
+        rows_of = np.repeat(np.arange(original.shape[0]), np.diff(original.indptr))
+        bound = 16 * max(original.shape)
+        reliable = np.abs(original.data) > bound * errors[rows_of, original.indices]
     remaining = np.ones(original.shape[1], dtype=bool)
     consumed = set()
     order = range(original.shape[0]) if row_order is None else row_order
@@ -23,9 +39,11 @@ def homogeneous_zero_coordinates(matrix, rhs, *, row_order=None):
         for row in order:
             if row in consumed or rhs[row] != 0:
                 continue
-            columns = original.indices[original.indptr[row] : original.indptr[row + 1]]
-            support = columns[remaining[columns]]
-            if len(support) == 1:
+            start, end = original.indptr[row], original.indptr[row + 1]
+            columns = original.indices[start:end]
+            live = remaining[columns]
+            support = columns[live]
+            if len(support) == 1 and (reliable is None or reliable[start:end][live][0]):
                 remaining[support[0]] = False
                 consumed.add(int(row))
                 changed = True
@@ -89,7 +107,7 @@ def border_affine_space(matrix, rhs, *, mandatory_rows=(), inherited_allowance=N
     # only those proven columns, before driven-row arithmetic can contaminate
     # the representative or its free directions.
     ordered_rows = np.concatenate((mandatory_rows, np.setdiff1d(np.arange(rows), mandatory_rows)))
-    remaining, consumed = homogeneous_zero_coordinates(matrix, rhs, row_order=ordered_rows)
+    remaining, consumed = homogeneous_zero_coordinates(matrix, rhs, row_order=ordered_rows, entry_errors=seeded)
     if consumed:
         support_rows = np.any(matrix[:, remaining] != 0, axis=1)
         eliminated_rows = (~support_rows) & np.any(matrix != 0, axis=1)

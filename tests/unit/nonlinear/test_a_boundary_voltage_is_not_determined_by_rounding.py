@@ -55,18 +55,10 @@ def test_a_rounding_residue_never_makes_a_boundary_voltage_state_determined():
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ValueError,
-    reason=(
-        'OPEN (2026-10-16): `border_rank.homogeneous_zero_coordinates` anchors on a Schur entry inside '
-        'its own formation error (the net-current row at -5.6e-17 against a 2.0e-16 bound pins u = 0), '
-        'and the driven row 8 u = -1.25 then reads as contradicted. Excluding such entries from the '
-        'anchors fixes this toy but leaves the Cummins voltage_driven border with 4 spurious free body '
-        'voltage directions: the elimination after it is too pessimistic to pivot them.'
-    ),
-)
 def test_the_joint_path_solves_the_index_two_voltage_from_its_rates():
+    """The net-current row's Schur entry (-5.6e-17 against its 2.0e-16 bound) is a possible zero, so it anchors
+    nothing (`border_rank.homogeneous_zero_coordinates`, 2026-10-17) and the driven row 8 u = -1.25 solves u.
+    """
     pair = finite_storage_actual_rate_initial_pair(
         _SEED,
         residual_at=lambda state, rate: _J @ state + _M @ rate - _F,
