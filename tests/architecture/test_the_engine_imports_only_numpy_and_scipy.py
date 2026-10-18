@@ -1,7 +1,8 @@
-"""The engine imports nothing but itself, the standard library, numpy and scipy (plan R1, Track B4.5).
+"""The engine imports nothing but itself, the standard library, numpy and scipy's linalg/sparse/special.
 
-In particular it never imports `motronics`, the product it was extracted from: a consumer depends
-on the engine, never the reverse.
+Plan rulings R1 and Track B4.5: every algorithm is self-implemented, so `scipy.optimize`,
+`scipy.integrate`, `scipy.stats` and the rest appear only in tests, as oracles. In particular the
+engine never imports `motronics`, the product it was extracted from.
 """
 
 from __future__ import annotations
@@ -11,23 +12,38 @@ import sys
 from pathlib import Path
 
 _PACKAGE = Path(__file__).resolve().parents[2] / 'python' / 'numerics_lab'
-_ALLOWED = frozenset({'numerics_lab', 'numpy', 'scipy'}) | frozenset(sys.stdlib_module_names)
+_ALLOWED_ROOTS = frozenset({'numerics_lab', 'numpy'}) | frozenset(sys.stdlib_module_names)
+#: scipy is allowed only through these subpackages (and their own submodules).
+_ALLOWED_SCIPY = ('scipy.linalg', 'scipy.sparse', 'scipy.special')
 
 
-def foreign_roots(source: str) -> set[str]:
-    """Top-level packages ``source`` imports that are not the engine, numpy, scipy or stdlib."""
-    roots: set[str] = set()
+def _allowed(module: str) -> bool:
+    if module.split('.', maxsplit=1)[0] in _ALLOWED_ROOTS:
+        return True
+    return any(module == allowed or module.startswith(f'{allowed}.') for allowed in _ALLOWED_SCIPY)
+
+
+def foreign_imports(source: str) -> set[str]:
+    """Modules ``source`` imports that are not the engine, numpy, scipy's allowed subpackages or stdlib."""
+    found: set[str] = set()
     for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.Import):
-            roots |= {alias.name.split('.')[0] for alias in node.names}
+            found |= {alias.name for alias in node.names}
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            roots.add(node.module.split('.')[0])
-    return roots - _ALLOWED
+            if node.module == 'scipy':
+                found |= {f'scipy.{alias.name}' for alias in node.names}
+            else:
+                found.add(node.module)
+    return {module for module in found if not _allowed(module)}
 
 
-def test_the_scan_sees_a_planted_product_import() -> None:
-    planted = 'from motronics.contracts import X\nimport numpy as np\nfrom scipy import sparse\n'
-    assert foreign_roots(planted) == {'motronics'}
+def test_the_scan_sees_planted_foreign_imports() -> None:
+    planted = (
+        'from motronics.contracts import X\nimport numpy as np\nfrom scipy import sparse\n'
+        'from scipy.sparse.csgraph import connected_components\nfrom scipy.optimize import newton_krylov\n'
+        'from scipy import stats\nimport scipy\n'
+    )
+    assert foreign_imports(planted) == {'motronics.contracts', 'scipy.optimize', 'scipy.stats', 'scipy'}
 
 
 def test_the_engine_imports_only_numpy_scipy_and_itself() -> None:
@@ -36,6 +52,6 @@ def test_the_engine_imports_only_numpy_scipy_and_itself() -> None:
     offenders = {
         path.relative_to(_PACKAGE).as_posix(): found
         for path in files
-        if (found := foreign_roots(path.read_text(encoding='utf-8')))
+        if (found := foreign_imports(path.read_text(encoding='utf-8')))
     }
     assert offenders == {}

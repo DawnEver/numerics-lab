@@ -52,7 +52,6 @@ from numerics_lab.time_integrators._step import (
     HeldFactor,
     TrialNotEvaluable,
     _solve_step,
-    directional_line_search,
 )
 from numerics_lab.time_integrators.explicit import integrate_explicit_sampled
 from numerics_lab.time_integrators.factor_reuse import FactorCache
@@ -104,7 +103,6 @@ __all__ = [
     '_solve_step',
     'base_sample_time',
     'canonical',
-    'directional_line_search',
     'get_integrator',
     'integrate_explicit_sampled',
     'integrate_sampled',

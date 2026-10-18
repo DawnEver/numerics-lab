@@ -8,7 +8,7 @@ RAISES the energy; the search must return a point on the LOW side of the line mi
 
 import numpy as np
 
-from numerics_lab.time_integrators import directional_line_search
+from numerics_lab.line_search import directional_line_search
 
 STIFF, SOFT, KNEE = 1e3, 1.0, 1.0
 

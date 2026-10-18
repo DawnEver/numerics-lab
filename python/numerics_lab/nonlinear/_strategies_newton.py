@@ -12,6 +12,7 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import LinearOperator, aslinearoperator, gmres, splu
 
+from numerics_lab.line_search import backtracking, sufficient_decrease
 from numerics_lab.linear import reject_nonfinite_solution
 from numerics_lab.linear.native_direct import native_factor
 from numerics_lab.nonlinear._seam import (
@@ -172,20 +173,23 @@ class NewtonStrategy:
         return lambda rhs: reject_nonfinite_solution(lu.solve(np.asarray(rhs, dtype=float)), self.name)
 
     def _search(self, system: NonlinearSystem, x: np.ndarray, dx: np.ndarray, r_norm: float):
-        """The Armijo backtracking along ``dx``: ``(lam, accepted, trial, trial_state, trial_norm, full_step)``."""
-        lam = 1.0
-        full_step: tuple[np.ndarray, AssembledState, float] | None = None
-        for _bt in range(self.max_backtracks + 1):
+        """The Armijo backtracking along ``dx`` on the residual norm: ``(lam, accepted, trial, trial_state, trial_norm, full_step)``.
+
+        The merit is ``||r(x + lam dx)||``, whose slope along an exact Newton step is ``-||r(x)||``.
+        """
+
+        def trial_at(lam: float) -> tuple[np.ndarray, AssembledState, float]:
             trial = x + lam * dx
             trial_state = system.assemble(trial)
-            trial_norm = _free_residual_norm(system, trial, trial_state)
-            if full_step is None:
-                full_step = (trial, trial_state, trial_norm)
-            if np.isfinite(trial_norm) and trial_norm <= (1.0 - self.armijo * lam) * r_norm:
-                return lam, True, trial, trial_state, trial_norm, full_step
-            lam *= self.shrink
-        assert full_step is not None  # nonnegative max_backtracks always tries the full step
-        return lam, False, trial, trial_state, trial_norm, full_step
+            return trial, trial_state, _free_residual_norm(system, trial, trial_state)
+
+        decreases = sufficient_decrease(r_norm, -r_norm, c1=self.armijo)
+        search = backtracking(
+            trial_at, lambda lam, t: decreases(lam, t[2]), tries=self.max_backtracks + 1, shrink=self.shrink
+        )
+        assert search.trial is not None and search.first is not None  # every Newton trial evaluates
+        trial, trial_state, trial_norm = search.trial
+        return search.step, search.accepted, trial, trial_state, trial_norm, search.first
 
     def solve(
         self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT

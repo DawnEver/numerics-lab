@@ -20,6 +20,7 @@ from numerics_lab.nonlinear._seam import (
     increment_ratio,
     require_secant_system,
 )
+from numerics_lab.quasi_newton import BroydenUpdate, SecantPair, broyden_apply, broyden_update, secant_pair, two_loop
 
 __all__ = [
     'AndersonStrategy',
@@ -30,22 +31,8 @@ __all__ = [
 
 
 def _two_loop(system, state, r, pairs):
-    """H r by the L-BFGS two-loop recursion over the stored secant pairs; H0 r = one secant solve.
-
-    ONE body for BFGS and L-BFGS: they differ only in how many pairs they keep, so the recursion
-    that applies them is the same and a fix to it must reach both.
-    """
-    q = r.copy()
-    alphas = []
-    for s_vec, y_vec, rho in reversed(pairs):
-        a = rho * float(s_vec @ q)
-        q = q - a * y_vec
-        alphas.append(a)
-    z = require_secant_system(system).solve_secant(state, q)  # H0 z = q
-    for (s_vec, y_vec, rho), a in zip(pairs, reversed(alphas), strict=True):
-        b = rho * float(y_vec @ z)
-        z = z + (a - b) * s_vec
-    return z
+    """H r over the stored secant pairs; H0 r = one secant solve of the system."""
+    return two_loop(r, pairs, lambda q: require_secant_system(system).solve_secant(state, q))
 
 
 class AndersonStrategy:
@@ -137,10 +124,7 @@ class BroydenStrategy:
 
     def _apply_inverse(self, system, state, r, updates):
         # H0^{-1} r via one secant solve, then the stored rank-1 Broyden updates.
-        v = require_secant_system(system).solve_secant(state, r)
-        for s_vec, denom, u in updates:
-            v = v + (s_vec @ v) / denom * u
-        return v
+        return broyden_apply(require_secant_system(system).solve_secant(state, r), updates)
 
     def solve(
         self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
@@ -152,7 +136,7 @@ class BroydenStrategy:
         ran = 0
         watch = _StagnationWatch(rtol_energy_pct)
         require_secant_system(system)
-        updates: list[tuple] = []  # (s_row_vector, denom, u_column) rank-1 inverse-Jacobian updates
+        updates: list[BroydenUpdate] = []  # rank-1 inverse-Jacobian updates, oldest first
         prev_r = None
         prev_dx = None
         for i in range(max_iter):
@@ -170,10 +154,9 @@ class BroydenStrategy:
                 assert prev_dx is not None
                 df = r - prev_r
                 h_df = self._apply_inverse(system, state, df, updates)
-                denom = float(prev_dx @ h_df)
-                if abs(denom) > 1e-30:
-                    u = (prev_dx - h_df) / denom
-                    updates.append((prev_dx.copy(), 1.0, u))
+                update = broyden_update(prev_dx, h_df)
+                if update is not None:
+                    updates.append(update)
                     if len(updates) > self.m:
                         updates.pop(0)
             dx = -self._apply_inverse(system, state, r, updates)
@@ -221,7 +204,7 @@ class BFGSStrategy:
         ran = 0
         watch = _StagnationWatch(rtol_energy_pct)
         require_secant_system(system)
-        pairs: list[tuple] = []  # (s = dx, y = dr, rho = 1/(y.s)) BFGS secant pairs
+        pairs: list[SecantPair] = []  # (s = dx, y = dr, rho = 1/(y.s)), oldest first
         prev_r = None
         prev_dx = None
         for i in range(max_iter):
@@ -236,9 +219,9 @@ class BFGSStrategy:
             if prev_r is not None:
                 assert prev_dx is not None
                 y = r - prev_r
-                ys = float(y @ prev_dx)
-                if abs(ys) > 1e-30:  # curvature condition; skip a non-informative (near-zero) pair
-                    pairs.append((prev_dx.copy(), y, 1.0 / ys))
+                pair = secant_pair(prev_dx, y)  # None: a non-informative (near-zero curvature) pair
+                if pair is not None:
+                    pairs.append(pair)
                     if len(pairs) > self.m:
                         pairs.pop(0)
             dx = -_two_loop(system, state, r, pairs)

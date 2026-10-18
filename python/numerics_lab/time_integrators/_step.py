@@ -19,6 +19,7 @@ from numerics_lab.formulation import (
     SemiDiscreteProblem,
     StepEvaluationProblem,
 )
+from numerics_lab.line_search import backtracking, directional_line_search
 from numerics_lab.linear import reject_nonfinite_solution
 from numerics_lab.linear.resolution import ADMISSION_BAR, FLOOR_SAFETY, row_bar, system_resolution
 from numerics_lab.time_integrators._forms import (
@@ -45,7 +46,6 @@ __all__ = [
     'ProblemCapabilities',
     'StepOutcome',
     'TrialNotEvaluable',
-    'directional_line_search',
     'take_step',
 ]
 
@@ -241,51 +241,6 @@ def _gmin_continue(
     if local_ok and tangent is not None and residual <= residual_floor(tangent, u):
         return u, True, residual, True
     return u, False, residual, False
-
-
-#: Secant (Illinois) evaluations :func:`directional_line_search` spends bracketing the line minimum.
-_DIRECTIONAL_EVALS = 12
-
-
-def directional_line_search(residual, u, step, r0, *, curvature: float = 0.5):
-    """Minimize the step's ENERGY along ``step`` using only residuals: ``phi'(s) = R(u + s step) . step``.
-
-    For a residual that IS the gradient of a convex potential (a magnetostatic step with a monotone
-    law: the variational play, a monotone B-H curve, ``sigma/dt`` mass), ``phi`` is convex along the
-    ray, so its minimizer is the root of the nondecreasing ``phi'``. Judging a step by ``|R|``
-    instead is not a merit of that problem -- on a law with kinks the Newton direction need not
-    lower ``|R|`` at all, measured on ipm_uv with the hysteretic steel: full steps 4e2 -> 5e3,
-    100 iterations at ~10 % each. Differences of the potential itself would cancel to round-off
-    near the root; its DERIVATIVE does not. The full step is taken when ``phi'(1) <= 0``; otherwise
-    a bracketed Illinois secant stops at a LOW-side point ``-curvature |phi'(0)| <= phi'(s) <= 0``.
-    A non-descent direction (``phi'(0) >= 0``) is taken whole: there is nothing to minimize along it.
-    """
-    g0 = float(np.dot(np.ravel(r0), np.ravel(step)))
-    if not g0 < 0.0:
-        return u + step
-    g1 = float(np.dot(np.ravel(residual(u + step)), np.ravel(step)))
-    if g1 <= 0.0:
-        return u + step
-    lo, glo, hi, ghi = 0.0, g0, 1.0, g1
-    s, side = 1.0, 0
-    for _ in range(_DIRECTIONAL_EVALS):
-        s = lo - glo * (hi - lo) / (ghi - glo)
-        g = float(np.dot(np.ravel(residual(u + s * step)), np.ravel(step)))
-        if -curvature * abs(g0) <= g <= 0.0:
-            return u + s * step
-        if g < 0.0:
-            lo, glo = s, g
-            if side == -1:
-                ghi *= 0.5
-            side = -1
-        else:
-            hi, ghi = s, g
-            if side == 1:
-                glo *= 0.5
-            side = 1
-    # Unclosed: the bracket's LOW end, where phi' < 0 and so the energy fell; a point past the
-    # minimum may sit above phi(0) however small its slope.
-    return u + (lo if lo > 0.0 else s) * step
 
 
 class RowAcceptance:
@@ -615,31 +570,26 @@ def _solve_step(
                 r,
             )
         elif max_newton > 1 and backtrack_cap > 0:
-            raised = False
-            evaluable = True
-            for _ in range(backtrack_cap):
-                u_try = project_trial(u + step)
-                u_arg, u_dot, u_ddot = form.u_arg(u_try), form.u_dot(u_try), form.u_ddot(u_try)
+            limit = residual if backtrack_band is None else backtrack_band * residual
+
+            def trial_at(lam, u=u, step=step):
+                u_try = project_trial(u + lam * step)
                 try:
-                    r_try = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
+                    r_try = problem.residual(form.u_arg(u_try), form.u_dot(u_try), form.u_ddot(u_try), t)
                 except TrialNotEvaluable:
                     # The problem cannot evaluate this trial (an inner solve without a root): the
                     # trial is REJECTED exactly like one whose residual is too large -- halve.
-                    evaluable = False
-                    step = 0.5 * step
-                    continue
-                evaluable = True
-                limit = residual if backtrack_band is None else backtrack_band * residual
-                trial = float(np.linalg.norm(r_try))
-                if trial < limit:
-                    u = u_try
-                    raised = trial >= residual
-                    break
-                step = 0.5 * step
+                    return None
+                return u_try, float(np.linalg.norm(np.asarray(r_try, dtype=float)))
+
+            search = backtracking(trial_at, lambda _lam, trial: trial[1] < limit, tries=backtrack_cap)
+            raised = search.accepted and search.trial[1] >= residual
+            if search.accepted:
+                u = search.trial[0]
             else:
-                # Exhausted: take the last trial only if it could be evaluated at all.
-                if evaluable:
-                    u = project_trial(u + step)
+                # Exhausted: take the next, untried step only if the last trial could be evaluated at all.
+                if search.trial is not None:
+                    u = project_trial(u + search.step * step)
                 capped = True
             if tangent_active and (capped or raised):
                 # THE POLISH IS A TRIAL, NOT A ONE-WAY SWITCH: an alternative operator whose step

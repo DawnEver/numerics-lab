@@ -9,6 +9,7 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import splu
 
+from numerics_lab.line_search import backtracking, sufficient_decrease
 from numerics_lab.linear.algebraic_bulk_initial import algebraic_bulk_initial_pair
 from numerics_lab.linear.arithmetic import affine_residual_bound, certified_sparse_product
 from numerics_lab.linear.index_two import (
@@ -773,11 +774,11 @@ def _backtracked_state(state, step, target, residual_at, charge_at, storage, zer
         return float(np.linalg.norm(np.concatenate((storage.algebraic_rows @ residual_at(value, zero), mismatch))))
 
     current = norm(state)
-    lam = 1.0
-    for _ in range(13):
-        trial = state + lam * step
-        trial_norm = norm(trial)
-        if np.isfinite(trial_norm) and trial_norm <= (1.0 - armijo * lam) * current:
-            return trial
-        lam *= shrink
-    return state + step
+    decreases = sufficient_decrease(current, -current, c1=armijo)
+    search = backtracking(
+        lambda lam: (state + lam * step, norm(state + lam * step)),
+        lambda lam, t: decreases(lam, t[1]),
+        tries=13,
+        shrink=shrink,
+    )
+    return search.trial[0] if search.accepted else state + step
