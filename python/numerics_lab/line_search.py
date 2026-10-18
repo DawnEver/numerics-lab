@@ -170,13 +170,15 @@ def strong_wolfe(
     Nocedal and Wright, Algorithm 3.5 (bracketing, the step doubling up to ``max_step``) and 3.6
     (zoom: a cubic interpolant kept inside the central 80 % of the bracket, else bisection).
     A step that reaches ``max_step`` still falling is returned ``capped`` (see :class:`WolfeStep`).
-    Raises :class:`WolfeSearchFailed` when the budget runs out or the zoom bracket collapses (no
-    float lies strictly inside it, as at a jump in ``phi``); never returns an uncapped step that
-    fails a condition.
+    Raises :class:`WolfeSearchFailed` when ``phi'(0)`` is not strictly negative (``-0.0``, ``0.0``,
+    positive or NaN alike: there is no descent to search along -- whether the point is converged is
+    the caller's question, not the search's), when the budget runs out, or when the zoom bracket
+    collapses (no float lies strictly inside it, as at a jump in ``phi``); never returns an uncapped
+    step that fails a condition.
     """
     if not slope0 < 0.0:
-        msg = f"a Wolfe search needs a descent direction, phi'(0) = {slope0!r}"
-        raise ValueError(msg)
+        msg = f"no descent to search along, phi'(0) = {slope0!r}"
+        raise WolfeSearchFailed(msg)
     if not 0.0 < c1 < c2 < 1.0:
         msg = f'the Wolfe constants must satisfy 0 < c1 < c2 < 1, got c1={c1!r} c2={c2!r}'
         raise ValueError(msg)
