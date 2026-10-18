@@ -1,4 +1,4 @@
-"""Quasi-Newton secant updates: BFGS, the L-BFGS two-loop recursion, SR1 and Broyden.
+"""Quasi-Newton secant updates: BFGS, the L-BFGS two-loop recursion and pair memory, SR1 and Broyden.
 
 A secant pair is ``s = x_{k+1} - x_k`` and ``y = g_{k+1} - g_k`` (``g`` a gradient or a residual).
 Two forms are published, and both are used:
@@ -26,6 +26,7 @@ from numpy.typing import NDArray
 __all__ = [
     'SECANT_FLOOR',
     'BroydenUpdate',
+    'LbfgsMemory',
     'SecantPair',
     'bfgs_inverse_update',
     'bfgs_update',
@@ -148,3 +149,62 @@ def broyden_inverse_update(h: NDArray[np.float64], s: Vector, y: Vector) -> NDAr
     if abs(denominator) <= SECANT_FLOOR:
         return h
     return h + np.outer(s - hy, s @ h) / denominator
+
+
+class LbfgsMemory:
+    """The L-BFGS pair memory: the ONE bookkeeping behind every limited-memory BFGS model here.
+
+    Keeps the last ``size`` secant pairs (oldest first), SKIPS a pair whose curvature ``y . s`` is not
+    above :data:`SECANT_FLOOR`, and scales by ``gamma = s.y / y.y`` of the newest kept pair (``1``
+    when empty). One model, two forms: :meth:`inverse_apply` is the two-loop ``H q`` on ``gamma I``;
+    :meth:`hessian` is the compact direct form ``B = theta I - W M W^T`` with ``theta = 1 / gamma``
+    (Byrd, Nocedal and Schnabel 1994, eq. 3.5), which a bound-constrained (Cauchy point) step needs.
+    """
+
+    def __init__(self, size: int) -> None:
+        if size < 1:
+            msg = f'an L-BFGS memory holds at least one secant pair, got {size!r}'
+            raise ValueError(msg)
+        self.size = size
+        self.pairs: tuple[SecantPair, ...] = ()
+        self.gamma = 1.0
+        self._dimension: int | None = None
+
+    def push(self, s: Vector, y: Vector) -> bool:
+        """Keep ``(s, y)`` if its curvature is positive, dropping the oldest past ``size``; True if kept."""
+        s, y = np.asarray(s, dtype=float), np.asarray(y, dtype=float)
+        self._dimension = s.size
+        ys = float(y @ s)
+        if not ys > SECANT_FLOOR:
+            return False
+        self.pairs = (*self.pairs[max(0, len(self.pairs) + 1 - self.size) :], SecantPair(s.copy(), y.copy(), 1.0 / ys))
+        self.gamma = ys / float(y @ y)
+        return True
+
+    def clear(self) -> None:
+        """Forget every pair (a restart): the model is the identity again."""
+        self.pairs, self.gamma = (), 1.0
+
+    def inverse_apply(self, q: Vector) -> Vector:
+        """``H q``: the two-loop recursion over the kept pairs on ``H0 = gamma I``."""
+        return two_loop(np.asarray(q, dtype=float), self.pairs, lambda v: self.gamma * v)
+
+    def compact_factors(self) -> tuple[float, NDArray[np.float64], NDArray[np.float64]]:
+        """``(theta, W, M)`` with ``B = theta I - W M W^T``; ``W`` is ``n x 2m`` (``[Y, theta S]``)."""
+        theta = 1.0 / self.gamma
+        if not self.pairs:
+            return theta, np.zeros((self._dimension or 0, 0)), np.zeros((0, 0))
+        s = np.column_stack([pair.s for pair in self.pairs])
+        y = np.column_stack([pair.y for pair in self.pairs])
+        sy = s.T @ y
+        lower = np.tril(sy, -1)
+        middle = np.block([[-np.diag(np.diag(sy)), lower.T], [lower, theta * (s.T @ s)]])
+        return theta, np.hstack([y, theta * s]), np.linalg.inv(middle)
+
+    def hessian(self) -> NDArray[np.float64]:
+        """The dense direct model ``B`` (the compact form expanded); for small ``n`` and for tests."""
+        if self._dimension is None:
+            msg = 'an L-BFGS memory that never saw a pair has no dimension'
+            raise ValueError(msg)
+        theta, w, m = self.compact_factors()
+        return theta * np.eye(self._dimension) - w @ m @ w.T
