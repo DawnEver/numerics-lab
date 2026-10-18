@@ -45,6 +45,29 @@ xfail_strict = true
 markers = ["unit: fast unit tests", "timeout: per-test ceiling (pytest-timeout)"]
 
 
+[tool.lab_commons.parts]
+output = "output/logs"
+
+[tool.lab_commons.tests]
+produce = ["-m", "lab_commons.dev.verify", "--part", "{part}"]
+
+# The family branch flow: integrate/main coordinates; main moves only by `integrate promote` (fast-forward)
+# on a full forge PASS. integrate/main is cut at main's tip at adoption, so every commit after it is a merge.
+[tool.lab_commons.integrator]
+trunk = "main"
+integration = "integrate/main"
+merges_only_since = "9f16d44091d99eb53dbdb7177eba5ad462d8764f"  # INTEGRATION-IS-MERGES-ONLY from here on
+
+# Git hooks: the family base (lab_commons/dev/githooks/base.toml) as is; numerics-lab adds no row.
+[tool.lab_commons.hooks]
+
 [tool.lab_commons.branchset]
 trunk = 'main'
-sessions = []
+sessions = ['integrate/main']
+prune_merged = true
+
+[tool.lab_commons.doors]
+BARE-TEST-INVOCATION = "<venv python> -m lab_commons.dev.verify -- <paths>  (the measure door; a full run is the forge producer's; a hand-written pytest line has none)"
+PUSH-NO-VERIFY = "push without skipping the hook; no hook runs a test, and the forge produces the part"
+GIT-NETWORK-VERB = "<venv python> -m lab_commons.dev.netverb -- git <push|fetch|pull|clone|ls-remote> ...  (retries 3x, then reports a diagnosis)"
+ENV-MUTATION-THROUGH-THE-DOOR = "<any family venv python> -m lab_commons.dev.dep --bootstrap <this checkout> --extra dev  (run from this checkout)"
