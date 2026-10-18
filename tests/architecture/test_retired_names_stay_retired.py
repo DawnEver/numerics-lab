@@ -17,8 +17,6 @@ RETIRED: dict[str, str] = {
     'linear::constraints': 'linear::constrained::master_slave',
     'mod dirichlet': 'mod fixed_values',
     'mod constraints': 'mod master_slave',
-    '_UPGRADES': 'none: an older checkpoint is refused by name (CHECKPOINT_FILE_SCHEMA)',
-    'CHECKPOINT_FILE_SCHEMA_VERSION': 'CHECKPOINT_FILE_SCHEMA',
     'time_integrators._step.directional_line_search': 'numerics_lab.line_search.directional_line_search',
     'from numerics_lab.time_integrators import directional_line_search': 'numerics_lab.line_search',
 }

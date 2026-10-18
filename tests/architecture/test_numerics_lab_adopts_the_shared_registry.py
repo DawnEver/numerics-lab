@@ -28,6 +28,7 @@ _HOOKS: Final = TestPath('tests/architecture/test_the_hooks_are_the_family_base.
 _MECHANISMS: Final = {
     'PROJECT-FILES-HAVE-ONE-SOURCE': (TestPath('tests/architecture/test_the_family_config_is_rendered.py'),),
     'RETIRED-NAMES-REGISTERED': (TestPath('tests/architecture/test_retired_names_stay_retired.py'),),
+    'FORMATS-UPGRADE-ON-READ': (TestPath('tests/unit/test_an_older_checkpoint_file_upgrades_on_read.py'),),
     'NO-LAZY-IMPORT': (LintRule(code='PLC0415'),),
     'ONE-BRANCH-PER-SESSION': (_BRANCHES,),
     'MERGE-OR-DELETE': (_BRANCHES,),
@@ -50,9 +51,6 @@ _ABSENT: Final = frozenset({
     'ONE-WRITER-PER-SESSION-BRANCH',
     # The environment: shims are installed per box, and no agent guard is rendered here yet.
     'HOOKS-ARE-WIRED', 'INSTALL-DOOR-DELIVERS-THE-DECLARATION', 'ENV-MUTATION-THROUGH-THE-DOOR', 'AGENT-GUARD',
-    # The one persisted format here is the march checkpoint, refused by name when old (fd34d39); whether it is
-    # live state under the 2026-10-18 scope is owed a decision, not a silent claim.
-    'FORMATS-UPGRADE-ON-READ',
     # Domain and measurement rules with no subject in a pure numerics engine.
     'IMPLEMENT-EVERYTHING', 'BAR-IS-A-CONSTANT', 'UNITS-GO-THROUGH-PINT', 'TOLERANCE-CARRIES-A-UNIT',
     'REGISTRY-OWNS-THE-DECISION', 'PRODUCTION-ENTRY-POINT', 'UNSUPPORTED-RAISES', 'REFUSAL-NAMES-THE-REMEDY',
@@ -68,7 +66,7 @@ _ABSENT: Final = frozenset({
 })  # fmt: skip
 
 #: The size of the absent set at adoption (2026-10-18); lowering it is the only legal edit.
-_ABSENT_CEILING: Final = 48
+_ABSENT_CEILING: Final = 47
 
 
 def test_every_rule_is_enforced_or_declared_absent() -> None:
