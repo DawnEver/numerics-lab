@@ -9,7 +9,7 @@ dynamic = ["version"]
 description = "Equation-solving numerics: linear and nonlinear solves, time integration (Python + Rust)."
 readme = "README.md"
 requires-python = ">=3.13"
-license = { text = "Proprietary" }
+license = "Apache-2.0"
 authors = [{ name = "Mingyang Bao" }]
 # Runtime numerics depend only on numpy and scipy's linalg/sparse/special (plan ruling R1).
 dependencies = [

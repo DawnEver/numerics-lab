@@ -6,7 +6,7 @@ members = ["crates/numerics", "crates/pybind"]
 # THE version of numerics-lab: maturin reads it for the Python package, and a release tag must match.
 version = "0.1.0"
 edition = "2021"
-license = "LicenseRef-Proprietary"
+license = "Apache-2.0"
 # faer 0.24.4 declares rust-version 1.84.
 rust-version = "1.84"
 
