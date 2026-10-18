@@ -5,7 +5,7 @@ import hashlib
 import itertools
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -487,10 +487,29 @@ FIXED_POINTS_OVER_A_MARCH: frozenset[str] = frozenset({
     'numerics_lab.time_integrators.periodic_march:shoot_transient_cycle',
 })
 
-#: The sealed file envelope's version: the ONE on-disk form of a :class:`TransientCheckpoint`.
-#: Any other envelope -- older, newer or foreign -- is refused by name and never upgraded: a
-#: checkpoint is regenerable state, so the march that wrote it is re-run.
-CHECKPOINT_FILE_SCHEMA = 'numerics-lab-transient-checkpoint/v1'
+#: The sealed file envelope's version: the ONE on-disk form a :class:`TransientCheckpoint` is WRITTEN in.
+CHECKPOINT_FILE_SCHEMA_VERSION = 1
+_CHECKPOINT_FILE_PREFIX = 'numerics-lab-transient-checkpoint/v'
+CHECKPOINT_FILE_SCHEMA = f'{_CHECKPOINT_FILE_PREFIX}{CHECKPOINT_FILE_SCHEMA_VERSION}'
+
+#: FORMATS-UPGRADE-ON-READ (user ruling 2026-10-18): a checkpoint is the LIVE state a running march
+#: resumes from, so an older envelope is read once into the current form; none is ever written.
+#: Older foreign envelope -> the version of this lineage its sealed mapping already is.
+#: ``motronics-transient-checkpoint/v1`` is what ``motronics.gauss`` wrote before the engine moved here.
+_PREDECESSOR_ENVELOPES: dict[str, int] = {'motronics-transient-checkpoint/v1': 1}
+
+#: Version -> the step taking its sealed ``checkpoint`` mapping one version on. Version 1 is the
+#: current one, so none is owed yet.
+_UPGRADES: dict[int, Callable[[dict], dict]] = {}
+
+
+def _file_version(schema: object) -> int | None:
+    if not isinstance(schema, str):
+        return None
+    if schema in _PREDECESSOR_ENVELOPES:
+        return _PREDECESSOR_ENVELOPES[schema]
+    digits = schema.removeprefix(_CHECKPOINT_FILE_PREFIX)
+    return int(digits) if digits != schema and digits.isdecimal() else None
 
 
 def _seal(mapping) -> str:
@@ -518,23 +537,23 @@ def write_checkpoint_file(path, checkpoint: TransientCheckpoint) -> Path:
 def read_checkpoint_file(path) -> TransientCheckpoint:
     """Read a sealed checkpoint; an edited, truncated or unsealed file is REFUSED, never resumed from.
 
-    Only :data:`CHECKPOINT_FILE_SCHEMA` is read; any other envelope is refused naming both schemas,
-    and never upgraded.
+    An OLDER envelope is upgraded on read through :data:`_UPGRADES` after its seal is checked; an
+    envelope this reader does not know (newer, never issued, or foreign) is refused by name.
     """
     data = json.loads(Path(path).read_text(encoding='utf-8'))
     if not isinstance(data, dict) or set(data) != {'schema', 'sha256', 'checkpoint'}:
         msg = f'{path}: not a sealed {CHECKPOINT_FILE_SCHEMA} checkpoint file'
         raise ValueError(msg)
-    if data['schema'] != CHECKPOINT_FILE_SCHEMA:
-        msg = (
-            f"{path}: checkpoint schema {data['schema']!r} is not this reader's {CHECKPOINT_FILE_SCHEMA}; "
-            'a checkpoint is never upgraded -- re-run the march that wrote it'
-        )
-        raise ValueError(msg)
     if _seal(data['checkpoint']) != data['sha256']:
         msg = f'{path}: checkpoint content does not match its sha256 seal; the file was edited or corrupted'
         raise ValueError(msg)
-    return TransientCheckpoint.from_mapping(data['checkpoint'])
+    version, mapping = _file_version(data['schema']), data['checkpoint']
+    while version in _UPGRADES:
+        mapping, version = _UPGRADES[version](mapping), version + 1
+    if version != CHECKPOINT_FILE_SCHEMA_VERSION:
+        msg = f'{path}: checkpoint schema {data["schema"]!r} is unknown to this reader ({CHECKPOINT_FILE_SCHEMA})'
+        raise ValueError(msg)
+    return TransientCheckpoint.from_mapping(mapping)
 
 
 def validate_history_json(value):
