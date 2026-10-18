@@ -122,12 +122,19 @@ def armijo(
 
 @dataclass(frozen=True)
 class WolfeStep:
-    """A step satisfying the strong Wolfe conditions, with ``phi`` and ``phi'`` there."""
+    """A step satisfying the strong Wolfe conditions, with ``phi`` and ``phi'`` there.
+
+    ``capped`` marks More and Thuente's ``stpmax`` exit: the step IS ``max_step``, sufficient
+    decrease holds there and ``phi`` still falls, so no larger step may be tried and the curvature
+    condition is not met. A box-capped method (L-BFGS-B) takes it; an unbounded caller never sees it
+    unless it set ``max_step``.
+    """
 
     step: float
     phi: float
     slope: float
     evaluations: int
+    capped: bool = False
 
 
 class WolfeSearchFailed(RuntimeError):
@@ -162,9 +169,10 @@ def strong_wolfe(
 
     Nocedal and Wright, Algorithm 3.5 (bracketing, the step doubling up to ``max_step``) and 3.6
     (zoom: a cubic interpolant kept inside the central 80 % of the bracket, else bisection).
+    A step that reaches ``max_step`` still falling is returned ``capped`` (see :class:`WolfeStep`).
     Raises :class:`WolfeSearchFailed` when the budget runs out or the zoom bracket collapses (no
-    float lies strictly inside it, as at a jump in ``phi``); never returns a step that fails a
-    condition.
+    float lies strictly inside it, as at a jump in ``phi``); never returns an uncapped step that
+    fails a condition.
     """
     if not slope0 < 0.0:
         msg = f"a Wolfe search needs a descent direction, phi'(0) = {slope0!r}"
@@ -217,8 +225,7 @@ def strong_wolfe(
         if g >= 0.0:
             return zoom(a, f, g, previous, f_previous, g_previous)
         if a >= max_step:
-            msg = f'the step reached max_step={max_step!r} without bracketing a Wolfe point'
-            raise WolfeSearchFailed(msg)
+            return WolfeStep(a, f, g, evaluations, capped=True)
         previous, f_previous, g_previous = a, f, g
         a = min(2.0 * a, max_step)
 

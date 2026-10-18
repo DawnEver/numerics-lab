@@ -20,3 +20,14 @@ accessed: 2026-10-18
   ZeroDivisionError first.
 - Consumer: optimi-lab `rebuild/p13` removes `lbfgsb`'s `ZeroDivisionError` catch and its Armijo
   fallback.
+
+## The cap is an outcome, not a failure
+
+- Removing optimi-lab's Armijo fallback showed it caught MORE than the collapse: on HS071 through
+  the augmented Lagrangian, its inner L-BFGS-B hit 21 "reached max_step without bracketing" and 16
+  budget failures. The first is not a failure at all for a box-capped search: More and Thuente's
+  `dcsrch` exits at `stpmax` when sufficient decrease holds there and phi still falls.
+- `WolfeStep.capped` (default False) marks that exit; `strong_wolfe` returns it instead of raising.
+  Tests: `test_strong_wolfe_returns_a_capped_step_where_phi_still_falls_at_max_step`, planted
+  control `test_strong_wolfe_still_raises_at_a_cap_where_sufficient_decrease_fails` (it zooms to an
+  uncapped Wolfe point).
