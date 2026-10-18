@@ -5,7 +5,8 @@
 INDEFINITE, so the dense path factors it by the symmetric indefinite solve and the sparse path by
 the seam's ``direct`` solve under its residual guard (the bare registry backend
 alone answers a singular KKT with garbage in about one draw in eight, measured 2026-10-18). A rank-deficient ``A`` or a ``H``
-singular on the null space of ``A`` makes the system singular, and that is refused, never answered.
+singular on the null space of ``A`` makes the system singular, and that is refused, never answered --
+dense or sparse, with the same :class:`~numerics_lab.linear.errors.LinearSolveError`.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ import scipy.sparse as sp
 from numpy.typing import NDArray
 from scipy.linalg import LinAlgError, LinAlgWarning, solve
 
-from numerics_lab.linear import solve_linear_system
+from numerics_lab.linear import LinearSolveError, solve_linear_system
 
 __all__ = ['KKTSolution', 'solve_kkt']
 
@@ -53,5 +54,5 @@ def solve_kkt(h, a, c: NDArray[np.float64], d: NDArray[np.float64]) -> KKTSoluti
                 solution = solve(kkt, rhs, assume_a='sym')
             except (LinAlgError, LinAlgWarning) as exc:
                 msg = 'the KKT system is singular: A is rank deficient or H is singular on its null space'
-                raise LinAlgError(msg) from exc
+                raise LinearSolveError(msg) from exc
     return KKTSolution(solution[:n], solution[n:])
