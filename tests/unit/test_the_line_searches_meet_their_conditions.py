@@ -108,3 +108,16 @@ def test_strong_wolfe_still_raises_at_a_cap_where_sufficient_decrease_fails() ->
     """Planted control: a cap is not a licence -- phi rising past the cap's Armijo line still zooms or fails."""
     found = strong_wolfe(lambda a: (-a + 2 * a * a, -1.0 + 4 * a), 0.0, -1.0, max_step=1.0)
     assert not found.capped and abs(found.slope) <= 0.9
+
+
+@pytest.mark.parametrize('slope0', [-0.0, 0.0, 1.0, float('nan')])
+def test_strong_wolfe_refuses_a_non_descent_slope_by_its_declared_type(slope0) -> None:
+    # -0.0 is a gradient whose square underflowed: no descent is visible, so no step is found.
+    with pytest.raises(WolfeSearchFailed, match='descent'):
+        strong_wolfe(lambda a: (a * a, 2.0 * a), 0.0, slope0)
+
+
+def test_strong_wolfe_still_searches_along_a_descent_slope() -> None:
+    # Planted control: the same parabola from the descent side searches and lands at its minimum.
+    found = strong_wolfe(lambda a: ((a - 1.0) ** 2, 2.0 * (a - 1.0)), 1.0, -2.0)
+    assert found.step == pytest.approx(1.0)
