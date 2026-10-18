@@ -162,7 +162,8 @@ def strong_wolfe(
 
     Nocedal and Wright, Algorithm 3.5 (bracketing, the step doubling up to ``max_step``) and 3.6
     (zoom: a cubic interpolant kept inside the central 80 % of the bracket, else bisection).
-    Raises :class:`WolfeSearchFailed` when the budget runs out; never returns a step that fails a
+    Raises :class:`WolfeSearchFailed` when the budget runs out or the zoom bracket collapses (no
+    float lies strictly inside it, as at a jump in ``phi``); never returns a step that fails a
     condition.
     """
     if not slope0 < 0.0:
@@ -188,6 +189,9 @@ def strong_wolfe(
     def zoom(lo: float, f_lo: float, g_lo: float, hi: float, f_hi: float, g_hi: float) -> WolfeStep:
         while True:
             left, right = min(lo, hi), max(lo, hi)
+            if not left < 0.5 * (left + right) < right:
+                msg = f'the zoom bracket collapsed at a={lo!r} after {evaluations} evaluations'
+                raise WolfeSearchFailed(msg)
             trial = _cubic_minimizer(lo, f_lo, g_lo, hi, f_hi, g_hi) if math.isfinite(f_hi) else None
             margin = 0.1 * (right - left)
             if trial is None or not left + margin <= trial <= right - margin:

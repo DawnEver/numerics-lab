@@ -85,3 +85,13 @@ def test_strong_wolfe_raises_rather_than_return_a_failing_step() -> None:
     # Unbounded below along the ray: no Wolfe point exists.
     with pytest.raises(WolfeSearchFailed):
         strong_wolfe(lambda a: (-a, -1.0), 0.0, -1.0, max_evaluations=10)
+
+
+def test_strong_wolfe_reports_a_collapsed_bracket_as_a_failed_search() -> None:
+    """A jump at a = 0.5 holds no Wolfe point; zoom bisects until lo == hi and must say so by name."""
+
+    def jump(a: float) -> tuple[float, float]:
+        return (-a, -1.0) if a < 0.5 else (1.0, -1.0)
+
+    with pytest.raises(WolfeSearchFailed, match='collapsed'):
+        strong_wolfe(jump, 0.0, -1.0, max_evaluations=500)
