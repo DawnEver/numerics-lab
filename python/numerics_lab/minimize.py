@@ -1,4 +1,4 @@
-"""The one unconstrained minimiser: limited-memory BFGS on :func:`two_loop` and :func:`strong_wolfe`.
+"""The one unconstrained minimiser: limited-memory BFGS on :class:`LbfgsMemory` and :func:`strong_wolfe`.
 
 ``minimize_lbfgs(fun_and_grad, x0)`` minimises a smooth ``f`` with ``fun_and_grad(x) -> (f, grad)``.
 The direction is the two-loop recursion over the last ``memory`` secant pairs on ``H0 = gamma I``
@@ -20,7 +20,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from numerics_lab.line_search import WolfeSearchFailed, strong_wolfe
-from numerics_lab.quasi_newton import SecantPair, secant_pair, two_loop
+from numerics_lab.quasi_newton import LbfgsMemory
 
 __all__ = ['MinimizeResult', 'minimize_lbfgs']
 
@@ -50,9 +50,7 @@ def minimize_lbfgs(
     max_iter: int = 1000,
 ) -> MinimizeResult:
     """Minimise ``f`` from *x0*; see the module docstring for the stop rules."""
-    if memory < 1:
-        msg = f'memory is at least one secant pair, got {memory!r}'
-        raise ValueError(msg)
+    model = LbfgsMemory(memory)
     if rtol < 0 or atol < 0 or (rtol == 0 and atol == 0):
         msg = f'rtol and atol are >= 0 and at least one is > 0, got rtol={rtol!r} atol={atol!r}'
         raise ValueError(msg)
@@ -61,8 +59,6 @@ def minimize_lbfgs(
     f, g = float(f), np.asarray(g, dtype=float)
     evaluations = 1
     bar_relative = rtol * float(np.max(np.abs(g), initial=0.0))
-    pairs: list[SecantPair] = []
-    gamma = 1.0
 
     def result(iterations: int, converged: bool, reason: str) -> MinimizeResult:
         return MinimizeResult(x, f, g, iterations, evaluations, converged, reason)
@@ -73,10 +69,10 @@ def minimize_lbfgs(
             return result(iteration, True, 'rtol')
         if worst <= atol:
             return result(iteration, True, 'atol')
-        d = -two_loop(g, pairs, lambda v, scale=gamma: scale * v)
+        d = -model.inverse_apply(g)
         slope = float(g @ d)
         if not slope < 0:
-            pairs.clear()
+            model.clear()
             d, slope = -g, -float(g @ g)
         seen: dict[float, tuple[float, Vector]] = {}
 
@@ -86,7 +82,7 @@ def minimize_lbfgs(
             seen[a] = (float(value), grad)
             return float(value), float(grad @ d)
 
-        first = 1.0 if pairs else min(1.0, 1.0 / worst)
+        first = 1.0 if model.pairs else min(1.0, 1.0 / worst)
         try:
             step = strong_wolfe(along, f, slope, step=first)
         except WolfeSearchFailed:
@@ -95,10 +91,7 @@ def minimize_lbfgs(
         evaluations += len(seen)
         f_new, g_new = seen[step.step]
         s, y = step.step * d, g_new - g
-        pair = secant_pair(s, y)
-        if pair is not None and pair.rho > 0:
-            pairs = [*pairs[-(memory - 1) :], pair] if memory > 1 else [pair]
-            gamma = float(s @ y) / float(y @ y)
+        model.push(s, y)
         x, f, g = x + s, f_new, g_new
     worst = float(np.max(np.abs(g), initial=0.0))
     if worst <= max(bar_relative, atol):
