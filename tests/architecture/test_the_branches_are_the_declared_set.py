@@ -10,6 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Final
 
+import pytest
+
 from lab_commons.dev.branchset import declared_branchset
 from lab_commons.dev.famtests import branchset
 
@@ -26,6 +28,7 @@ def test_origin_carries_only_the_declared_branches() -> None:
     branchset.assert_origin_branches_declared(root=_ROOT, branchset=declared_branchset(_ROOT))
 
 
+@pytest.mark.dev_checkout
 def test_this_box_carries_only_the_declared_branches() -> None:
     branchset.assert_local_branches_declared(root=_ROOT, branchset=declared_branchset(_ROOT))
 
