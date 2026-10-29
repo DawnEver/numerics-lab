@@ -24,7 +24,7 @@ dev = [
     "pytest-xdist",
     "ruff",
     # The family development system (verify door, rules). DEV ONLY: the engine imports neither dev_lab nor lab_commons.
-    "dev-lab @ git+https://gitea.mingyangbao.site/Tianjie-Zou-Team/dev-lab.git",
+    "dev-lab @ git+https://github.com/DawnEver/dev-lab.git",
 ]
 
 [tool.maturin]
