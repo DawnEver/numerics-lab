@@ -1,0 +1,15 @@
+[package]
+name = "numerics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# The Rust core of numerics-lab, exposed to Python by crates/pybind as numerics_lab._native.
+[dependencies]
+# Direct sparse LU (ruling D4 -- scipy may be replaced). Pure Rust, no SuiteSparse build step.
+# It is faer that raises the workspace rust-version floor to 1.84; see ../../Cargo.toml.
+faer = { version = "0.24.4", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+serde_json = { version = "1", features = ["float_roundtrip"] }

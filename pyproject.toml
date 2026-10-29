@@ -1,0 +1,91 @@
+[build-system]
+requires = ["maturin>=1.7"]
+build-backend = "maturin"
+
+[project]
+name = "numerics-lab"
+# The version is the Cargo workspace's (`Cargo.toml`), read by maturin; a release tag must match it.
+dynamic = ["version"]
+description = "Equation-solving numerics: linear and nonlinear solves, time integration (Python + Rust)."
+readme = "README.md"
+requires-python = ">=3.13"
+license = "MIT"
+authors = [{ name = "Mingyang Bao" }]
+# Runtime numerics depend only on numpy and scipy's linalg/sparse/special (plan ruling R1).
+dependencies = [
+    "numpy",
+    "scipy",
+]
+
+[project.optional-dependencies]
+dev = [
+    "maturin>=1.7",
+    "pytest",
+    "pytest-xdist",
+    "ruff",
+    # The family development system (verify door, rules). DEV ONLY: the engine imports neither dev_lab nor lab_commons.
+    "dev-lab @ git+https://gitea.mingyangbao.site/Tianjie-Zou-Team/dev-lab.git",
+]
+
+[tool.maturin]
+python-source = "python"
+module-name = "numerics_lab._native"
+manifest-path = "crates/pybind/Cargo.toml"
+features = ["pyo3/extension-module"]
+
+[tool.uv]
+# uv keys a path build on pyproject.toml's mtime alone; the mixed wheel must rebuild for a Rust OR a Python edit.
+cache-keys = [{ file = "pyproject.toml" }, { file = "Cargo.toml" }, { file = "crates/**/*.rs" }, { file = "python/**/*.py" }]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--import-mode=importlib -ra"
+pythonpath = ["."]
+xfail_strict = true
+markers = [
+    "unit: fast unit tests",
+    "timeout: per-test ceiling (pytest-timeout)",
+    "workstation: needs a live checkout or agent tooling (hooks, origin refs, worktrees, node)",
+]
+
+
+[tool.lab_commons.hpc]
+# PIN + FRESHNESS (user ruling 2026-10-17): the venv is exactly the committed lock, and the lock keys it.
+# The project itself is NOT installed into the venv: the venv is keyed on the lock, so a Rust-only change
+# would be served the kernel of an older tree.
+install = 'uv sync --frozen --extra dev --no-install-project'
+dependency_inputs = ['pyproject.toml', 'uv.lock']
+source_roots = ['python']
+needs = ['cargo', 'cc']  # the native build compiles the Rust extension
+# The kernel is its own build keyed on the Rust sources, written under $LAB_CI_NATIVE and reached through
+# the `numerics_lab` package's extended `__path__` (python/numerics_lab/__init__.py).
+native = { inputs = ['crates', 'Cargo.toml', 'Cargo.lock'], build = 'uv pip install --no-deps --refresh-package numerics-lab --target "$LAB_CI_NATIVE" .' }
+collect = 'tests'
+
+[tool.dev_lab.parts]
+output = "output/logs"
+
+[tool.lab_commons.tests]
+produce = ["-m", "dev_lab.dev.verify", "--part", "{part}"]
+resources = ["workstation"]
+
+# The family branch flow: integrate/main coordinates; main moves only by `integrate promote` (fast-forward)
+# on a full forge PASS. integrate/main is cut at main's tip at adoption, so every commit after it is a merge.
+[tool.dev_lab.integrator]
+trunk = "main"
+integration = "integrate/main"
+pr_merges_since = "7dbdfb3a9c67d0408d29e36b121f37989f172731"  # INTEGRATION-TAKES-ONLY-FORGE-MERGES from here
+
+# Git hooks: the family base (dev_lab/dev/githooks/base.toml) as is; numerics-lab adds no row.
+[tool.dev_lab.hooks]
+
+[tool.dev_lab.branchset]
+trunk = 'main'
+sessions = ['integrate/main']
+prune_merged = true
+
+[tool.dev_lab.doors]
+BARE-TEST-INVOCATION = "<venv python> -m dev_lab.dev.verify -- <paths>  (the measure door; a full run is the forge producer's; a hand-written pytest line has none)"
+PUSH-NO-VERIFY = "push without skipping the hook; no hook runs a test, and the forge produces the part"
+NETWORK-VERB = "<venv python> -m dev_lab.dev.netverb -- <git push|fetch|pull|clone|ls-remote|submodule update ...  or  uv lock|add|remove ...>  (retries 3x, then reports a diagnosis); an environment change is <venv python> -m dev_lab.dev.dep --sync, which retries inside"
+ENV-MUTATION-THROUGH-THE-DOOR = "<any family venv python> -m dev_lab.dev.dep --bootstrap <this checkout> --extra dev  (run from this checkout)"

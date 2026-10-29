@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = ["crates/numerics", "crates/pybind"]
+
+[workspace.package]
+# THE version of numerics-lab: maturin reads it for the Python package, and a release tag must match.
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+# faer 0.24.4 declares rust-version 1.84.
+rust-version = "1.84"
+
+[workspace.dependencies]
+numerics = { path = "crates/numerics" }
+
+[profile.release]
+lto = true
+codegen-units = 1
