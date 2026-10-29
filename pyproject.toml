@@ -24,7 +24,7 @@ dev = [
     "pytest-xdist",
     "ruff",
     # The family development system (verify door, rules). DEV ONLY: the engine imports neither dev_lab nor lab_commons.
-    "dev-lab @ git+https://github.com/DawnEver/dev-lab.git",
+    "dev-lab[test] @ git+https://github.com/DawnEver/dev-lab.git",
 ]
 
 [tool.maturin]
@@ -75,6 +75,10 @@ resources = ["workstation"]
 trunk = "main"
 integration = "integrate/main"
 pr_merges_since = "7dbdfb3a9c67d0408d29e36b121f37989f172731"  # INTEGRATION-TAKES-ONLY-FORGE-MERGES from here
+
+# GitHub Actions: the family's one PR lifecycle (dev_lab/dev/ci_base.toml) as is; rendered to
+# .github/workflows/ci.yml by `python -m dev_lab.dev.ciworkflows render`, never hand-edited.
+[tool.dev_lab.ci."ci.yml"]
 
 # Git hooks: the family base (dev_lab/dev/githooks/base.toml) as is; numerics-lab adds no row.
 [tool.dev_lab.hooks]

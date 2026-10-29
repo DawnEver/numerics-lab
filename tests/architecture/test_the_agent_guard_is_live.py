@@ -32,6 +32,7 @@ _SHIPPED: Final = frozenset({
     'PUSH-FORCE',
     'PUSH-NO-VERIFY',
     'PUSH-REMOTE-DELETE',
+    'RECURSIVE-DELETE',  # gained 2026-10-29 with dev-lab e8b8991
     'RECURSIVE-GREP',
     'REPORTS-LIVE-IN-MEMORY',
     'STATUS-VIA-DOORS',

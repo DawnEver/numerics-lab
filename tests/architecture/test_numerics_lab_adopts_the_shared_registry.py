@@ -63,6 +63,10 @@ _MECHANISMS: Final = {
             'WORKTREES-STAY-INSIDE',
             'REPORTS-LIVE-IN-MEMORY',
             'INJECTED-TEXT-IS-PROGRESSIVE',
+            # Adopted 2026-10-29 with dev-lab e8b8991: the guard refuses a raw recursive delete, and its
+            # wiring (pinned live by the same test) runs `dev_lab.dev.pushwatch` on PostToolUse.
+            'RECURSIVE-DELETE',
+            'PUSHED-HEAD-IS-WATCHED',
         ),
         (TestPath('tests/architecture/test_the_agent_guard_is_live.py'),),
     ),
