@@ -131,3 +131,25 @@ def test_tr_bdf2_takes_two_solves_per_step_with_one_jacobian_weight(monkeypatch)
     integrate_transient(problem, TimeWindow(t0=0.0, t1=0.4, dt=0.1, integrator=IntegratorKind.TR_BDF2), u0, v0=v0)
     assert len(weights) == 8
     assert np.allclose(weights, (2.0 + 2.0**0.5) / 0.1)
+
+
+class _SolveRoundoff(_Linear):
+    """The macOS residue, planted: a tangent off by ``4 eps`` relative -- the backward error a stable solve may commit.
+
+    One exact Newton step then lands at ``4 eps |J| |du|``, the rounding of the residual it REMOVED: at the
+    TR-BDF2 stage that decays ``u`` from ~1 to ~5e-4 that is ~9e-12, far above ``eps |J| |u|`` (~1e-15).
+    """
+
+    def jacobian(self, u, u_dot, u_ddot, t, weights):
+        return super().jacobian(u, u_dot, u_ddot, t, weights) * (1.0 + 4.0 * np.finfo(float).eps)
+
+
+def test_the_step_floor_scales_with_the_residual_the_newton_step_removed() -> None:
+    problem = _SolveRoundoff(1.0, 1.0e4, lambda _t: np.array([0.0]))
+    sol = integrate_transient(
+        problem,
+        TimeWindow(t0=0.0, t1=5.0, dt=1.0, integrator=IntegratorKind.TR_BDF2),
+        np.array([1.0]),
+        v0=np.array([-1.0e4]),
+    )
+    assert abs(float(sol.states[-1][0] / sol.states[-2][0])) < 1e-3

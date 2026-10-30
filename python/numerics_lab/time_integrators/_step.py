@@ -97,8 +97,17 @@ def _affine_admitted(problem, form, u, capabilities) -> bool:
     return bool(admitted)
 
 
-def _at_roundoff_floor(problem, tangent, u: NDArray[np.floating], form, capabilities, r) -> bool:
+def _at_roundoff_floor(problem, tangent, u: NDArray[np.floating], form, capabilities, r, increment=None) -> bool:
     """Whether the residual ``r`` is already at the arithmetic floor; ``False`` if unknowable.
+
+    ``increment`` is the Newton step ``du`` that produced ``u``, and the generic floor reads
+    ``|J| (|u| + |du|)``, not ``|J| |u|`` alone. THE DERIVATION: ``du`` solves ``J du = -r_prev`` by a
+    backward-stable factorisation, i.e. exactly ``(J + E) du = -r_prev`` with ``|E| <~ eps |J|``, so the
+    new residual carries ``E du``, of size ``eps |J| |du|`` -- and ``|J| |du| >= |r_prev|``. The floor is
+    therefore RELATIVE TO THE RESIDUAL THE STEP REMOVED, not to the state it landed on: a stiff decay
+    from ``u ~ 1`` to ``u ~ 5e-4`` under ``|J| ~ 1e4`` lands at ~1e-12, where ``eps |J| |u|`` alone reads
+    ~1e-13 and refused the exact solve (the TR-BDF2 L-stability march on macOS Accelerate, 2026-10-30:
+    residual 1.819e-12 against a 1.4e-13 floor).
 
     The problem's own `residual_roundoff_floor` is preferred: it is a statement about that
     system's cancellation, which no generic derivation can see. The fallback
@@ -125,7 +134,10 @@ def _at_roundoff_floor(problem, tangent, u: NDArray[np.floating], form, capabili
                 return bool(np.all(np.abs(np.asarray(r, dtype=float).reshape(floor.shape)) <= floor))
     if tangent is None:
         return False
-    floor = residual_floor_by_row(tangent, u)
+    magnitude = np.abs(np.asarray(u, dtype=float))
+    if increment is not None:
+        magnitude = magnitude + np.abs(np.asarray(increment, dtype=float)).reshape(magnitude.shape)
+    floor = residual_floor_by_row(tangent, magnitude)
     if not np.isfinite(floor).all():
         return False
     residual = np.abs(np.asarray(r, dtype=float).reshape(floor.shape))
@@ -294,6 +306,7 @@ def _gmin_continue(
     t = form.t_eval
     u = np.asarray(guess, dtype=float).copy()
     tangent = None  # the last tangent built here, for the exhaustion floor below
+    delta = None  # the last damped step, whose own solve error the exhaustion floor admits
     local = LocalIterationCheck(problem, tol_rel)
     capabilities = ProblemCapabilities.resolve(problem)
     for gmin in gmin_stages:
@@ -322,7 +335,7 @@ def _gmin_continue(
     local_ok = local_ok and _affine_admitted(problem, form, u, capabilities)
     if local_ok and (residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0)):
         return u, True, residual, False
-    if local_ok and _at_roundoff_floor(problem, tangent, u, form, capabilities, r):
+    if local_ok and _at_roundoff_floor(problem, tangent, u, form, capabilities, r, increment=delta):
         return u, True, residual, True
     return u, False, residual, False
 
@@ -620,6 +633,7 @@ def _solve_step(
     # HIT no matrix is built, so the cache's own -- valid by its contract that equal keys imply an
     # equal jacobian -- stands in, and a hit still never pays a build.
     tangent = None
+    step = None  # the last full Newton step: its solve's backward error is part of the floor
     local = LocalIterationCheck(problem, ADMISSION_BAR if row_acceptance else tol_rel)
     observed = None  # the iterate the local check last observed, for the resolution test
 
@@ -673,7 +687,7 @@ def _solve_step(
             # monotonically, so no stall ratio can be relied on to see it). It is the same floor
             # verdict the exhaustion branch below gives, reached before the ceiling instead of at
             # it (measured on case_a's chopper: 50 iterations, ~30 s a step, at |r| ~ 4e-9).
-            if rows is None and local_ok and _at_roundoff_floor(problem, tangent, u, form, capabilities, r):
+            if rows is None and local_ok and _at_roundoff_floor(problem, tangent, u, form, capabilities, r, step):
                 converged = True
                 on_floor = True
                 break
@@ -746,7 +760,9 @@ def _solve_step(
                 # the answer, whatever its norm.
                 if rows is not None:
                     return trial[1] < limit or rows.accepts(trial[0], trial[2])
-                return trial[1] < limit or _at_roundoff_floor(problem, tangent, trial[0], form, capabilities, trial[2])
+                return trial[1] < limit or _at_roundoff_floor(
+                    problem, tangent, trial[0], form, capabilities, trial[2], step
+                )
 
             search = backtracking(trial_at, accepts_trial, tries=backtrack_cap)
             raised = search.accepted and search.trial[1] >= residual
@@ -780,7 +796,7 @@ def _solve_step(
         local_ok = local_ok and _affine_admitted(problem, form, u, capabilities)
         if local_ok and met(residual, r, u):
             converged = True
-        elif rows is None and local_ok and _at_roundoff_floor(problem, tangent, u, form, capabilities, r):
+        elif rows is None and local_ok and _at_roundoff_floor(problem, tangent, u, form, capabilities, r, step):
             on_floor = True
             # THE ARITHMETIC FLOOR, and the reason an exactly-solved LINEAR step no longer lies.
             # ``tol`` is ABSOLUTE on a residual whose scale is the supply, so the same one-Newton
