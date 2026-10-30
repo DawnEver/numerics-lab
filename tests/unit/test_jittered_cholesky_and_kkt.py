@@ -80,7 +80,7 @@ def test_rank_deficient_constraints_are_refused_dense_and_sparse() -> None:
 
 
 def test_no_draw_of_a_singular_sparse_kkt_is_answered() -> None:
-    """The bare ``direct`` backend answered about one draw in eight with garbage; the guarded solve none."""
+    """The bare ``direct`` backend answered about one draw in eight with garbage; the pivot-barred solve none."""
     refused = 0
     for seed in range(300):
         rng = np.random.default_rng(seed)
@@ -92,3 +92,18 @@ def test_no_draw_of_a_singular_sparse_kkt_is_answered() -> None:
             solve_kkt(sp.csr_matrix(q @ q.T + np.eye(7)), sp.csr_matrix(a), c, d)
         refused += 1
     assert refused == 300
+
+
+def test_a_numerically_singular_sparse_kkt_is_refused_by_its_pivot_bar() -> None:
+    """The macOS residue, planted: a repeated constraint row off by an ulp-scale 1e-15 is singular to working
+    precision (cond * eps >= 1), and the residual guard alone accepted 47 of 1200 such draws on x86 with
+    |x| up to 3.6e17. The factorisation's own pivot bar refuses every one, whatever the platform's arithmetic.
+    """
+    for seed in range(1200):
+        rng = np.random.default_rng(seed)
+        q = rng.standard_normal((7, 7))
+        a = rng.standard_normal((3, 7))
+        a[2] = a[0] + 1e-15 * rng.standard_normal(7)
+        c, d = rng.standard_normal(7), rng.standard_normal(3)
+        with pytest.raises(LinearSolveError, match='pivot'):
+            solve_kkt(sp.csr_matrix(q @ q.T + np.eye(7)), sp.csr_matrix(a), c, d)
