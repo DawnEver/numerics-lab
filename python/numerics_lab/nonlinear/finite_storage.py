@@ -891,6 +891,8 @@ def _actual_finite_storage_state(
             if len(active):
                 solved = storage_factor.solve(-coupling[:, active].toarray())
                 response = sp.csr_matrix(solved) @ sp.eye(len(free), format='csr')[active]
+            # The storage LU has no remaining use beside the next algebraic LU.
+            del storage_factor
             selectors = sp.eye(len(state), format='csr')
             mapping = selectors[:, free] + selectors[:, columns] @ response
             left, right = storage.algebraic_rows, (jacobian @ mapping).tocsc()
