@@ -66,7 +66,7 @@ def storage_border_rows(mass, *, bulk_indices, border_rows):
 
     The caller identifies the actual bulk coordinates/rows and the small border;
     all other rows must be exactly algebraic. Bulk rows may depend only on bulk
-    rates. Dense work is border-by-state, never state-by-state. Singular bulk
+    rates. Bulk solves use one dense vector at a time; elimination witnesses stay sparse. Singular bulk
     factors are refused, not regularized into invented storage.
     """
     mass = sp.csr_matrix(mass)
@@ -98,18 +98,25 @@ def storage_border_rows(mass, *, bulk_indices, border_rows):
         except RuntimeError as error:
             msg = 'declared storage bulk is not numerically invertible'
             raise ValueError(msg) from error
-        # E D^-1: transpose solve keeps the only dense dimension the border.
-        correction = factor.solve(mass[border][:, bulk].T.toarray(), trans='T').T
+        # E D^-1: retain every nonzero, but never materialize bulk-by-whole-border
+        # RHS/solution slabs. Reuse the same LU for each original border row.
+        coupling = mass[border][:, bulk]
+        corrections = []
+        for row in range(len(border)):
+            values = factor.solve(coupling.getrow(row).toarray().ravel(), trans='T')
+            if not np.isfinite(values).all():
+                msg = 'storage bulk elimination requires finite representable operands'
+                raise ValueError(msg)
+            corrections.append(sp.csr_matrix(values.reshape(1, -1)))
+        correction = sp.vstack(corrections, format='csr') if corrections else sp.csr_matrix((0, len(bulk)))
     else:
-        correction = np.zeros((len(border), 0))
-    if not np.isfinite(correction).all():
-        msg = 'storage bulk elimination requires finite representable operands'
-        raise ValueError(msg)
+        correction = sp.csr_matrix((len(border), 0))
     selectors = sp.eye(n, format='csr')
+    null = sp.csr_matrix(null_border)
     algebraic = sp.vstack(
         [
             selectors[algebraic_indices],
-            sp.csr_matrix(null_border) @ selectors[border] - sp.csr_matrix(null_border @ correction) @ selectors[bulk],
+            null @ selectors[border] - null @ correction @ selectors[bulk],
         ],
         format='csr',
     )
