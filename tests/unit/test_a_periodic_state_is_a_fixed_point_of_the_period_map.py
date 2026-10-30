@@ -50,6 +50,8 @@ def test_an_invalid_forcing_period_is_refused_before_marching(period) -> None:
         smooth_phase(period, ())
 
 
+# serial: the closed form is reached only at rtol=1e-8 over full periods; a looser or shorter march cannot land it.
+@pytest.mark.serial
 @pytest.mark.parametrize('integrator', ['bdf1', 'bdf2', 'trapezoid', 'tr_bdf2'])
 def test_the_steady_state_driver_restarts_off_every_edge_and_lands_the_closed_form(integrator) -> None:
     """``u' = -u + s(t)``, ``s`` a 0/1 square wave of period 1 (on for [0, 0.5)): exact periodic orbit."""
