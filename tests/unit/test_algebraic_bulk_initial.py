@@ -3,6 +3,7 @@
 import numpy as np
 import pytest
 
+from numerics_lab.linear import algebraic_bulk_initial as module
 from numerics_lab.linear.algebraic_bulk_initial import algebraic_bulk_initial_pair
 
 
@@ -118,3 +119,36 @@ def test_shared_rank_one_storage_preserves_state_and_marks_only_free_branch_rate
             stored_increment=np.zeros(2),
             tolerance=1e-10,
         )
+
+
+def test_a_free_direction_judges_its_cancellation_residue_against_the_rank_bar(monkeypatch):
+    """A free direction's state entries are a NUMERICAL solve when the support proof reaches them.
+
+    Their exact value is 0 by cancellation; LAPACK on x86 returns -0.0, Accelerate on macOS arm64
+    returned an ulp-level residue and the exact ``!= 0`` called the shared storage a free STATE.
+    """
+    real = module.border_affine_space
+
+    def residue(matrix, rhs, **kwargs):
+        answer, free = real(matrix, rhs, **kwargs)
+        return answer, np.where(free == 0, 1e-17, free)  # dimensionless, well inside 16 n eps
+
+    monkeypatch.setattr(module, 'border_affine_space', residue)
+    jacobian = np.array(
+        [[1, -1, 0.5, 0, 0], [0, 2, 0, 0, 0], [0, 0, 5, 0, 0], [-1, 0, 0, 1, 0], [0.5, 0, 0, 0, 1]], dtype=float
+    )
+    mass = np.zeros((5, 5))
+    mass[1, 3] = mass[2, 4] = 1
+    initial = np.array([0.04, 0.05, 0.02, 0.04, -0.02])
+    pair = algebraic_bulk_initial_pair(
+        jacobian,
+        np.zeros(5),
+        mass,
+        initial,
+        bulk_size=1,
+        partial_time=np.zeros(5),
+        stored_increment=np.zeros(2),
+        tolerance=1e-10,
+    )
+    assert np.array_equal(pair.state, initial)
+    assert pair.rate_is_unique.tolist() == [True, False, False, True, True]

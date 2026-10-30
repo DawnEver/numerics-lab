@@ -140,8 +140,12 @@ def algebraic_bulk_initial_pair(
         rhs,
         mandatory_rows=np.arange(m if fixed_state else len(selected)),
     )
+    # A free direction reached by the support proof is a NUMERICAL solve of dimensionless columns:
+    # its exact-zero entries come back as an ulp of residue on some LAPACKs (Accelerate on macOS
+    # arm64), so they are judged against the rank bar -- the dense sibling's rule in
+    # `initial_constraints.py` -- never against an exact zero.
     rank_bar = np.finfo(float).eps * max(matrix.shape) * 16
-    if np.any(free_scaled[:m] != 0):
+    if np.linalg.norm(free_scaled[:m]) > rank_bar:
         msg = 'actual border initial state requires additional physical authority'
         raise ValueError(msg)
     answer = answer_scaled / column_norms
@@ -158,7 +162,7 @@ def algebraic_bulk_initial_pair(
     )
     rate = np.concatenate((-partial_bulk - sensitivity @ answer[m:], answer[m:]))
     rate_free = free[m:]
-    border_unique = np.all(free_scaled[m:] == 0, axis=1)
+    border_unique = np.linalg.norm(free_scaled[m:], axis=1) <= rank_bar
     bulk_free = sensitivity @ rate_free
     bulk_scale = np.abs(sensitivity) @ np.abs(rate_free)
     bulk_unique = np.all(np.abs(bulk_free) <= rank_bar * bulk_scale, axis=1)
