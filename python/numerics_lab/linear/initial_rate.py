@@ -359,6 +359,8 @@ def sparse_initial_rate(matrix, rhs, *, tolerance=1e-10, residual_allowance=None
     # A field-size square choice that factored but leaves witnesses violated is
     # retried over every row at once; the bar below is unchanged.
     if np.any(abs(defect) > bar) and factor is not None and matrix.shape[1] > 512:
+        # The rejected square LU has no remaining use beside the all-row KKT factor.
+        del factor
         answer[selected] = _least_squares_rate_values(reduced, forcing)
         defect = matrix @ answer - rhs
         bar = tolerance * (abs(matrix) @ abs(answer) + abs(rhs)) + allowance
