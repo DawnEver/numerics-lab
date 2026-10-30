@@ -6,7 +6,7 @@ from scipy.sparse.linalg import splu
 
 from numerics_lab.linear.arithmetic import certified_sparse_product
 from numerics_lab.linear.border_rank import border_affine_space, homogeneous_zero_coordinates
-from numerics_lab.linear.index_two import index_two_frozen_rate
+from numerics_lab.linear.index_two import _column_components, _sparse_block_columns, index_two_frozen_rate
 from numerics_lab.linear.initial_rate import normalize_sparse_rows
 from numerics_lab.linear.refinement import refine_factored_solution
 from numerics_lab.linear.resolution import row_bar, system_resolution
@@ -44,12 +44,7 @@ def joint_coordinate_sparse_correction(
             msg = 'sparse state range requires finite real bounded actual direction columns'
             raise ValueError(msg)
         directions = sp.csr_matrix(state_directions)
-        if (
-            directions.shape[0] != n
-            or directions.shape[1] > 512
-            or directions.dtype.kind not in 'fiu'
-            or not np.isfinite(directions.data).all()
-        ):
+        if directions.shape[0] != n or directions.dtype.kind not in 'fiu' or not np.isfinite(directions.data).all():
             msg = 'sparse state range requires finite real bounded actual direction columns'
             raise ValueError(msg)
         extra = sp.csr_matrix((matrix.shape[0], directions.shape[1]))
@@ -92,8 +87,54 @@ def joint_coordinate_sparse_correction(
         row_scale=row_scale,
         tolerance=tolerance,
     )
-    unique = np.concatenate((np.ones(mass.shape[0], dtype=bool), np.all(rate_directions == 0, axis=1)))
+    unique = np.concatenate((np.ones(mass.shape[0], dtype=bool), _rate_uniqueness(rate_directions)))
     return change[: 2 * n], unique
+
+
+def _rate_uniqueness(directions):
+    if sp.issparse(directions):
+        return np.asarray((directions != 0).getnnz(axis=1)).ravel() == 0
+    return np.all(directions == 0, axis=1)
+
+
+def _component_affine(matrix, forcing, errors, allowance):
+    """Rank only actual Schur/error-support components, never discovery components."""
+    pattern = (matrix != 0).maximum(errors != 0)
+    components = list(_column_components(pattern))
+    answer = np.zeros(matrix.shape[1])
+
+    def blocks():
+        for members, rows in components:
+            if len(members) > 512 or len(rows) * len(members) > 512**2:
+                msg = 'joint correction requires bounded actual Schur component rank work'
+                raise NotImplementedError(msg)
+            if len(rows):
+                value, directions = border_affine_space(
+                    matrix[rows][:, members].toarray(),
+                    forcing[rows],
+                    entry_errors=errors[rows][:, members].toarray(),
+                    inherited_allowance=allowance[rows],
+                )
+                answer[members] = value
+            else:
+                directions = np.eye(len(members))
+            yield members, directions
+
+    directions = _sparse_block_columns(matrix.shape[1], blocks())
+    return answer, directions, components
+
+
+def _component_weighted(matrix, forcing, answer, bars, components):
+    moved = answer.copy()
+    for members, rows in components:
+        if len(rows):
+            moved[members] = _weighted_by_row_bars(
+                matrix[rows][:, members].toarray(),
+                forcing[rows],
+                answer[members],
+                bars[rows],
+            )
+    return moved
 
 
 def _sparse_joint_border(
@@ -175,9 +216,7 @@ def _sparse_joint_border(
     # solve or its weighted refinement. Allowing them to move and resetting
     # them only after reconstruction breaks the neighboring original rows.
     remaining_columns = remaining_columns[unanchored[remaining_columns]]
-    if len(remaining_columns) > 512:
-        msg = 'joint storage elimination requires a bounded actual residual border'
-        raise NotImplementedError(msg)
+    component_mode = len(remaining_columns) > 512
     block = matrix[selected_rows][:, selected_columns].tocsr()
     raw_solve = _triangular_joint_solver(matrix, mass, stored_rows, stored_positions, indices, differential)
 
@@ -215,10 +254,17 @@ def _sparse_joint_border(
         return solve(forcing) if np.any(forcing) else forcing
 
     def response_error(column):
-        residual = column_forcing(column) - block @ response[:, column]
+        value = response[:, column].toarray().ravel() if component_mode else response[:, column]
+        residual = column_forcing(column) - block @ value
         return abs(raw_solve(residual)) if np.any(residual) else residual
 
-    response = np.column_stack([column_response(column) for column in range(len(remaining_columns))])
+    if component_mode:
+        response = sp.hstack(
+            [sp.csr_matrix(column_response(column)[:, None]) for column in range(len(remaining_columns))],
+            format='csr',
+        )
+    else:
+        response = np.column_stack([column_response(column) for column in range(len(remaining_columns))])
     left = matrix[remaining_rows][:, selected_columns]
     direct = matrix[remaining_rows][:, remaining_columns]
     schur = direct - sp.csr_matrix(left @ response)
@@ -233,9 +279,19 @@ def _sparse_joint_border(
     count = np.asarray(sp.csr_matrix(left).getnnz(axis=1)).ravel() + 1.0
     unit = np.finfo(float).eps / 2
     gamma = count * unit / (1 - count * unit)
-    errors = np.column_stack([response_error(column) for column in range(len(remaining_columns))])
+    if component_mode:
+        errors = sp.hstack(
+            [sp.csr_matrix(response_error(column)[:, None]) for column in range(len(remaining_columns))],
+            format='csr',
+        )
+    else:
+        errors = np.column_stack([response_error(column) for column in range(len(remaining_columns))])
     abs_left = abs(sp.csr_matrix(left))
-    schur_errors = gamma[:, None] * np.asarray(abs(direct) + abs_left @ abs(response)) + abs_left @ errors
+    schur_errors = (
+        sp.diags(gamma) @ (abs(direct) + abs_left @ abs(response)) + abs_left @ errors
+        if component_mode
+        else gamma[:, None] * np.asarray(abs(direct) + abs_left @ abs(response)) + abs_left @ errors
+    )
     # An eliminated row's ADMITTED slack (its forcing within its own allowance -- the remainder a
     # converged field seed hands over) does not vanish with the row: elimination carries it into
     # the Schur forcing. So the forcing is formed as two images, driven and slack, and a retained
@@ -279,7 +335,15 @@ def _sparse_joint_border(
     if np.any(abs(forcing[~supported]) > inherited[~supported]):
         msg = 'joint stored state contradicts actual eliminated original rows'
         raise ValueError(msg)
-    if supported.any():
+    components = None
+    if component_mode:
+        answer, directions, components = _component_affine(
+            schur[supported],
+            forcing[supported],
+            schur_errors[supported],
+            inherited[supported],
+        )
+    elif supported.any():
         answer, directions = border_affine_space(
             schur[supported].toarray(),
             forcing[supported],
@@ -303,8 +367,12 @@ def _sparse_joint_border(
         trial[selected_columns] = solve(rhs[selected_rows] - kept - coupling @ answer)
         rows = remaining_rows[supported]
         bars = _row_bars(matrix, rows, trial, rhs, row_scale, tolerance)
-        dense = schur[supported].toarray()
-        answer = _weighted_by_row_bars(dense, forcing[supported], answer, bars)
+        dense = schur[supported] if component_mode else schur[supported].toarray()
+        answer = (
+            _component_weighted(dense, forcing[supported], answer, bars, components)
+            if component_mode
+            else _weighted_by_row_bars(dense, forcing[supported], answer, bars)
+        )
         # A retained row whose Schur row is too weak to share its residual with the other
         # retained rows (case_a admission 338: a body row at 2e-5 of its neighbours, 2.6x its
         # bar) takes it from the ELIMINATED rows, through the elimination's adjoint, each in
@@ -328,18 +396,31 @@ def _sparse_joint_border(
                 break
             shared |= over
             over = np.flatnonzero(shared)
+            if component_mode and len(over) * block.shape[0] > 512**2:
+                msg = 'joint correction requires bounded actual adjoint-sharing work'
+                raise NotImplementedError(msg)
             shift = _eliminated_share(block, left[np.flatnonzero(supported)[over]], selected_bars, defect[over])
             if shift is None:
                 break
             kept = kept + shift
             forcing = forcing + left @ solve(shift)
-            answer = _weighted_by_row_bars(dense, forcing[supported], answer, bars)
+            answer = (
+                _component_weighted(dense, forcing[supported], answer, bars, components)
+                if component_mode
+                else _weighted_by_row_bars(dense, forcing[supported], answer, bars)
+            )
     correction = np.zeros(matrix.shape[1])
     correction[remaining_columns] = answer
     correction[selected_columns] = solve(rhs[selected_rows] - kept - coupling @ answer)
-    full_directions = np.zeros((matrix.shape[1], directions.shape[1]))
-    full_directions[remaining_columns] = directions
-    full_directions[selected_columns] = -response @ directions
+    if component_mode:
+        selectors = sp.eye(matrix.shape[1], format='csr')
+        full_directions = selectors[:, remaining_columns] @ directions - selectors[:, selected_columns] @ (
+            response @ directions
+        )
+    else:
+        full_directions = np.zeros((matrix.shape[1], directions.shape[1]))
+        full_directions[remaining_columns] = directions
+        full_directions[selected_columns] = -response @ directions
     if state_directions is not None:
         # D describes homogeneous state freedom around an admitted numerical
         # particular. Replacing the ORIGINAL physical solve by D*alpha erases
@@ -350,17 +431,37 @@ def _sparse_joint_border(
         correction[:n][absent] = 0.0
         # Homogeneous directions remain a separate explicitly supplied chart;
         # do not infer state uniqueness from the particular's smallness.
-        full_directions[:n] = state_directions @ full_directions[2 * n :]
+        if component_mode:
+            full_directions = sp.vstack(
+                (state_directions @ full_directions[2 * n :], full_directions[n:]), format='csr'
+            )
+        else:
+            full_directions[:n] = state_directions @ full_directions[2 * n :]
     # Reconstruct coordinates proved zero by original Q/constraint rows, not
     # cancellation of driven sparse responses. The same exact lift applies to
     # every homogeneous direction; all original equations remain validators.
     correction[~unanchored] = 0
-    full_directions[~unanchored] = 0
-    if np.any(full_directions[:n] != 0):
+    if component_mode:
+        full_directions = (sp.diags(unanchored.astype(float)) @ full_directions).tocsr()
+        full_directions.eliminate_zeros()
+        unresolved = full_directions[:n].nnz != 0
+    else:
+        full_directions[~unanchored] = 0
+        unresolved = np.any(full_directions[:n] != 0)
+    if unresolved:
         msg = 'joint stored-coordinate equations require additional physical state authority'
         raise ValueError(msg)
     if state_directions is not None or not supported.any():
         validate_original(correction)
+    if component_mode and state_directions is not None:
+        chart = np.arange(original_rows, matrix.shape[0])
+        scale = np.zeros_like(rhs) if row_scale is None else row_scale
+        if np.any(
+            abs(np.asarray(matrix[chart] @ correction).ravel() - rhs[chart])
+            > allowance[chart] + _row_bars(matrix, chart, correction, rhs, scale, tolerance)
+        ):
+            msg = 'joint correction contradicts original augmented state chart rows'
+            raise ValueError(msg)
     # What each original row may keep: its own certified bound, and on a retained row
     # also what elimination carried into it (slack image plus driven rounding image).
     admitted = allowance.copy()
@@ -466,11 +567,16 @@ def _cancelled_pivot_rows(direct, schur, schur_errors):
     so a row is "cancelled" exactly when that eliminator would refuse to pivot on the entry.
     """
     entries = sp.csr_matrix(direct).tocoo()
-    dense = schur.toarray() if sp.issparse(schur) else np.asarray(schur)
-    errors = np.asarray(schur_errors, dtype=float)
-    bound = 16 * max(dense.shape)
-    lost = abs(dense[entries.row, entries.col]) <= bound * errors[entries.row, entries.col]
-    rows = np.zeros(dense.shape[0], dtype=bool)
+    bound = 16 * max(schur.shape)
+    if sp.issparse(schur_errors):
+        values = np.asarray(schur[entries.row, entries.col]).ravel()
+        errors = np.asarray(schur_errors[entries.row, entries.col]).ravel()
+    else:
+        dense = schur.toarray() if sp.issparse(schur) else np.asarray(schur)
+        values = dense[entries.row, entries.col]
+        errors = np.asarray(schur_errors, dtype=float)[entries.row, entries.col]
+    lost = abs(values) <= bound * errors
+    rows = np.zeros(schur.shape[0], dtype=bool)
     rows[entries.row[lost]] = True
     return rows
 
@@ -884,7 +990,7 @@ def _validate_joint_correction(
         return bool(np.all(np.isfinite(defect)) and np.all(abs(defect) <= bar + bound))
 
     unique = np.ones(n, dtype=bool)
-    unique[np.any(rate_directions != 0, axis=1)] = False
+    unique[~_rate_uniqueness(rate_directions)] = False
     # A joint correction that already meets EVERY original row at the bare bar needs no rate
     # repair: re-solving its rates re-makes the dependent body rows' rounding image (case_a
     # admission 338: the border met body 5 exactly, the re-solve put it at 2.1x its bar).
@@ -919,5 +1025,5 @@ def _validate_joint_correction(
         msg = 'joint stored state contradicts actual state/rate equations'
         raise ValueError(msg)
     unique = np.ones(n, dtype=bool)
-    unique[np.any(rate_directions != 0, axis=1)] = False
+    unique[~_rate_uniqueness(rate_directions)] = False
     return correction, unique & rate_unique

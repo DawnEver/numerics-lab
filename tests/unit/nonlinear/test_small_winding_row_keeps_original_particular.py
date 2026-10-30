@@ -4,13 +4,14 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from numerics_lab.linear.storage_border import storage_border_columns, storage_border_rows
+from numerics_lab.linear.storage_border import StorageRows, storage_border_columns, storage_border_rows
 from numerics_lab.nonlinear.finite_storage import finite_storage_actual_rate_initial_pair
 
 
 @pytest.mark.parametrize('stiffness', [1e8, 1e10])
 @pytest.mark.parametrize('voltage', [0.075, 12.0])
-def test_tiny_unforced_winding_rows_keep_the_original_q_f_particular(stiffness, voltage):
+@pytest.mark.parametrize('copies', [1, 65])
+def test_tiny_unforced_winding_rows_keep_the_original_q_f_particular(stiffness, voltage, copies):
     # Field, three node voltages, three source currents, three winding currents,
     # and three physical linkages. Sources 1/2 are genuinely zero; no artificial
     # resistance or source derivative is added to their winding rows.
@@ -34,6 +35,18 @@ def test_tiny_unforced_winding_rows_keep_the_original_q_f_particular(stiffness, 
     initial[1], initial[4], initial[7] = voltage, -voltage / 3, voltage / 3
     initial[linkage] = turns * initial[0]
     border = np.arange(n)
+    if copies > 1:
+        # Exact block diagonal replication of the SAME physical rows and their real issued owners.
+        owner = storage_border_rows(mass, bulk_indices=np.empty(0, dtype=int), border_rows=border)
+        selected = storage_border_columns(mass, bulk_indices=np.empty(0, dtype=int), stored_rows=owner.stored_rows)
+        stored_rows = np.concatenate([owner.stored_rows + n * i for i in range(copies)])
+        selected = np.concatenate([selected + n * i for i in range(copies)])
+        issued = StorageRows(stored_rows, sp.block_diag([owner.algebraic_rows] * copies, format='csr'))
+        sparse_indices = np.arange(copies) * n
+        operator = sp.block_diag([operator] * copies, format='csr')
+        mass = sp.block_diag([mass] * copies, format='csr')
+        source, partial, initial = (np.tile(value, copies) for value in (source, partial, initial))
+        n *= copies
 
     def residual(state, rate):
         return operator @ state + mass @ rate - source
@@ -45,15 +58,17 @@ def test_tiny_unforced_winding_rows_keep_the_original_q_f_particular(stiffness, 
         mass_at=lambda _state, _rate: mass,
         storage_at=lambda state: mass @ state,
         partial_time_at=lambda _state, _rate: partial,
-        storage_rows_at=lambda _state, _rate: storage_border_rows(
-            mass, bulk_indices=np.empty(0, dtype=int), border_rows=border
+        storage_rows_at=lambda _state, _rate: (
+            issued if copies > 1 else storage_border_rows(mass, bulk_indices=np.empty(0, dtype=int), border_rows=border)
         ),
-        stored_columns_at=lambda _state, _rate, rows: storage_border_columns(
-            mass, bulk_indices=np.empty(0, dtype=int), stored_rows=rows.stored_rows
+        stored_columns_at=lambda _state, _rate, rows: (
+            selected
+            if copies > 1
+            else storage_border_columns(mass, bulk_indices=np.empty(0, dtype=int), stored_rows=rows.stored_rows)
         ),
         rate_constraint_jacobian_at=lambda _state, _rate: operator,
         rate_constraint_state_columns_at=lambda _state, _rate, directions: sp.csr_matrix((n, directions.shape[1])),
-        sparse_state_indices=np.array([0]),
+        sparse_state_indices=sparse_indices if copies > 1 else np.array([0]),
     )
     np.testing.assert_array_equal(mass @ pair.state, mass @ initial)
     scale = abs(operator) @ abs(pair.state) + abs(mass) @ abs(pair.rate) + abs(residual(pair.state, np.zeros(n)))

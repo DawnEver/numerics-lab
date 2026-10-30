@@ -906,11 +906,11 @@ def _actual_finite_storage_state(
             free = np.arange(len(state))
         if sparse_state_indices is not None:
             boundary = np.flatnonzero(~np.isin(free, sparse_state_indices))
-            if 0 < len(boundary) <= 512:
+            if len(boundary):
                 # The boundary's freedom is the CERTIFIED null space: a solid body's voltage column
                 # cancels to rounding residue against the left-null rows, and two bodies sharing a
                 # field node cancel only as a pair, so an exact rational dependency misses both.
-                null = certified_null_directions(left, right[:, boundary])
+                null = certified_null_directions(left, right[:, boundary], sparse_output=len(boundary) > 512)
                 if null.shape[1]:
                     msg = 'original boundary state equations require actual differentiated rate authority'
                     charge_scale = abs(charge) + abs(target) + abs(mass) @ abs(state)
