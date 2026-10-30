@@ -33,9 +33,13 @@ def test_original_hidden_row_replay_keeps_its_independent_assembly_allowance(cer
 
 
 def test_original_rate_replay_uses_the_same_performed_direct_value_as_its_arithmetic_owner():
+    # Every product is exact, so a fused multiply-add (macOS arm64 contracts scipy's matvec) cannot move
+    # either value: each row is 3c - 3c = 0 exactly, while the column sums round against the 2**52 lead.
     size = 128
+    scale = np.full(size, 0.75)
+    scale[0] = 2.0**52
     jacobian = sp.csr_matrix(
-        (np.tile([3 * 0.1, -0.1], size), (np.repeat(np.arange(size), 2), np.tile([0, 1], size))),
+        (np.column_stack([3 * scale, -scale]).ravel(), (np.repeat(np.arange(size), 2), np.tile([0, 1], size))),
         shape=(size, size),
     )
     rate = np.zeros(size)
