@@ -4,7 +4,7 @@ import numpy as np
 from scipy.linalg import null_space
 from scipy.sparse import csr_matrix
 
-from numerics_lab.linear.border_rank import border_affine_space
+from numerics_lab.linear.border_rank import border_affine_space, rank_bar
 from numerics_lab.linear.initial_constraints import initial_subspaces, linear_dae_initial_state
 from numerics_lab.nonlinear import AssembledState, NewtonStrategy
 
@@ -56,8 +56,8 @@ def nonlinear_dae_initial_state(
     indices = np.asarray(preferred_indices, dtype=int)
     if allow_preferred_changes:
         free = null_space(matrix)
-        rank_bar = np.finfo(float).eps * max(matrix.shape) * 16
-        indices = indices[np.linalg.norm(free[indices], axis=1) > rank_bar]
+        bar = rank_bar(matrix.shape)
+        indices = indices[np.linalg.norm(free[indices], axis=1) > bar]
     anchored = indices
     anchors = np.eye(initial.size)[anchored]
     system = _InitialConstraints(
@@ -88,7 +88,7 @@ def nonlinear_dae_initial_state(
     if (
         np.any(free[indices] != 0)
         if affine_constraints is not None
-        else np.any(np.linalg.norm(free[indices], axis=1) > np.finfo(float).eps * max(state.system_matrix.shape) * 16)
+        else np.any(np.linalg.norm(free[indices], axis=1) > rank_bar(state.system_matrix.shape))
     ):
         msg = 'nonlinear initial preferred states require additional physical initial authority'
         raise ValueError(msg)

@@ -4,6 +4,7 @@ import numpy as np
 from scipy.linalg import null_space
 from scipy.sparse import csr_matrix
 
+from numerics_lab.linear.border_rank import rank_bar
 from numerics_lab.linear.initial_sparse import SparseInitialPair
 
 __all__ = ['complete_dae_initial_rate', 'initial_subspaces', 'linear_dae_initial_pair', 'linear_dae_initial_state']
@@ -104,14 +105,14 @@ def linear_dae_initial_state(
         free = null_space(matrix)
         # The rank decision is floating-point algebra, not an electrical-current
         # threshold. A row with any free direction cannot choose its own value.
-        rank_bar = np.finfo(float).eps * max(matrix.shape) * 16
-        free_preferred = indices[np.linalg.norm(free[indices], axis=1) > rank_bar]
+        free_bar = rank_bar(matrix.shape)
+        free_preferred = indices[np.linalg.norm(free[indices], axis=1) > free_bar]
         state, consistent, matrix_with_anchors = project(free_preferred)
         if not consistent:
             msg = 'initial preferred states need explicit values; algebraic constraints do not determine their split'
             raise ValueError(msg)
     remaining = null_space(matrix_with_anchors)
-    if np.any(np.linalg.norm(remaining[indices], axis=1) > np.finfo(float).eps * max(matrix_with_anchors.shape) * 16):
+    if np.any(np.linalg.norm(remaining[indices], axis=1) > rank_bar(matrix_with_anchors.shape)):
         msg = 'initial preferred DAE states are not uniquely determined after preserving declared states'
         raise ValueError(msg)
     return state
@@ -158,12 +159,12 @@ def linear_dae_initial_pair(jacobian, residual, mass, initial, *, partial_time, 
         msg = 'stored initial state contradicts the actual state/rate DAE constraints'
         raise ValueError(msg)
     free = null_space(matrix)
-    rank_bar = np.finfo(float).eps * max(matrix.shape) * 16
+    free_bar = rank_bar(matrix.shape)
     normalized_mass = mass / mass_scale[:, None]
-    if np.linalg.norm(free[:n]) > rank_bar or np.linalg.norm(normalized_mass @ free[n:]) > rank_bar:
+    if np.linalg.norm(free[:n]) > free_bar or np.linalg.norm(normalized_mass @ free[n:]) > free_bar:
         msg = 'initial state or stored-state rate requires additional physical initial authority'
         raise ValueError(msg)
-    unique_rate = np.linalg.norm(free[n:], axis=1) <= rank_bar
+    unique_rate = np.linalg.norm(free[n:], axis=1) <= free_bar
     return SparseInitialPair(initial + pair[:n], pair[n:], unique_rate)
 
 
@@ -213,7 +214,7 @@ def complete_dae_initial_rate(
         msg = 'declared source/device curvature contradicts actual differentiated DAE constraints'
         raise ValueError(msg)
     free = null_space(matrix)
-    unique = np.linalg.norm(free, axis=1) <= np.finfo(float).eps * max(matrix.shape) * 16
+    unique = np.linalg.norm(free, axis=1) <= rank_bar(matrix.shape)
     if np.any(pair.rate_is_unique & ~unique):
         msg = 'higher differentiated constraints lost previously proven rate authority'
         raise ValueError(msg)

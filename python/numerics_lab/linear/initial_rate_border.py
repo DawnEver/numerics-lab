@@ -5,7 +5,7 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import splu
 
 from numerics_lab.formulation import ResidualAssemblyBound
-from numerics_lab.linear.border_rank import border_affine_space
+from numerics_lab.linear.border_rank import border_affine_space, rank_bar
 
 __all__ = ['complete_rate_border']
 
@@ -137,5 +137,7 @@ def complete_rate_border(
         msg = 'declared curvature contradicts actual stored-acceleration and differentiated equations'
         raise ValueError(msg)
     unique = np.asarray(rate_is_unique).copy()
-    unique[unknown] = np.all(free_scaled[: len(unknown)] == 0, axis=1)
+    # The free directions are a NUMERICAL border solve of dimensionless columns: an exact zero comes back
+    # as an ulp of residue on some LAPACKs, so it is judged against the rank bar, never an exact zero.
+    unique[unknown] = np.linalg.norm(free_scaled[: len(unknown)], axis=1) <= rank_bar(reduced.shape)
     return correction, unique

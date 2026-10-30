@@ -10,7 +10,18 @@ from scipy.sparse.csgraph import maximum_bipartite_matching
 
 from numerics_lab.linear.arithmetic import rounded_defect
 
-__all__ = ['border_affine_space', 'homogeneous_zero_coordinates']
+__all__ = ['border_affine_space', 'homogeneous_zero_coordinates', 'rank_bar']
+
+
+def rank_bar(shape) -> float:
+    """``16 max(shape) eps``: the size below which a DIMENSIONLESS (unit-column or orthonormal) free-direction
+    entry is rounding, not a direction -- the eliminator's own ``16 max(shape)`` reliability factor in eps.
+
+    THE ONE SPELLING of every rank verdict read off a numerical null space or border solve: an exact zero
+    there comes back as ``-0.0`` from one LAPACK and an ulp of residue from another (Accelerate on macOS
+    arm64), so an ``== 0`` test is a platform verdict and this bar is the arithmetic one.
+    """
+    return float(np.finfo(float).eps) * 16 * max(shape)
 
 
 #: Primes below 2**31: a product of two residues stays inside int64.

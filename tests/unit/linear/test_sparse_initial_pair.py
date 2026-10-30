@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from numerics_lab.linear import initial_rate
+from numerics_lab.linear import initial_rate, initial_rate_border
 from numerics_lab.linear.initial_rate import (
     _independent_exact_columns,
     _independent_exact_rows,
@@ -132,6 +132,43 @@ def test_identical_current_rate_columns_do_not_make_the_physical_state_free(stor
     assert proven.rate_is_unique.all()
     assert proven.rate == pytest.approx([0, -2, 2, 0])
     assert np.array_equal(proven.state, pair.state)
+
+
+def test_a_completed_rate_judges_its_free_residue_against_the_rank_bar(monkeypatch):
+    """The completed border's free directions are a NUMERICAL solve: on Accelerate an exact zero comes back as
+    an ulp of residue, and the exact ``== 0`` called a proven rate free. Planted: 1e-17 on every exact zero.
+    """
+    real = initial_rate_border.border_affine_space
+
+    def residue(matrix, rhs, **kwargs):
+        answer, free = real(matrix, rhs, **kwargs)
+        return answer, np.where(free == 0, 1e-17, free)  # dimensionless, well inside 16 n eps
+
+    monkeypatch.setattr(initial_rate_border, 'border_affine_space', residue)
+    jacobian = [[0, 0, -1, 0], [0, 1, 1, 0], [0, 0, 2, 0], [-1, 0, 0, 1]]
+    mass = [[1, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 1], [0, 0, 0, 0]]
+    algebraic = [[0, 1, 0, 0], [0, 0, 0, 1]]
+    pair = sparse_initial_pair(
+        jacobian,
+        [0, 0, 0, 0],
+        mass,
+        [1.0, 0, 0, 1.0],
+        algebraic_rows=algebraic,
+        stored_rows=[0, 2],
+        partial_time=[0, 0, -6, 0],
+    )
+    proven = sparse_complete_initial_rate(
+        jacobian,
+        [0, 0, 0, 0],
+        mass,
+        pair,
+        algebraic_rows=algebraic,
+        partial_time=[0, 0, -6, 0],
+        acceleration_remainder=np.zeros(4),
+        stored_rows=[0, 2],
+        stored_columns=[0, 3],
+    )
+    assert proven.rate_is_unique.all()
 
 
 def test_an_ideal_source_current_rate_is_not_a_physical_zero_derivative():

@@ -6,7 +6,7 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import splu
 
-from numerics_lab.linear.border_rank import border_affine_space
+from numerics_lab.linear.border_rank import border_affine_space, rank_bar
 from numerics_lab.linear.initial_sparse import SparseInitialPair
 from numerics_lab.linear.storage_border import storage_border_rows
 
@@ -144,8 +144,8 @@ def algebraic_bulk_initial_pair(
     # its exact-zero entries come back as an ulp of residue on some LAPACKs (Accelerate on macOS
     # arm64), so they are judged against the rank bar -- the dense sibling's rule in
     # `initial_constraints.py` -- never against an exact zero.
-    rank_bar = np.finfo(float).eps * max(matrix.shape) * 16
-    if np.linalg.norm(free_scaled[:m]) > rank_bar:
+    bar = rank_bar(matrix.shape)
+    if np.linalg.norm(free_scaled[:m]) > bar:
         msg = 'actual border initial state requires additional physical authority'
         raise ValueError(msg)
     answer = answer_scaled / column_norms
@@ -162,8 +162,8 @@ def algebraic_bulk_initial_pair(
     )
     rate = np.concatenate((-partial_bulk - sensitivity @ answer[m:], answer[m:]))
     rate_free = free[m:]
-    border_unique = np.linalg.norm(free_scaled[m:], axis=1) <= rank_bar
+    border_unique = np.linalg.norm(free_scaled[m:], axis=1) <= bar
     bulk_free = sensitivity @ rate_free
     bulk_scale = np.abs(sensitivity) @ np.abs(rate_free)
-    bulk_unique = np.all(np.abs(bulk_free) <= rank_bar * bulk_scale, axis=1)
+    bulk_unique = np.all(np.abs(bulk_free) <= bar * bulk_scale, axis=1)
     return SparseInitialPair(state, rate, np.concatenate((bulk_unique, border_unique)))
