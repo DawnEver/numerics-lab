@@ -23,6 +23,9 @@ from numerics_lab.time_integrators.checkpoint import (
 
 _KEY = 'adaptive-resume'
 _TOL = StepTolerance(rtol=1e-6, atol=1e-9)
+#: The window: long enough that the controller moves the step and step 40 is mid-march for every
+#: integrator, and no longer -- the claim is bit-for-bit resume, not reach; BDF1 at [0, 6] took 22 s.
+_T1 = 2.0
 
 
 class _Duffing:
@@ -45,7 +48,7 @@ class _Killed(RuntimeError):
 def _march(t0, integrator, *, tol=_TOL, **checkpoint):
     return integrate_transient(
         _Duffing(),
-        TimeWindow(t0=t0, t1=6.0, dt=0.2, integrator=integrator),
+        TimeWindow(t0=t0, t1=_T1, dt=0.2, integrator=integrator),
         np.array([0.5, 0.0]),
         max_newton=30,
         tol=1e-12,
