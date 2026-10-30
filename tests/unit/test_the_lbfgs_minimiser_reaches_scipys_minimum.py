@@ -15,8 +15,13 @@ def _rosen(x):
 
 
 def _quadratic(x):
-    a = np.diag(np.arange(1.0, x.size + 1))
-    return float(0.5 * x @ a @ x - x.sum()), a @ x - 1
+    # Written about its minimiser so f* = 0 exactly. The expanded form 0.5 x.A.x - sum(x) has
+    # f* = -1.225, whose ulp (2.2e-16) swamps the decrease 0.5 g.A^-1.g a step can still make once
+    # |g| < sqrt(eps |f*| max(A)) ~ 4e-8: below that no value comparison can certify a step, so an
+    # atol of 1e-10 was reached only by a lucky rounding (x86) and failed on macOS arm64.
+    k = np.arange(1.0, x.size + 1)
+    error = x - 1 / k
+    return float(0.5 * error @ (k * error)), k * error
 
 
 @pytest.mark.parametrize(
