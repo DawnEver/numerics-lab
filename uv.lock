@@ -190,8 +190,8 @@ wheels = [
 
 [[package]]
 name = "dev-lab"
-version = "0.0.1.dev1850+gd8d11f62c"
-source = { git = "https://github.com/DawnEver/dev-lab.git#d8d11f62ce6e7417cd386e0da0c31941517a9e6c" }
+version = "0.0.1.dev1852+g7730c0956"
+source = { git = "https://github.com/DawnEver/dev-lab.git#7730c095639689467fde28149fe0134e7fd72784" }
 dependencies = [
     { name = "commitizen" },
     { name = "lab-commons", extra = ["io", "paths", "structured", "units"] },
@@ -262,8 +262,8 @@ wheels = [
 
 [[package]]
 name = "lab-commons"
-version = "0.3.1.dev1230+gc2bec0bdc"
-source = { git = "https://github.com/DawnEver/lab-commons.git#c2bec0bdc1409ff63e8e45b773e809f8b0dbd271" }
+version = "0.3.1.dev1236+g352519a01"
+source = { git = "https://github.com/DawnEver/lab-commons.git#352519a01ef4e41beed171f8f9288d316092d567" }
 
 [package.optional-dependencies]
 io = [
