@@ -4,39 +4,55 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
+from numerics_lab.linear.border_rank import MAX_AFFINE_COLUMNS
 from numerics_lab.linear.index_two import certified_null_directions
 from numerics_lab.linear.storage_border import StorageRows
 from numerics_lab.nonlinear.finite_storage import finite_storage_actual_rate_initial_pair
 
+# A DISCOVERY-sized dense bound (512) for the global-basis tests, and the engine's declared affine
+# work capacity (`MAX_AFFINE_COLUMNS`, the single source) for dense work on ONE Schur component. The
+# global joint system of the 513-chain (2 x 1026 state/rate columns plus its range) is wider than
+# the capacity, so dense work on it is refused under either bound.
+DISCOVERY = 512
 
-@pytest.fixture
-def bounded_dense(monkeypatch):
+
+def _guard_dense(monkeypatch, bound):
     for cls in (sp.csr_matrix, sp.csc_matrix):
         original = cls.toarray
 
         def guarded(matrix, *args, _original=original, **kwargs):
-            assert min(matrix.shape) <= 512, 'global wide dense conversion'
+            assert min(matrix.shape) <= bound, 'global wide dense conversion'
             return _original(matrix, *args, **kwargs)
 
         monkeypatch.setattr(cls, 'toarray', guarded)
     original_eye, original_zeros = np.eye, np.zeros
 
     def eye(n, m=None, *args, **kwargs):
-        assert min(n, n if m is None else m) <= 512, 'global dense null identity'
+        assert min(n, n if m is None else m) <= bound, 'global dense null identity'
         return original_eye(n, m, *args, **kwargs)
 
     def zeros(shape, *args, **kwargs):
         if isinstance(shape, tuple) and len(shape) == 2:
-            assert min(shape) <= 512, 'global dense state/range allocation'
+            assert min(shape) <= bound, 'global dense state/range allocation'
         return original_zeros(shape, *args, **kwargs)
 
     monkeypatch.setattr(np, 'eye', eye)
     monkeypatch.setattr(np, 'zeros', zeros)
 
 
+@pytest.fixture
+def bounded_dense(monkeypatch):
+    _guard_dense(monkeypatch, DISCOVERY)
+
+
+@pytest.fixture
+def component_dense(monkeypatch):
+    _guard_dense(monkeypatch, MAX_AFFINE_COLUMNS)
+
+
 @pytest.mark.parametrize('count', [3, 513])
 @pytest.mark.parametrize('mixed', ['none', 'pair', 'chain'])
-@pytest.mark.usefixtures('bounded_dense')
+@pytest.mark.usefixtures('component_dense')
 def test_complete_index_two_pair_with_actual_cross_component_mixed_columns(count, mixed):
     # At t=0: F=[z+xdot, x-s(t)+t*K*z], Q=[x,0]. The actual mixed G columns are K.
     identity = sp.eye(count, format='csr')
@@ -77,11 +93,9 @@ def test_complete_index_two_pair_with_actual_cross_component_mixed_columns(count
             sparse_state_indices=stored,
         )
 
-    if count > 512 and mixed == 'chain':
-        # Discovery components are singletons, but the TRUE mixed joint system is irreducible.
-        with pytest.raises(NotImplementedError, match='Schur component'):
-            solve()
-        return
+    # Discovery components are singletons, but the TRUE mixed joint system is irreducible: the
+    # 513-chain is ONE Schur component (1026 columns), within the declared affine work capacity, so it is solved
+    # component-locally -- the guard still refuses any dense work on the global system.
     pair = solve()
     expected_rate = source_rate.copy()
     if mixed != 'none':
