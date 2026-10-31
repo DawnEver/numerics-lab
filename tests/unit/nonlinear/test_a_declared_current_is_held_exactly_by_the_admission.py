@@ -11,7 +11,11 @@ import pytest
 import scipy.sparse as sp
 
 from numerics_lab.linear.storage_border import storage_border_columns, storage_border_rows
-from numerics_lab.nonlinear.finite_storage import finite_storage_actual_rate_initial_pair
+from numerics_lab.nonlinear.finite_storage import (
+    _declared_free,
+    _declared_held,
+    finite_storage_actual_rate_initial_pair,
+)
 
 TURNS = np.array([1.0, -2.0, 0.5])
 RESISTANCE = np.full(3, 1.1)
@@ -84,8 +88,6 @@ def test_a_rounding_off_declaration_is_held_where_the_free_admission_moves_it():
 
 
 def test_a_stage_that_moves_a_declared_coordinate_is_named():
-    from numerics_lab.nonlinear.finite_storage import _declared_free, _declared_held
-
     np.testing.assert_array_equal(_declared_free(np.arange(5), CURRENTS), [0, 4])
     with pytest.raises(NotImplementedError, match='moved by the frozen index-two rate solve'):
         _declared_held(np.array([0.0, 1e-300]), np.zeros(2), np.array([1]), 'the frozen index-two rate solve')
