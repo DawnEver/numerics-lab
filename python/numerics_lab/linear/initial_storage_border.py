@@ -33,8 +33,13 @@ def joint_coordinate_sparse_correction(
     state_direction_columns=None,
     row_scale=None,
     tolerance=1e-10,
+    fixed_state=None,
 ):
     """Solve supplied joint columns through the actual sparse bulk/small border.
+
+    ``fixed_state`` names DECLARED state coordinates (a stated initial condition such as a
+    winding's rest current): their state columns are exact anchors, changed by exactly zero,
+    and every original row is still checked against its bar.
 
     ``row_scale`` is each original row's state operand scale; with it a dependent border row set
     is weighted by the rows' own bars (see ``_weighted_by_row_bars``).
@@ -91,6 +96,7 @@ def joint_coordinate_sparse_correction(
         state_directions=None if state_directions is None else directions,
         row_scale=row_scale,
         tolerance=tolerance,
+        fixed_state=fixed_state,
     )
     unique = np.concatenate((np.ones(mass.shape[0], dtype=bool), _rate_uniqueness(rate_directions)))
     return change[: 2 * n], unique
@@ -175,6 +181,7 @@ def _sparse_joint_border(
     state_directions=None,
     row_scale=None,
     tolerance=1e-10,
+    fixed_state=None,
 ):
     """Eliminate an explicitly selected sparse state/rate block, not a dense field."""
     n = mass.shape[0]
@@ -197,6 +204,21 @@ def _sparse_joint_border(
     # Original Q/physical rows still prove their exact zeros independently.
     original_rows = matrix.shape[0] - n if state_directions is not None else matrix.shape[0]
     unanchored, _ = homogeneous_zero_coordinates(matrix[:original_rows], rhs[:original_rows])
+    if fixed_state is not None:
+        # A DECLARED state coordinate is a stated initial condition, not an unknown: it joins the
+        # exact anchors, so its change is exactly zero by construction and the rows it supports are
+        # judged below like every other anchored row.
+        fixed = np.asarray(fixed_state)
+        if (
+            fixed.ndim != 1
+            or fixed.dtype.kind not in 'iu'
+            or len(np.unique(fixed)) != len(fixed)
+            or np.any(fixed < 0)
+            or np.any(fixed >= n)
+        ):
+            msg = 'declared fixed state coordinates must be distinct actual state columns'
+            raise ValueError(msg)
+        unanchored[fixed] = False
     original_support = np.asarray(matrix.getnnz(axis=1)).ravel() != 0
     retained_support = np.asarray(matrix[:, unanchored].getnnz(axis=1)).ravel() != 0
     if np.any(original_support & ~retained_support & (abs(rhs) > allowance)):

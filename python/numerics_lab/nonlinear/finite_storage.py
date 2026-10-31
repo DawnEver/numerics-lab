@@ -264,7 +264,37 @@ def finite_storage_initial_pair(
     raise ValueError(msg)
 
 
-def finite_storage_actual_rate_initial_pair(
+def finite_storage_actual_rate_initial_pair(initial, *, fixed_state_indices=None, **options):
+    """Admit the actual finite-storage initial pair; DECLARED state coordinates stay exactly put.
+
+    ``fixed_state_indices`` names stated initial conditions (a winding's declared REST current):
+    the joint correction holds them as exact anchors and judges every original row, theirs
+    included. A stage without that anchor that would move one is refused by name, never rounded.
+    """
+    if fixed_state_indices is None:
+        return _actual_rate_initial_pair(initial, **options)
+    fixed = np.asarray(fixed_state_indices)
+    declared = np.asarray(initial, dtype=float)
+    if (
+        fixed.ndim != 1
+        or fixed.dtype.kind not in 'iu'
+        or len(np.unique(fixed)) != len(fixed)
+        or np.any(fixed < 0)
+        or np.any(fixed >= declared.size)
+    ):
+        msg = 'declared fixed state coordinates must be distinct actual state indices'
+        raise ValueError(msg)
+    if options.get('joint_coordinates_at') is not None:
+        msg = 'declared fixed state coordinates have no exact anchor on the joint-chart admission'
+        raise NotImplementedError(msg)
+    pair = _actual_rate_initial_pair(initial, fixed_state=fixed, **options)
+    if np.asarray(pair.state)[fixed].tobytes() != declared[fixed].tobytes():
+        msg = 'declared fixed state coordinates were moved by an admission stage that has no exact anchor'
+        raise NotImplementedError(msg)
+    return pair
+
+
+def _actual_rate_initial_pair(
     initial,
     *,
     residual_at,
@@ -287,6 +317,7 @@ def finite_storage_actual_rate_initial_pair(
     sparse_state_indices=None,
     max_newton=30,
     tolerance=ADMISSION_BAR,
+    fixed_state=None,
 ):
     """Admit actual finite Q and full differentiated equations at the actual rate.
 
@@ -575,6 +606,7 @@ def finite_storage_actual_rate_initial_pair(
                         algebraic_rows=storage.algebraic_rows,
                         stored_rows=storage.stored_rows,
                         indices=sparse_state_indices,
+                        fixed_state=fixed_state,
                         state_directions=directions,
                         state_direction_columns=sp.vstack(
                             (sp.csr_matrix((len(state) + len(storage.stored_rows), directions.shape[1])), mixed_hidden),
