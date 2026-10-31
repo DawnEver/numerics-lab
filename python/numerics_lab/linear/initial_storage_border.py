@@ -5,7 +5,12 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import splu
 
 from numerics_lab.linear.arithmetic import certified_sparse_product
-from numerics_lab.linear.border_rank import border_affine_space, homogeneous_zero_coordinates
+from numerics_lab.linear.border_rank import (
+    MAX_AFFINE_COLUMNS,
+    MAX_AFFINE_ENTRIES,
+    border_affine_space,
+    homogeneous_zero_coordinates,
+)
 from numerics_lab.linear.index_two import _column_components, _sparse_block_columns, index_two_frozen_rate
 from numerics_lab.linear.initial_rate import normalize_sparse_rows
 from numerics_lab.linear.refinement import refine_factored_solution
@@ -105,7 +110,7 @@ def _component_affine(matrix, forcing, errors, allowance):
 
     def blocks():
         for members, rows in components:
-            if len(members) > 512 or len(rows) * len(members) > 512**2:
+            if len(members) > MAX_AFFINE_COLUMNS or len(rows) * len(members) > MAX_AFFINE_ENTRIES:
                 msg = 'joint correction requires bounded actual Schur component rank work'
                 raise NotImplementedError(msg)
             if len(rows):
