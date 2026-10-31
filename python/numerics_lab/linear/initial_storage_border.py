@@ -137,14 +137,18 @@ def _component_weighted(matrix, forcing, answer, bars, components):
     return moved
 
 
-def _sparse_joint_columns(columns, compute):
+def _sparse_joint_columns(columns, compute, *, row_count=None):
     """Keep thin response columns in CSC until their final CSR assembly."""
     if columns.format != 'csc':
         msg = 'joint column support requires CSC storage'
         raise ValueError(msg)
+    height = columns.shape[0] if row_count is None else row_count
+    if type(height) is not int or height < 0:
+        msg = 'joint image height requires a nonnegative integer'
+        raise ValueError(msg)
     if columns.shape[1] == 0:
-        return sp.csr_matrix(columns.shape)
-    empty = sp.csc_matrix((columns.shape[0], 1))
+        return sp.csr_matrix((height, 0))
+    empty = sp.csc_matrix((height, 1))
     return sp.hstack(
         [
             empty if columns.indptr[column] == columns.indptr[column + 1] else sp.csc_matrix(compute(column)[:, None])
@@ -271,19 +275,12 @@ def _sparse_joint_border(
         forcing = column_forcing(column)
         return solve(forcing) if np.any(forcing) else forcing
 
-    def response_error(column):
-        value = response[:, column].toarray().ravel() if component_mode else response[:, column]
+    def response_error(column, value):
         residual = column_forcing(column) - block @ value
         return abs(raw_solve(residual)) if np.any(residual) else residual
 
-    if component_mode:
-        response = _sparse_joint_columns(coupling_columns, column_response)
-    else:
-        response = np.column_stack([column_response(column) for column in range(len(remaining_columns))])
     left = matrix[remaining_rows][:, selected_columns]
     direct = matrix[remaining_rows][:, remaining_columns]
-    schur = direct - sp.csr_matrix(left @ response)
-    schur.eliminate_zeros()
     # The Schur border is COMPUTED, and a solid body's net-current row is exactly
     # dependent on its hidden row: in the border it is a cancellation of terms many
     # orders larger than what is left. Its entries' own error seeds the eliminator, or
@@ -294,16 +291,27 @@ def _sparse_joint_border(
     count = np.asarray(sp.csr_matrix(left).getnnz(axis=1)).ravel() + 1.0
     unit = np.finfo(float).eps / 2
     gamma = count * unit / (1 - count * unit)
-    if component_mode:
-        errors = _sparse_joint_columns(coupling_columns, response_error)
-    else:
-        errors = np.column_stack([response_error(column) for column in range(len(remaining_columns))])
     abs_left = abs(sp.csr_matrix(left))
-    schur_errors = (
-        sp.diags(gamma) @ (abs(direct) + abs_left @ abs(response)) + abs_left @ errors
-        if component_mode
-        else gamma[:, None] * np.asarray(abs(direct) + abs_left @ abs(response)) + abs_left @ errors
-    )
+    if component_mode:
+
+        def column_images(column):
+            value = column_response(column)
+            error = response_error(column, value)
+            return np.concatenate((left @ value, abs_left @ abs(value), abs_left @ error))
+
+        rows = left.shape[0]
+        images = _sparse_joint_columns(coupling_columns, column_images, row_count=3 * rows)
+        schur = direct - images[:rows]
+        schur_errors = sp.diags(gamma) @ (abs(direct) + images[rows : 2 * rows]) + images[2 * rows :]
+        del images
+    else:
+        response = np.column_stack([column_response(column) for column in range(len(remaining_columns))])
+        schur = direct - sp.csr_matrix(left @ response)
+        errors = np.column_stack([
+            response_error(column, response[:, column]) for column in range(len(remaining_columns))
+        ])
+        schur_errors = gamma[:, None] * np.asarray(abs(direct) + abs_left @ abs(response)) + abs_left @ errors
+    schur.eliminate_zeros()
     # An eliminated row's ADMITTED slack (its forcing within its own allowance -- the remainder a
     # converged field seed hands over) does not vanish with the row: elimination carries it into
     # the Schur forcing. So the forcing is formed as two images, driven and slack, and a retained
@@ -425,10 +433,19 @@ def _sparse_joint_border(
     correction[remaining_columns] = answer
     correction[selected_columns] = solve(rhs[selected_rows] - kept - coupling @ answer)
     if component_mode:
-        selectors = sp.eye(matrix.shape[1], format='csr')
-        full_directions = selectors[:, remaining_columns] @ directions - selectors[:, selected_columns] @ (
-            response @ directions
+        # Only columns multiplying an ACTUAL nonzero homogeneous direction are
+        # needed again. Recompute those same responses, in original column order;
+        # never retain all field-wide responses just to multiply exact zeros.
+        active = coupling_columns.indptr[1:] != coupling_columns.indptr[:-1]
+        needed = np.flatnonzero(active & (np.asarray((directions != 0).getnnz(axis=1)).ravel() != 0))
+        lift = (
+            _sparse_joint_columns(coupling_columns[:, needed], lambda column: column_response(needed[column]))
+            @ directions[needed]
+            if len(needed)
+            else sp.csr_matrix((block.shape[0], directions.shape[1]))
         )
+        selectors = sp.eye(matrix.shape[1], format='csr')
+        full_directions = selectors[:, remaining_columns] @ directions - selectors[:, selected_columns] @ lift
     else:
         full_directions = np.zeros((matrix.shape[1], directions.shape[1]))
         full_directions[remaining_columns] = directions

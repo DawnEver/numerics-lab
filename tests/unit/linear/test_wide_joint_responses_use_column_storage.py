@@ -37,8 +37,9 @@ def test_wide_actual_joint_response_and_error_columns_are_compact_csc(monkeypatc
 
     def observe(blocks, *args, **kwargs):
         blocks = list(blocks)
-        if len(blocks) == size + 1 and all(block.shape == (2 * size, 1) for block in blocks):
+        if len(blocks) == size + 1 and all(block.shape[1] == 1 for block in blocks):
             records.append(({block.format for block in blocks}, sum(block.indptr.nbytes for block in blocks)))
+            assert all(block.shape[0] != 2 * size for block in blocks), 'retain projected images, not full responses'
         return original(blocks, *args, **kwargs)
 
     monkeypatch.setattr(sp, 'hstack', observe)
@@ -55,7 +56,7 @@ def test_wide_actual_joint_response_and_error_columns_are_compact_csc(monkeypatc
     np.testing.assert_allclose(answer, expected, rtol=0, atol=5e-12)
     assert unique.all()
     assert np.all(abs(effective @ answer - rhs) <= 1e-10 * (abs(effective) @ abs(answer) + abs(rhs)))
-    assert len(records) == 2
+    assert 1 <= len(records) <= 2
     assert all(formats == {'csc'} and pointer_bytes <= 16 * (size + 1) for formats, pointer_bytes in records)
 
 
@@ -84,3 +85,38 @@ def test_no_columns_require_no_computation():
 def test_a_row_pointer_view_cannot_be_misread_as_column_support():
     with pytest.raises(ValueError, match='CSC'):
         initial_storage_border._sparse_joint_columns(sp.csr_matrix((3, 4)), None)
+
+
+@pytest.mark.parametrize('width', [0, 3])
+def test_projected_columns_use_the_declared_image_height(width):
+    support = sp.csc_matrix(np.ones((4, width)))
+    result = initial_storage_border._sparse_joint_columns(
+        support, lambda column: np.array([1e-300, column + 1.0]), row_count=2
+    )
+    assert result.shape == (2, width) and result.format == 'csr'
+    if width:
+        np.testing.assert_array_equal(result.toarray(), [[1e-300] * width, np.arange(1.0, width + 1.0)])
+
+
+def test_actual_nonzero_homogeneous_rate_lift_is_recomputed_not_discarded():
+    jacobian = sp.csr_matrix([[4.0, 0.0, 0.0], [0.0, 5.0, 1.0], [0.0, 0.0, 1.0]])
+    mass = sp.diags([2.0, 0.0, 0.0], format='csr')
+    zero = sp.csr_matrix((3, 3))
+    matrix = sp.vstack(
+        (sp.hstack((jacobian, mass)), sp.hstack((mass[:1], zero[:1])), sp.hstack((zero[1:2], jacobian[1:2]))),
+        format='csr',
+    )
+    expected = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 0.0])
+    directions = sp.hstack((sp.eye(3), sp.csr_matrix((3, 510))), format='csr')
+    answer, unique = initial_storage_border.joint_coordinate_sparse_correction(
+        matrix,
+        matrix @ expected,
+        mass=mass,
+        algebraic_rows=sp.csr_matrix([[0.0, 1.0, 0.0]]),
+        stored_rows=np.array([0]),
+        indices=np.arange(2),
+        state_directions=directions,
+    )
+    np.testing.assert_allclose(answer[:4], expected[:4], rtol=0, atol=1e-12)
+    np.testing.assert_allclose(matrix @ answer, matrix @ expected, rtol=0, atol=1e-12)
+    np.testing.assert_array_equal(unique, [True, True, True, True, False, False])
