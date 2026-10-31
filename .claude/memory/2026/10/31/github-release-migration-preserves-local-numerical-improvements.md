@@ -39,8 +39,9 @@ bounded canonical netverb retry then attempts the same own PR ref three times
 with20-second walls. All three time out and report: Cannot prompt because
 user interactivity has been disabled. Exit124 and the structured report are
 preserved at the enclosing output/logs/26/10/31/github-integration-sync/engine-push.
-The refreshed GitHub kit already passed local verification; this outstanding
-interactive publication authentication is not a numerical/test failure. Leave
+The refreshed GitHub kit already passed local verification. The observed
+noninteractive publication failure does NOT prove that the user must log in,
+provide a token or change account permissions. It is not a numerical/test failure. Leave
 credentials, editor authentication and remote permissions untouched. The local
 branch retains the changes for publication once authentication is available.
 
@@ -57,3 +58,8 @@ tests, Ruff and266-file formatting in env dc17667732d42bd4; evidence is in
 the enclosing github-integration-sync/engine-after-lock-sync directory.
 No extra GitHub push is attempted while the
 recorded authentication condition remains unchanged.
+
+User now requests a handoff and questions the repeated GitHub demand. Stop
+publication retries; consuming upstream and preserving this local branch need
+no user account action. Carry forward the observed error without prescribing
+re-login. All numerical features remain local, tested and backed up.
