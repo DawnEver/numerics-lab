@@ -137,6 +137,23 @@ def _component_weighted(matrix, forcing, answer, bars, components):
     return moved
 
 
+def _sparse_joint_columns(columns, compute):
+    """Keep thin response columns in CSC until their final CSR assembly."""
+    if columns.format != 'csc':
+        msg = 'joint column support requires CSC storage'
+        raise ValueError(msg)
+    if columns.shape[1] == 0:
+        return sp.csr_matrix(columns.shape)
+    empty = sp.csc_matrix((columns.shape[0], 1))
+    return sp.hstack(
+        [
+            empty if columns.indptr[column] == columns.indptr[column + 1] else sp.csc_matrix(compute(column)[:, None])
+            for column in range(columns.shape[1])
+        ],
+        format='csr',
+    )
+
+
 def _sparse_joint_border(
     matrix,
     rhs,
@@ -242,11 +259,12 @@ def _sparse_joint_border(
         return correction, np.empty((n, 0)), allowance
 
     coupling = matrix[selected_rows][:, remaining_columns]
+    coupling_columns = coupling.tocsc()
 
     def column_forcing(column):
-        entries = coupling[:, column].tocoo()
+        start, end = coupling_columns.indptr[column : column + 2]
         forcing = np.zeros(block.shape[0])
-        np.add.at(forcing, entries.row, entries.data)
+        np.add.at(forcing, coupling_columns.indices[start:end], coupling_columns.data[start:end])
         return forcing
 
     def column_response(column):
@@ -259,10 +277,7 @@ def _sparse_joint_border(
         return abs(raw_solve(residual)) if np.any(residual) else residual
 
     if component_mode:
-        response = sp.hstack(
-            [sp.csr_matrix(column_response(column)[:, None]) for column in range(len(remaining_columns))],
-            format='csr',
-        )
+        response = _sparse_joint_columns(coupling_columns, column_response)
     else:
         response = np.column_stack([column_response(column) for column in range(len(remaining_columns))])
     left = matrix[remaining_rows][:, selected_columns]
@@ -280,10 +295,7 @@ def _sparse_joint_border(
     unit = np.finfo(float).eps / 2
     gamma = count * unit / (1 - count * unit)
     if component_mode:
-        errors = sp.hstack(
-            [sp.csr_matrix(response_error(column)[:, None]) for column in range(len(remaining_columns))],
-            format='csr',
-        )
+        errors = _sparse_joint_columns(coupling_columns, response_error)
     else:
         errors = np.column_stack([response_error(column) for column in range(len(remaining_columns))])
     abs_left = abs(sp.csr_matrix(left))
