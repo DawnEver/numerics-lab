@@ -81,3 +81,13 @@ def test_a_rounding_off_declaration_is_held_where_the_free_admission_moves_it():
     initial[CURRENTS] = _actual_currents() * (1 + 1e-15)
     assert _admit(initial, None).state[CURRENTS].tobytes() != initial[CURRENTS].tobytes()
     assert _admit(initial, CURRENTS).state[CURRENTS].tobytes() == initial[CURRENTS].tobytes()
+
+
+def test_a_stage_that_moves_a_declared_coordinate_is_named():
+    from numerics_lab.nonlinear.finite_storage import _declared_free, _declared_held
+
+    np.testing.assert_array_equal(_declared_free(np.arange(5), CURRENTS), [0, 4])
+    with pytest.raises(NotImplementedError, match='moved by the frozen index-two rate solve'):
+        _declared_held(np.array([0.0, 1e-300]), np.zeros(2), np.array([1]), 'the frozen index-two rate solve')
+    held = np.array([0.0, -0.0])
+    assert _declared_held(held, held.copy(), np.array([1]), 'any stage') is held

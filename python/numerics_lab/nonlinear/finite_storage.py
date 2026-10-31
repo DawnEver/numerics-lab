@@ -505,13 +505,15 @@ def _actual_rate_initial_pair(
             stored_columns_at,
             sparse_state_indices,
             residual_evaluation_at,
+            **({} if fixed_state is None else {'fixed_state': fixed_state}),
         )
+        _declared_held(state, initial, fixed_state, 'the finite-storage state search')
     except StorageRateAuthorityRequired as authority:
         if authority.directions is None and rate_constraint_state_columns_at is not None:
             msg = 'mixed boundary state columns require an issued bounded state range'
             raise NotImplementedError(msg) from authority
         if authority.directions is not None:
-            state = authority.state
+            state = _declared_held(authority.state, initial, fixed_state, 'the finite-storage state search')
             directions = authority.directions
             for _iteration in range(max_newton):
                 mass, jacobian = mass_at(state, rate), jacobian_at(state, rate)
@@ -646,7 +648,7 @@ def _actual_rate_initial_pair(
                 if np.any(abs(charge - target) > tolerance * charge_scale):
                     msg = 'boundary state direction contradicts original finite charge witnesses'
                     raise ValueError(msg)
-                state = candidate
+                state = _declared_held(candidate, initial, fixed_state, 'the boundary state-range correction')
                 mass, jacobian = mass_at(state, rate), jacobian_at(state, rate)
                 residual = residual_at(state, rate)
                 partial, partial_bound = evaluate_partial(state, rate)
@@ -716,6 +718,7 @@ def _actual_rate_initial_pair(
             if len(columns):
                 state = state.copy()
                 state[columns] += state_step
+                _declared_held(state, initial, fixed_state, 'the frozen index-two rate solve')
             final_mass = sp.csr_matrix(mass_at(state, rate))
             final_jacobian = sp.csr_matrix(jacobian_at(state, rate))
             final_partial, final_partial_bound = evaluate_partial(state, rate)
@@ -820,7 +823,7 @@ def _actual_rate_initial_pair(
         except ValueError as error:
             msg = 'actual-rate finite storage equations lack a compatible physical initial pair'
             raise ValueError(msg) from error
-        state, rate = pair.state, pair.rate
+        state, rate = _declared_held(pair.state, initial, fixed_state, 'the coupled state/rate projection'), pair.rate
         mass = sp.csr_matrix(mass_at(state, rate))
         jacobian = sp.csr_matrix(jacobian_at(state, rate))
         partial, partial_bound = evaluate_partial(state, rate)
@@ -875,6 +878,20 @@ def _actual_rate_initial_pair(
     raise ValueError(msg)
 
 
+def _declared_free(columns, fixed):
+    """The free columns of a state stage less the DECLARED coordinates: the one place the mask is applied."""
+    columns = np.asarray(columns)
+    return columns if fixed is None else columns[~np.isin(columns, fixed)]
+
+
+def _declared_held(state, reference, fixed, stage):
+    """Refuse, naming *stage*, a state whose declared coordinates are not bit-identical to *reference*."""
+    if fixed is not None and np.asarray(state)[fixed].tobytes() != np.asarray(reference)[fixed].tobytes():
+        msg = f'declared fixed state coordinates were moved by {stage}, which has no exact anchor'
+        raise NotImplementedError(msg)
+    return state
+
+
 def _actual_finite_storage_state(
     initial,
     target,
@@ -888,6 +905,7 @@ def _actual_finite_storage_state(
     stored_columns_at,
     sparse_state_indices,
     residual_evaluation_at=None,
+    fixed_state=None,
 ):
     """Quasi-Newton state search; full Q and actual algebraic rows decide admission.
 
@@ -909,7 +927,10 @@ def _actual_finite_storage_state(
         mapping = sp.eye(len(state), format='csr')
         if columns is not None and len(columns):
             columns = np.asarray(columns)
-            free = np.setdiff1d(np.arange(len(state)), columns)
+            if fixed_state is not None and np.any(np.isin(columns, fixed_state)):
+                msg = 'a declared fixed state coordinate is a stored column its charge solves; no exact anchor'
+                raise NotImplementedError(msg)
+            free = _declared_free(np.setdiff1d(np.arange(len(state)), columns), fixed_state)
             stored = mass[storage.stored_rows]
             block = stored[:, columns].tocsc()
             storage_factor = splu(block)
@@ -934,8 +955,11 @@ def _actual_finite_storage_state(
             left = sp.block_diag((storage.algebraic_rows, sp.eye(len(storage.stored_rows))), format='csr')
             right = sp.vstack((jacobian, mass[storage.stored_rows]), format='csc')
             matrix = sp.vstack((storage.algebraic_rows @ jacobian, mass[storage.stored_rows]), format='csc')
+            free = _declared_free(np.arange(len(state)), fixed_state)
+            if fixed_state is not None:
+                mapping = sp.eye(len(state), format='csr')[:, free]
+                right, matrix = (right @ mapping).tocsc(), (matrix @ mapping).tocsc()
             rhs = -np.concatenate((projected, (charge - target)[storage.stored_rows]))
-            free = np.arange(len(state))
         if sparse_state_indices is not None:
             boundary = np.flatnonzero(~np.isin(free, sparse_state_indices))
             if len(boundary):
@@ -975,11 +999,26 @@ def _actual_finite_storage_state(
                         continue
                     directions = sp.csr_matrix(mapping[:, boundary] @ null)
                     raise StorageRateAuthorityRequired(msg, state=state, directions=directions)
-        try:
-            factor = splu(matrix)
-        except RuntimeError as error:
-            msg = 'finite stored coordinates require actual differentiated rate authority to determine state'
-            raise StorageRateAuthorityRequired(msg) from error
+        msg = 'finite stored coordinates require actual differentiated rate authority to determine state'
+        if matrix.shape[0] != matrix.shape[1]:
+            # Only the declared mask makes this stage rectangular: the free columns keep every original row,
+            # and a unique particular is required exactly as a nonsingular factor was -- solved only when a
+            # step is needed, after the admission check below.
+            def solve_step(matrix=matrix, rhs=rhs):
+                try:
+                    particular, unique = sparse_initial_rate(sp.csr_matrix(matrix), rhs, tolerance=tolerance)
+                except ValueError as error:
+                    raise StorageRateAuthorityRequired(msg) from error
+                if not unique.all():
+                    raise StorageRateAuthorityRequired(msg)
+                return particular
+
+        else:
+            try:
+                factor = splu(matrix)
+            except RuntimeError as error:
+                raise StorageRateAuthorityRequired(msg) from error
+            solve_step = lambda: factor.solve(rhs)  # noqa: E731
         charge_scale = abs(charge) + abs(target) + np.asarray(abs(mass) @ abs(state)).ravel()
         projected_scale = abs(storage.algebraic_rows) @ (np.asarray(abs(jacobian) @ abs(state)).ravel() + abs(residual))
         if np.all(abs(charge - target) <= tolerance * charge_scale) and (
@@ -987,7 +1026,7 @@ def _actual_finite_storage_state(
             or _within_law(residual_evaluation_at, state, zero, storage, projected, tolerance * projected_scale)
         ):
             return state
-        step = base + mapping @ factor.solve(rhs)
+        step = base + mapping @ solve_step()
         state = _backtracked_state(state, step, target, residual_at, charge_at, storage, zero)
     msg = 'actual finite storage state equations did not converge with all original charge witnesses'
     raise ValueError(msg)
