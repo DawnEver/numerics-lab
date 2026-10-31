@@ -10,7 +10,13 @@ from scipy.sparse.csgraph import maximum_bipartite_matching
 
 from numerics_lab.linear.arithmetic import rounded_defect
 
-__all__ = ['MAX_AFFINE_COLUMNS', 'MAX_AFFINE_ENTRIES', 'border_affine_space', 'homogeneous_zero_coordinates', 'rank_bar']
+__all__ = [
+    'MAX_AFFINE_COLUMNS',
+    'MAX_AFFINE_ENTRIES',
+    'border_affine_space',
+    'homogeneous_zero_coordinates',
+    'rank_bar',
+]
 
 # Work capacity, not a rank threshold: one float64 coefficient array is at most
 # 32 MiB. Every pivot/entry-error/forcing test below remains unchanged.
