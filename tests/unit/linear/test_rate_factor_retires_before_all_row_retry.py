@@ -1,4 +1,4 @@
-"""A real factored square choice retires before the original all-row KKT retry."""
+"""A real square factor may precondition rows but retires before any KKT fallback."""
 
 import weakref
 from pathlib import Path
@@ -64,7 +64,11 @@ def test_violated_original_rows_retire_square_lu_without_changing_numerics(
                 result = initial_rate.sparse_initial_rate(matrix, rhs, residual_allowance=bounds)
             except ValueError as error:
                 result = error
-        assert shapes == [(size, size), (2 * size + 1, 2 * size + 1)]
+        assert shapes[0] == (size, size) and len(shapes) <= 2
+        if len(shapes) == 2:
+            assert shapes[1] == (2 * size + 1, 2 * size + 1)
+        if contradiction and not allowance:
+            assert len(shapes) == 2, 'inconsistent rows still require the unchanged augmented fallback'
         assert len(refined) == 1
         first = np.r_[refined[0], 0.0] if unavailable else refined[0]
         original_bar = 1e-10 * (abs(matrix) @ abs(first) + abs(rhs)) + bounds

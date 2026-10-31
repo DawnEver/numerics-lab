@@ -4,7 +4,7 @@ from fractions import Fraction
 
 import numpy as np
 import scipy.sparse as sp
-from scipy.sparse.linalg import splu
+from scipy.sparse.linalg import LinearOperator, lsqr, splu
 
 from numerics_lab.linear.arithmetic import EXACT_DEFECT_MAX_COLUMNS, rounded_defect
 
@@ -156,6 +156,36 @@ def _refined_rate_values(factor, matrix, rhs, rows, selected):
         msg = 'actual rate refinement requires a finite representable solution'
         raise ValueError(msg)
     return values
+
+
+def _preconditioned_all_row_rate_values(factor, matrix, rhs, reduced, forcing, selected, *, tolerance, allowance):
+    """Reuse a REAL square LU for all-row corrections, judged on ORIGINAL rows.
+
+    The iterative kernel supplies no rank authority: this path requires the
+    caller's existing full-column square factor. A failed bounded refinement
+    returns None, so that factor can retire before the unchanged augmented
+    fallback. No normal equations, regularization or zero snapping.
+    """
+    operator = LinearOperator(
+        reduced.shape,
+        matvec=lambda value: reduced @ factor.solve(value),
+        rmatvec=lambda value: factor.solve(reduced.T @ value, trans='T'),
+        dtype=np.float64,
+    )
+    answer = np.zeros(matrix.shape[1])
+    scale = _row_scale(matrix)
+    target = forcing
+    for _ in range(4):
+        solved = lsqr(operator, target, damp=0.0, atol=0.0, btol=0.0, conlim=0.0, iter_lim=128)
+        answer[selected] += factor.solve(solved[0])
+        defect = matrix @ answer - rhs
+        bar = tolerance * (abs(matrix) @ abs(answer) + abs(rhs)) + allowance
+        if not np.isfinite(answer).all() or not np.isfinite(defect).all() or not np.isfinite(bar).all():
+            return None
+        if np.all(abs(defect) <= bar):
+            return answer[selected]
+        target = -defect / scale
+    return None
 
 
 def _least_squares_rate_values(reduced, forcing):
@@ -359,9 +389,12 @@ def sparse_initial_rate(matrix, rhs, *, tolerance=1e-10, residual_allowance=None
     # A field-size square choice that factored but leaves witnesses violated is
     # retried over every row at once; the bar below is unchanged.
     if np.any(abs(defect) > bar) and factor is not None and matrix.shape[1] > 512:
-        # The rejected square LU has no remaining use beside the all-row KKT factor.
+        values = _preconditioned_all_row_rate_values(
+            factor, matrix, rhs, reduced, forcing, selected, tolerance=tolerance, allowance=allowance
+        )
+        # A retained square factor preconditions every row, never overlaps KKT.
         del factor
-        answer[selected] = _least_squares_rate_values(reduced, forcing)
+        answer[selected] = _least_squares_rate_values(reduced, forcing) if values is None else values
         defect = matrix @ answer - rhs
         bar = tolerance * (abs(matrix) @ abs(answer) + abs(rhs)) + allowance
         if not np.isfinite(defect).all() or not np.isfinite(bar).all():
