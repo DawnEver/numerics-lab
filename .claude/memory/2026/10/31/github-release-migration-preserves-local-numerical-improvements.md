@@ -1,6 +1,8 @@
 ---
 metadata:
   type: project
+name: github-release-migration-preserves-local-numerical-improvements
+description: Preserve the eleven numerical improvements on GitHub release history, verify them and record publication authentication separately.
 ---
 
 # Move the local numerical changes onto the public release history
@@ -41,3 +43,17 @@ The refreshed GitHub kit already passed local verification; this outstanding
 interactive publication authentication is not a numerical/test failure. Leave
 credentials, editor authentication and remote permissions untouched. The local
 branch retains the changes for publication once authentication is available.
+
+## Later upstream lock synchronization
+
+A fresh canonical forge sync discovers one further integration commit,
+fb253334cede01a7779ff5e876c4d980f0eac990. It changes ONLY uv.lock; the numerical
+source is unchanged. The clean merge is074b684fea3d4deea075a7600c55499495324620.
+Canonical dev_lab.dev.dep --sync refreshes the kit again to dev-lab73b56c74,
+updates the generated lock and changes env_key to dc17667732d42bd4. Verify
+the same148 numerical tests against this actual updated lock/runtime before
+committing its lock receipt. The actual repeated canonical run passes all148
+tests, Ruff and266-file formatting in env dc17667732d42bd4; evidence is in
+the enclosing github-integration-sync/engine-after-lock-sync directory.
+No extra GitHub push is attempted while the
+recorded authentication condition remains unchanged.
