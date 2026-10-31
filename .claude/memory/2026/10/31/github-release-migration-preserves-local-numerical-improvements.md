@@ -28,3 +28,16 @@ the enclosing checkout's output/logs/26/10/31/github-integration-sync/engine-mea
 
 No full-motor success follows from this migration. The original physical
 validators, memory ceiling and numerical acceptance bars remain unchanged.
+
+## Publication outcome
+
+GitHub push is NOT complete. A normal push waits in the editor askpass path;
+interrupt only the owned command rather than alter a credential helper. The
+bounded canonical netverb retry then attempts the same own PR ref three times
+with20-second walls. All three time out and report: Cannot prompt because
+user interactivity has been disabled. Exit124 and the structured report are
+preserved at the enclosing output/logs/26/10/31/github-integration-sync/engine-push.
+The refreshed GitHub kit already passed local verification; this outstanding
+interactive publication authentication is not a numerical/test failure. Leave
+credentials, editor authentication and remote permissions untouched. The local
+branch retains the changes for publication once authentication is available.
