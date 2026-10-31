@@ -17,7 +17,21 @@ from tests.unit.test_a_field_size_overdetermined_rate_is_solved_in_least_squares
 
 from numerics_lab.linear import initial_rate
 
-ORDERS = (None, 'MMD_AT_PLUS_A')
+ORDERS = (None, 'MMD_AT_PLUS_A', 'MMD_ATA', 'NATURAL')
+
+
+@pytest.mark.parametrize('order', ['MMD_ATA', 'NATURAL'])
+def test_remaining_public_orderings_keep_original_rate_equations(monkeypatch, order):
+    matrix, rhs, expected = _system(contradict=False)
+    result, record = _run_order(monkeypatch, lambda: initial_rate.sparse_initial_rate(matrix, rhs), order)
+    assert not isinstance(result, Exception)
+    rate, unique = result
+    np.testing.assert_allclose(rate, expected, rtol=0, atol=1e-12)
+    assert np.all(abs(matrix @ rate - rhs) <= 1e-10 * (abs(matrix) @ abs(rate) + abs(rhs)))
+    assert np.all(unique)
+    assert record['factor_options'] == {'permc_spec': order}
+    assert record['kkt_calls'] == 1 and record['solve_calls'] == 5
+    _save_evidence(f'remaining-order-{order}', [record])
 
 
 def _matrix_digest(matrix):
@@ -108,7 +122,7 @@ def _save_evidence(name, records):
 
 
 @pytest.mark.parametrize('coupled', [False, True])
-def test_sparse_grid_equations_survive_symmetric_pattern_ordering(monkeypatch, coupled):
+def test_sparse_grid_equations_survive_all_public_pattern_orderings(monkeypatch, coupled):
     width = 26
     line = sp.diags((-np.ones(width - 1), 2 * np.ones(width), -np.ones(width - 1)), (-1, 0, 1))
     grid = sp.kronsum(line, line, format='csr')
@@ -134,10 +148,11 @@ def test_sparse_grid_equations_survive_symmetric_pattern_ordering(monkeypatch, c
         assert record['kkt_calls'] == 1 and record['solve_calls'] == 5
         outputs.append(result)
         evidence.append(record)
-    np.testing.assert_allclose(outputs[0], outputs[1], rtol=0, atol=1e-10)
-    assert evidence[0]['kkt_sha256'] == evidence[1]['kkt_sha256']
-    assert evidence[0]['forcing_sha256'] == evidence[1]['forcing_sha256']
-    assert evidence[0]['factor_options'] == {} and evidence[1]['factor_options'] == {'permc_spec': 'MMD_AT_PLUS_A'}
+    for result, record, order in zip(outputs, evidence, ORDERS, strict=True):
+        np.testing.assert_allclose(outputs[0], result, rtol=0, atol=1e-10)
+        assert evidence[0]['kkt_sha256'] == record['kkt_sha256']
+        assert evidence[0]['forcing_sha256'] == record['forcing_sha256']
+        assert record['factor_options'] == ({} if order is None else {'permc_spec': order})
     _save_evidence(f'grid-coupled-{coupled}', evidence)
 
 
@@ -171,11 +186,12 @@ def test_real_public_retry_keeps_all_rows_exceptions_and_uniqueness(monkeypatch,
                 np.testing.assert_allclose(rate, expected, rtol=0, atol=1e-12)
         outputs.append(result)
         evidence.append(record)
-    if not (contradiction and not allowance):
-        np.testing.assert_allclose(outputs[0][0], outputs[1][0], rtol=0, atol=1e-12)
-        np.testing.assert_array_equal(outputs[0][1], outputs[1][1])
-    assert evidence[0]['kkt_sha256'] == evidence[1]['kkt_sha256']
-    assert evidence[0]['forcing_sha256'] == evidence[1]['forcing_sha256']
+    for result, record in zip(outputs, evidence, strict=True):
+        if not (contradiction and not allowance):
+            np.testing.assert_allclose(outputs[0][0], result[0], rtol=0, atol=1e-12)
+            np.testing.assert_array_equal(outputs[0][1], result[1])
+        assert evidence[0]['kkt_sha256'] == record['kkt_sha256']
+        assert evidence[0]['forcing_sha256'] == record['forcing_sha256']
     _save_evidence(f'public-{unavailable}-{contradiction}-{allowance}', evidence)
 
 
