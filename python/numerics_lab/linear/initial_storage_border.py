@@ -12,7 +12,7 @@ from numerics_lab.linear.border_rank import (
     homogeneous_zero_coordinates,
 )
 from numerics_lab.linear.index_two import _column_components, _sparse_block_columns, index_two_frozen_rate
-from numerics_lab.linear.initial_rate import normalize_sparse_rows
+from numerics_lab.linear.initial_rate import _row_scale, normalize_sparse_rows
 from numerics_lab.linear.refinement import refine_factored_solution
 from numerics_lab.linear.resolution import row_bar, system_resolution
 from numerics_lab.linear.storage_border import free_pinned_columns
@@ -721,9 +721,21 @@ def _triangular_joint_solver(matrix, mass, stored_rows, stored_positions, indice
                 raise ValueError(msg) from error
             previous_operator, previous_factor = columns, factor
 
+        # The row scale is the operator's, so it is computed once; each correction divides its
+        # defect by it -- the same arithmetic `normalize_sparse_rows` performs, never a copy.
+        scale = _row_scale(operator)
+
+        def scaled(defect):
+            with np.errstate(over='ignore', under='ignore'):
+                forcing = defect / scale
+            if not np.isfinite(forcing).all() or np.any((defect != 0) & (forcing == 0)):
+                msg = 'initial equation normalization requires representable finite operators and forcing'
+                raise ValueError(msg)
+            return forcing
+
         def solve(forcing):
             def correction(defect):
-                return factor.solve(normalize_sparse_rows(operator, defect)[1])
+                return factor.solve(scaled(defect))
 
             return refine_factored_solution(operator, forcing, correction(forcing), correction)
 
@@ -736,17 +748,21 @@ def _triangular_joint_solver(matrix, mass, stored_rows, stored_positions, indice
     solve_state = factored(state_minor)
     solve_rate = factored(rate_minor)
 
+    # The coupling blocks are fixed slices of the operator: sliced once, not on every solve.
+    air_bulk = matrix[air][:, bulk]
+    bulk_state = matrix[bulk][:, indices]
+    differentiated_state = differentiated[:, indices]
+    differentiated_bulk_rate = differentiated[:, n + bulk]
+
     def solve(forcing):
         value = np.zeros(2 * size)
         value[bulk_positions] = solve_stored(forcing[size : size + len(bulk)])
-        value[air_positions] = solve_state(forcing[air_positions] - matrix[air][:, bulk] @ value[bulk_positions])
-        value[size + bulk_positions] = solve_residual_rate(
-            forcing[bulk_positions] - matrix[bulk][:, indices] @ value[:size]
-        )
+        value[air_positions] = solve_state(forcing[air_positions] - air_bulk @ value[bulk_positions])
+        value[size + bulk_positions] = solve_residual_rate(forcing[bulk_positions] - bulk_state @ value[:size])
         value[size + air_positions] = solve_rate(
             forcing[size + len(bulk) :]
-            - differentiated[:, indices] @ value[:size]
-            - differentiated[:, n + bulk] @ value[size + bulk_positions]
+            - differentiated_state @ value[:size]
+            - differentiated_bulk_rate @ value[size + bulk_positions]
         )
         return value
 
