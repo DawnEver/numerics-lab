@@ -659,16 +659,33 @@ def _triangular_joint_solver(matrix, mass, stored_rows, stored_positions, indice
     state_minor = matrix[air][:, air].tocsr()
     differentiated = matrix[n + len(stored_rows) + np.asarray(differential)]
     rate_minor = differentiated[:, n + air].tocsr()
+    previous_operator = previous_factor = None
 
     def factored(operator):
+        nonlocal previous_operator, previous_factor
         if operator.shape == (0, 0):
             return lambda forcing: np.array(forcing, copy=True)
         normalized, _ = normalize_sparse_rows(operator, np.zeros(operator.shape[0]))
-        try:
-            factor = splu(normalized.tocsc())
-        except RuntimeError as error:
-            msg = 'declared sparse state/rate minor lacks independent actual equation authority'
-            raise ValueError(msg) from error
+        columns = normalized.tocsc()
+        columns.sum_duplicates()
+        columns.sort_indices()
+        same = (
+            previous_operator is not None
+            and columns.shape == previous_operator.shape
+            and columns.dtype == previous_operator.dtype
+            and np.array_equal(columns.indptr, previous_operator.indptr)
+            and np.array_equal(columns.indices, previous_operator.indices)
+            and np.array_equal(columns.data, previous_operator.data)
+        )
+        if same:
+            factor = previous_factor
+        else:
+            try:
+                factor = splu(columns)
+            except RuntimeError as error:
+                msg = 'declared sparse state/rate minor lacks independent actual equation authority'
+                raise ValueError(msg) from error
+            previous_operator, previous_factor = columns, factor
 
         def solve(forcing):
             def correction(defect):
@@ -679,11 +696,11 @@ def _triangular_joint_solver(matrix, mass, stored_rows, stored_positions, indice
         return solve
 
     solve_stored = factored(stored_minor)
-    solve_residual_rate = (
-        solve_stored if (residual_rate_minor - stored_minor).nnz == 0 else factored(residual_rate_minor)
-    )
+    # Share only the actual canonical normalized factor, never raw RHS scaling
+    # or refinement: distinct original minors keep their own physical rows.
+    solve_residual_rate = factored(residual_rate_minor)
     solve_state = factored(state_minor)
-    solve_rate = solve_state if (rate_minor - state_minor).nnz == 0 else factored(rate_minor)
+    solve_rate = factored(rate_minor)
 
     def solve(forcing):
         value = np.zeros(2 * size)
