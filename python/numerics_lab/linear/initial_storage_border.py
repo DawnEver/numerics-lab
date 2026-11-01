@@ -456,27 +456,69 @@ def _sparse_joint_border(
                 if component_mode
                 else _weighted_by_row_bars(dense, forcing[supported], answer, bars)
             )
+
+    def rate_free_directions(count):
+        rate = (remaining_columns >= n) & (remaining_columns < 2 * n)
+        if not count or not rate.any():
+            return None
+        if not supported.any():
+            found = np.eye(np.count_nonzero(rate))
+        elif component_mode:
+            _, found, _ = _component_affine(
+                schur[supported][:, np.flatnonzero(rate)].tocsr(),
+                np.zeros(np.count_nonzero(supported)),
+                sp.csr_matrix(schur_errors[supported])[:, np.flatnonzero(rate)],
+                np.zeros(np.count_nonzero(supported)),
+            )
+        else:
+            _, found = border_affine_space(
+                schur[supported][:, np.flatnonzero(rate)].toarray(),
+                np.zeros(np.count_nonzero(supported)),
+                entry_errors=np.asarray(schur_errors[supported])[:, rate],
+            )
+        if found.shape[1] != count:
+            return None
+        embedded = sp.csr_matrix(sp.eye(len(remaining_columns), format='csr')[:, np.flatnonzero(rate)] @ found)
+        return embedded if component_mode else embedded.toarray()
+
     correction = np.zeros(matrix.shape[1])
     correction[remaining_columns] = answer
     correction[selected_columns] = solve(rhs[selected_rows] - kept - coupling @ answer)
-    if component_mode:
-        # Only columns multiplying an ACTUAL nonzero homogeneous direction are
-        # needed again. Recompute those same responses, in original column order;
-        # never retain all field-wide responses just to multiply exact zeros.
-        active = coupling_columns.indptr[1:] != coupling_columns.indptr[:-1]
-        needed = np.flatnonzero(active & (np.asarray((directions != 0).getnnz(axis=1)).ravel() != 0))
-        lift = (
-            _sparse_joint_columns(coupling_columns[:, needed], lambda column: column_response(needed[column]))
-            @ directions[needed]
-            if len(needed)
-            else sp.csr_matrix((block.shape[0], directions.shape[1]))
-        )
-        selectors = sp.eye(matrix.shape[1], format='csr')
-        full_directions = selectors[:, remaining_columns] @ directions - selectors[:, selected_columns] @ lift
-    else:
-        full_directions = np.zeros((matrix.shape[1], directions.shape[1]))
-        full_directions[remaining_columns] = directions
-        full_directions[selected_columns] = -response @ directions
+
+    def state_image(directions):
+        if component_mode:
+            # Only columns multiplying an ACTUAL nonzero homogeneous direction are
+            # needed again. Recompute those same responses, in original column order;
+            # never retain all field-wide responses just to multiply exact zeros.
+            active = coupling_columns.indptr[1:] != coupling_columns.indptr[:-1]
+            needed = np.flatnonzero(active & (np.asarray((directions != 0).getnnz(axis=1)).ravel() != 0))
+            lift = (
+                _sparse_joint_columns(coupling_columns[:, needed], lambda column: column_response(needed[column]))
+                @ directions[needed]
+                if len(needed)
+                else sp.csr_matrix((block.shape[0], directions.shape[1]))
+            )
+            selectors = sp.eye(matrix.shape[1], format='csr')
+            full = selectors[:, remaining_columns] @ directions - selectors[:, selected_columns] @ lift
+        else:
+            full = np.zeros((matrix.shape[1], directions.shape[1]))
+            full[remaining_columns] = directions
+            full[selected_columns] = -response @ directions
+        if state_directions is not None:
+            # Homogeneous directions remain a separate explicitly supplied chart;
+            # do not infer state uniqueness from the particular's smallness.
+            if component_mode:
+                full = sp.vstack((state_directions @ full[2 * n :], full[n:]), format='csr')
+            else:
+                full[:n] = state_directions @ full[2 * n :]
+        # The exact zeros proved by original Q/constraint rows apply to every homogeneous direction.
+        if component_mode:
+            full = (sp.diags(unanchored.astype(float)) @ full).tocsr()
+            full.eliminate_zeros()
+            return full, full[:n].nnz != 0
+        full[~unanchored] = 0
+        return full, bool(np.any(full[:n] != 0))
+
     if state_directions is not None:
         # D describes homogeneous state freedom around an admitted numerical
         # particular. Replacing the ORIGINAL physical solve by D*alpha erases
@@ -485,25 +527,21 @@ def _sparse_joint_border(
         # their original F/Q/G validation; no computed lift becomes a new bar.
         absent = np.asarray(state_directions.getnnz(axis=1)).ravel() == 0
         correction[:n][absent] = 0.0
-        # Homogeneous directions remain a separate explicitly supplied chart;
-        # do not infer state uniqueness from the particular's smallness.
-        if component_mode:
-            full_directions = sp.vstack(
-                (state_directions @ full_directions[2 * n :], full_directions[n:]), format='csr'
-            )
-        else:
-            full_directions[:n] = state_directions @ full_directions[2 * n :]
     # Reconstruct coordinates proved zero by original Q/constraint rows, not
-    # cancellation of driven sparse responses. The same exact lift applies to
-    # every homogeneous direction; all original equations remain validators.
+    # cancellation of driven sparse responses; all original equations remain validators.
     correction[~unanchored] = 0
-    if component_mode:
-        full_directions = (sp.diags(unanchored.astype(float)) @ full_directions).tocsr()
-        full_directions.eliminate_zeros()
-        unresolved = full_directions[:n].nnz != 0
-    else:
-        full_directions[~unanchored] = 0
-        unresolved = np.any(full_directions[:n] != 0)
+    full_directions, unresolved = state_image(directions)
+    if unresolved:
+        # An algebraic index-two coordinate (a body voltage: fixed by its net-current row and the
+        # rate) is a state the free directions may only touch through rounding: when bodies share
+        # nodes, their voltage RATES meet the hidden rows through a difference that cancels inside
+        # its entry error, and the solve of that rate freedom picks up state components of
+        # rounding size. The freedom is a state one only if the RATE columns alone cannot carry
+        # it: rank them by the same entry-error authority, and when they span as many directions
+        # the space is theirs and every state stays fixed.
+        rate_only = rate_free_directions(directions.shape[1])
+        if rate_only is not None:
+            full_directions, unresolved = state_image(rate_only)
     if unresolved:
         msg = 'joint stored-coordinate equations require additional physical state authority'
         raise ValueError(msg)
