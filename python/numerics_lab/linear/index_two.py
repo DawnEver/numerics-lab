@@ -31,7 +31,7 @@ from numerics_lab.linear.initial_rate import sparse_initial_rate
 __all__ = ['certified_null_directions', 'index_two_directions', 'index_two_frozen_rate']
 
 
-def index_two_directions(mass, jacobian, algebraic_rows):
+def index_two_directions(mass, jacobian, algebraic_rows, *, sparse_output=False):
     """Index-two directions over the zero-mass coordinates: ``(columns, basis)``.
 
     A candidate is a zero-mass column whose jacobian column lies wholly in
@@ -54,13 +54,46 @@ def index_two_directions(mass, jacobian, algebraic_rows):
     candidates = np.flatnonzero(absent & (np.diff(jacobian.indptr) > 0) & ~on_state_rows)
     if not len(candidates) or algebraic_rows.shape[0] == 0:
         return np.array([], dtype=int), np.zeros((0, 0))
-    basis = certified_null_directions(algebraic_rows, jacobian[:, candidates])
-    used = np.any(basis != 0, axis=1)
+    basis = certified_null_directions(algebraic_rows, jacobian[:, candidates], sparse_output=sparse_output)
+    used = np.asarray((basis != 0).getnnz(axis=1)).ravel() != 0 if sparse_output else np.any(basis != 0, axis=1)
     return candidates[used], basis[used]
 
 
-def certified_null_directions(left, right):
-    """Directions ``d`` with ``left @ right @ d`` certified zero: a dense basis, one column each.
+def _column_components(pattern):
+    """Actual bipartite support components, without overflowing shared-row counts."""
+    support = sp.csc_matrix(pattern, dtype=bool)
+    support.eliminate_zeros()
+    if support.nnz:
+        graph = sp.bmat([[None, support], [support.T, None]], format='csr', dtype=bool)
+        _, labels = connected_components(graph, directed=False)
+        labels = labels[support.shape[0] :]
+    else:
+        labels = np.arange(support.shape[1])
+    groups = {}
+    for column, label in enumerate(labels):
+        groups.setdefault(int(label), []).append(column)
+    for columns in groups.values():
+        members = np.asarray(columns, dtype=int)
+        yield members, np.unique(support[:, members].indices)
+
+
+def _sparse_block_columns(size, blocks):
+    """Embed bounded local bases with no dense global state-by-range allocation."""
+    values, rows, columns = [], [], []
+    count = 0
+    for members, block in blocks:
+        local_rows, local_columns = np.nonzero(block)
+        values.append(block[local_rows, local_columns])
+        rows.append(members[local_rows])
+        columns.append(local_columns + count)
+        count += block.shape[1]
+    if not values:
+        return sp.csr_matrix((size, count))
+    return sp.csr_matrix((np.concatenate(values), (np.concatenate(rows), np.concatenate(columns))), shape=(size, count))
+
+
+def certified_null_directions(left, right, *, sparse_output=False):
+    """Directions ``d`` with ``left @ right @ d`` certified zero, dense by default or CSR.
 
     A combination is null when its image is no larger than the summation bound of the product it
     is read from -- the certificate ``certified_sparse_product`` applies to a single column, so a
@@ -71,16 +104,19 @@ def certified_null_directions(left, right):
     """
     size = right.shape[1]
     if left.shape[0] == 0:
-        return np.eye(size)
+        return sp.eye(size, format='csr') if sparse_output else np.eye(size)
     seen = sp.csc_matrix(certified_sparse_product(left, right))
     seen.eliminate_zeros()
     product, bound = (sp.csc_matrix(matrix) for matrix in sparse_product_bound(left, right))
-    pattern = (seen != 0).astype(np.int8)
-    count, label = connected_components((pattern.T @ pattern).tocsr(), directed=False)
-    blocks = []
-    for group in range(count):
-        members = np.flatnonzero(label == group)
-        rows = np.unique(seen[:, members].indices)
+
+    def blocks():
+        for members, rows in _column_components(seen):
+            if len(members) > 512 or (sparse_output and len(rows) * len(members) > 512**2):
+                msg = 'state range requires bounded actual connected component rank work'
+                raise NotImplementedError(msg)
+            yield members, local_basis(members, rows)
+
+    def local_basis(members, rows):
         if not len(rows):
             null = np.eye(len(members))
         else:
@@ -106,11 +142,10 @@ def certified_null_directions(left, right):
             null = np.array([
                 direction for direction in candidates.T if np.all(abs(dense @ direction) <= limit @ abs(direction))
             ]).reshape(-1, len(members))
-        for direction in null:
-            column = np.zeros(size)
-            column[members] = direction
-            blocks.append(column)
-    return np.column_stack(blocks) if blocks else np.zeros((size, 0))
+        return null.T
+
+    basis = _sparse_block_columns(size, blocks())
+    return basis if sparse_output else basis.toarray()
 
 
 def index_two_frozen_rate(
@@ -145,7 +180,7 @@ def index_two_frozen_rate(
             sp.vstack((hidden, mass), format='csr'), rhs, tolerance=tolerance, residual_allowance=bound
         )
     except ValueError as frozen:
-        columns, basis = index_two_directions(mass, jacobian, algebraic)
+        columns, basis = index_two_directions(mass, jacobian, algebraic, sparse_output=mass.shape[0] > 512)
         if not len(columns):
             raise
         count, size = basis.shape[1], mass.shape[1]
@@ -153,16 +188,29 @@ def index_two_frozen_rate(
         # unknowns on these columns are only its complement: two touching bodies' voltages
         # keep the rate of their difference, which the hidden rows fix, and drop the free one.
         kept = np.setdiff1d(np.arange(size), columns)
-        complement = null_space(basis.T)
-        rate_map = sp.hstack(
-            (
-                sp.csr_matrix((np.ones(len(kept)), (kept, np.arange(len(kept)))), shape=(size, len(kept))),
-                sp.csr_matrix((size, complement.shape[1])),
-            ),
-            format='lil',
-        )
-        rate_map[columns, len(kept) :] = complement
-        rate_map = rate_map.tocsr()
+        if sp.issparse(basis):
+
+            def complements():
+                for members, rows in _column_components(basis.T):
+                    if len(members) > 512 or len(rows) * len(members) > 512**2:
+                        msg = 'index-two rate complement requires bounded actual component work'
+                        raise NotImplementedError(msg)
+                    yield members, null_space(basis.T[rows][:, members].toarray())
+
+            complement = _sparse_block_columns(len(columns), complements())
+            selectors = sp.eye(size, format='csr')
+            rate_map = sp.hstack((selectors[:, kept], selectors[:, columns] @ complement), format='csr')
+        else:
+            complement = null_space(basis.T)
+            rate_map = sp.hstack(
+                (
+                    sp.csr_matrix((np.ones(len(kept)), (kept, np.arange(len(kept)))), shape=(size, len(kept))),
+                    sp.csr_matrix((size, complement.shape[1])),
+                ),
+                format='lil',
+            )
+            rate_map[columns, len(kept) :] = complement
+            rate_map = rate_map.tocsr()
         matrix = sp.bmat(
             [
                 [sp.csr_matrix((hidden.shape[0], count)), sp.csr_matrix(hidden) @ rate_map],

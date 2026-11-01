@@ -10,7 +10,18 @@ from scipy.sparse.csgraph import maximum_bipartite_matching
 
 from numerics_lab.linear.arithmetic import rounded_defect
 
-__all__ = ['border_affine_space', 'homogeneous_zero_coordinates', 'rank_bar']
+__all__ = [
+    'MAX_AFFINE_COLUMNS',
+    'MAX_AFFINE_ENTRIES',
+    'border_affine_space',
+    'homogeneous_zero_coordinates',
+    'rank_bar',
+]
+
+# Work capacity, not a rank threshold: one float64 coefficient array is at most
+# 32 MiB. Every pivot/entry-error/forcing test below remains unchanged.
+MAX_AFFINE_COLUMNS = 2048
+MAX_AFFINE_ENTRIES = MAX_AFFINE_COLUMNS**2
 
 
 def rank_bar(shape) -> float:
@@ -353,17 +364,19 @@ def border_affine_space(matrix, rhs, *, mandatory_rows=(), inherited_allowance=N
     formation error); it seeds that propagation, so an entry inside its bound
     is never a pivot. Omitted, the entries are taken as exact.
     """
-    matrix, rhs = np.asarray(matrix, dtype=float).copy(), np.asarray(rhs, dtype=float).copy()
+    matrix, rhs = np.asarray(matrix, dtype=float), np.asarray(rhs, dtype=float)
     if (
         matrix.ndim != 2
         or not all(matrix.shape)
-        or matrix.shape[1] > 512
+        or matrix.shape[1] > MAX_AFFINE_COLUMNS
+        or matrix.size > MAX_AFFINE_ENTRIES
         or rhs.shape != (matrix.shape[0],)
         or not np.isfinite(matrix).all()
         or not np.isfinite(rhs).all()
     ):
         msg = 'border affine equations require a finite bounded matrix and aligned forcing'
         raise ValueError(msg)
+    matrix, rhs = matrix.copy(), rhs.copy()
     rows, columns = matrix.shape
     allowance = np.zeros(rows) if inherited_allowance is None else np.asarray(inherited_allowance)
     if (

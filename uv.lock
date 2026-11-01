@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.13"
 
 [[package]]
@@ -190,8 +190,8 @@ wheels = [
 
 [[package]]
 name = "dev-lab"
-version = "0.0.1.dev1888+ga06211676"
-source = { git = "https://github.com/DawnEver/dev-lab.git#a06211676c7f980b2e0d2ad62d72c3524d27cd39" }
+version = "0.0.1.dev1890+g73b56c74c"
+source = { git = "https://github.com/DawnEver/dev-lab.git#73b56c74c9f2fe456179b2817c91076e53383c41" }
 dependencies = [
     { name = "commitizen" },
     { name = "lab-commons", extra = ["io", "paths", "structured", "units"] },
