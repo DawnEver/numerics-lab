@@ -39,6 +39,8 @@ _MECHANISMS: Final = {
     'INTEGRATION-IS-MERGES-ONLY': (_HOOKS,),
     'ORIGIN-HOLDS-ONLY-DECLARED-BRANCHES': (_HOOKS,),  # the same `session-branch` pre-push row (dev-lab ea264f8)
     'LATEST-DEPENDENCIES': (_HOOKS,),
+    # Adopted 2026-11-03 with dev-lab 2ef3d35b: the shared pre-push `landed-pr` row (dev_lab.dev.landedpush).
+    'NO-PUSH-ONTO-A-LANDED-PR': (_HOOKS,),
     # Adopted 2026-10-21 with the lab-commons a04f7ab relock: both are the forge's server-side steps
     # (dev_lab.dev.forgemerge, dev_lab.dev.forgereview) over a repo whose integrator table declares
     # `pr_merges_since`; numerics-lab declares it, so its PRs merge and are reviewed by the kit alone.
@@ -52,6 +54,8 @@ _MECHANISMS: Final = {
     'ONE-SESSION-ONE-PR': (TestPath('pyproject.toml'),),
     'NO-STACKED-PRS': (TestPath('pyproject.toml'),),
     'DOCS-ONLY-CARRIES': (TestPath('pyproject.toml'),),
+    # Adopted 2026-11-03 with dev-lab 2ef3d35b: the forge's draft admission (dev_lab.dev.forgedraft), same table.
+    'DRAFT-UNTIL-READY': (TestPath('pyproject.toml'),),
     # Adopted 2026-10-24 with dev-lab 1d74f38: the October summary is the first month this tree holds.
     'MONTHLY-PLANS-CARRIED': (TestPath('tests/architecture/test_every_month_carries_its_plans.py'),),
     # Adopted 2026-10-26 with dev-lab c9eaa7f: the agent guard ships in every family repo; the rendered

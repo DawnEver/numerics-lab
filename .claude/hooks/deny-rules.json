@@ -125,12 +125,12 @@
     "name": "REPORTS-LIVE-IN-MEMORY",
     "pattern": "(?:>>?|\\btee\\b(?:\\s+-a)?|\\bOut-File\\b(?:\\s+-FilePath)?|\\b(?:Set|Add)-Content\\b(?:\\s+-Path)?)\\s*[\"\\']?(?:[^\\s\"\\'<>|;&]*[/\\\\])?output[/\\\\][^\\s\"\\'<>|;&]*\\.md(?=[\"\\'\\s;&|)]|$)",
     "matches": "argument",
-    "reason": "REPORTS-LIVE-IN-MEMORY: a written report (audit, analysis, design, plan, findings) is not regenerable, and output/ holds only what a program can regenerate.\nWrite it as a dated memory entry: .claude/memory/<yyyy>/<mm>/<dd>/<slug>.md with the MEMORY-SHAPE frontmatter (name, description, created, accessed, tags, metadata).\ndetails: docs-src/dev/refusals.md#reports-live-in-memory (lab-commons)"
+    "reason": "REPORTS-LIVE-IN-MEMORY: a written report (audit, analysis, design, plan, findings) is not regenerable, and output/ holds only what a program can regenerate.\nWrite it as a dated memory entry: .claude/memory/<yyyy>/<mm>/<dd>/<slug>.md with the MEMORY-SHAPE frontmatter (name, description, created; never accessed).\ndetails: docs-src/dev/refusals.md#reports-live-in-memory (lab-commons)"
   },
   {
     "name": "STATUS-VIA-DOORS",
     "pattern": "\\bdev_lab\\.dev\\.forge\\s+status\\s+post\\b(?=[^\\n]*\\btests/(?:review(?:-hold)?|security)\\b)",
     "matches": "argument",
-    "reason": "STATUS-VIA-DOORS: a raw post on tests/review-hold, tests/review or tests/security releases a head with no review or reason behind it.\nUse the door that records why: {python} -m dev_lab.dev.forge review takeover <sha>; forge review dispose <pr> <finding-id> --why \"<reason>\"; forge security release <pr> --why \"<reason>\".\ndetails: docs-src/dev/refusals.md#status-via-doors (lab-commons)"
+    "reason": "STATUS-VIA-DOORS: a raw post on tests/review-hold, tests/review or tests/security releases a head with no review or reason behind it.\nUse the door that records why: re-run the forge's review of the head; forge review dispose <pr> <finding-id> --why \"<reason>\"; forge security release <pr> --why \"<reason>\".\ndetails: docs-src/dev/refusals.md#status-via-doors (lab-commons)"
   }
 ]
