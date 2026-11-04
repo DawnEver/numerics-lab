@@ -46,6 +46,14 @@
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.handback"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.pushstop"
+          }
+        ]
       }
     ],
     "SubagentStop": [
@@ -64,6 +72,14 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.reclaimrun --session-start"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.venvfollow --session-start"
           }
         ]
       }
