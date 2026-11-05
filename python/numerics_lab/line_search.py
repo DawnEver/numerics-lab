@@ -246,7 +246,7 @@ def strong_wolfe(
 _DIRECTIONAL_EVALS = 12
 
 
-def directional_line_search(residual, u, step, r0, *, curvature: float = 0.5):
+def directional_line_search(residual, u, step, r0, *, curvature: float = 0.5, endpoint=None):
     """Minimize the step's ENERGY along ``step`` using only residuals: ``phi'(s) = R(u + s step) . step``.
 
     For a residual that IS the gradient of a convex potential (a magnetostatic step with a monotone
@@ -263,28 +263,56 @@ def directional_line_search(residual, u, step, r0, *, curvature: float = 0.5):
     A trial the problem cannot evaluate (:class:`TrialNotEvaluable`) is REJECTED like an overshoot: it
     closes the bracket from above without a slope, and the next trial bisects toward the low end. Only a
     point that evaluated is ever returned; a step none of whose trials evaluates raises.
+
+    An explicit bounded ``endpoint`` is retained exactly. Its segment is formed as
+    a convex combination, not by subtracting and re-adding a discarded huge step.
     """
+    if endpoint is not None:
+        endpoint = np.asarray(endpoint)
+        if endpoint.shape != np.shape(u) or not np.isrealobj(endpoint) or not np.isfinite(endpoint).all():
+            msg = 'a directional endpoint must be a same-shape finite real state'
+            raise ValueError(msg)
+        direction = np.asarray(step)
+        with np.errstate(over='ignore', invalid='ignore'):
+            declared = endpoint - np.asarray(u)
+        if (
+            direction.shape != endpoint.shape
+            or not np.isrealobj(direction)
+            or not np.isfinite(direction).all()
+            or not np.isfinite(declared).all()
+            or not np.array_equal(direction, declared)
+        ):
+            msg = 'an explicit endpoint requires its same finite direction'
+            raise ValueError(msg)
+
+    def point(s):
+        if endpoint is None:
+            return u + step if s == 1.0 else u + s * step
+        if s == 1.0:
+            return endpoint.copy()
+        return (1.0 - s) * np.asarray(u) + s * endpoint
+
     g0 = float(np.dot(np.ravel(r0), np.ravel(step)))
     if not g0 < 0.0:
-        return u + step
+        return point(1.0)
 
     def slope(s):
         try:
-            return float(np.dot(np.ravel(residual(u + s * step)), np.ravel(step)))
+            return float(np.dot(np.ravel(residual(point(s))), np.ravel(step)))
         except TrialNotEvaluable:
             return None
 
     try:
-        r1 = np.ravel(residual(u + step))
+        r1 = np.ravel(residual(point(1.0)))
     except TrialNotEvaluable:
         r1 = None
     g1 = None if r1 is None else float(np.dot(r1, np.ravel(step)))
     if g1 is not None and g1 <= 0.0:
-        return u + step
+        return point(1.0)
     # A full step a SLIVER past the minimum that lowers |R| is a smooth law's Newton finish, not a kink's
     # overshoot (which raises |R| by orders): taken whole, as the band below would take a low-side point.
     if g1 is not None and g1 <= curvature * abs(g0) and np.linalg.norm(r1) < np.linalg.norm(np.ravel(r0)):
-        return u + step
+        return point(1.0)
     lo, glo, hi, ghi = 0.0, g0, 1.0, g1
     evaluated = None if g1 is None else 1.0
     side = 0
@@ -296,7 +324,7 @@ def directional_line_search(residual, u, step, r0, *, curvature: float = 0.5):
             continue
         evaluated = s
         if -curvature * abs(g0) <= g <= 0.0:
-            return u + s * step
+            return point(s)
         if g < 0.0:
             lo, glo = s, g
             if side == -1 and ghi is not None:
@@ -310,8 +338,8 @@ def directional_line_search(residual, u, step, r0, *, curvature: float = 0.5):
     # Unclosed: the bracket's LOW end, where phi' < 0 and so the energy fell; a point past the
     # minimum may sit above phi(0) however small its slope.
     if lo > 0.0:
-        return u + lo * step
+        return point(lo)
     if evaluated is None:
         msg = 'no trial along the step evaluates'
         raise TrialNotEvaluable(msg)
-    return u + evaluated * step
+    return point(evaluated)

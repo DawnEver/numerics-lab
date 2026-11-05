@@ -18,17 +18,24 @@ def _lift(form, endpoint, physical, argument):
     if alpha.imag != 0.0 or alpha.real == 0.0:
         msg = 'physical trial transformations require a nonzero real state weight'
         raise ValueError(msg)
+    if np.array_equal(physical, argument):
+        return endpoint
+    # Do not cancel the small bound against the discarded, possibly enormous proposal.
+    # A huge history offset can still make a physical value unrepresentable in endpoint
+    # coordinates; all residual/admission checks use the reconstructed state, not this target.
     with np.errstate(over='ignore', invalid='ignore'):
-        lifted = endpoint + (physical - argument) / alpha.real
+        lifted = (physical - form.h_u) / alpha.real
     if not np.isfinite(lifted).all():
         msg = 'the bounded physical trial cannot be lifted to a finite endpoint'
         raise ValueError(msg)
     return lifted
 
 
-def project_newton_trial(problem, form, previous, proposed, *, affine_projection, newton_limit):
+def project_newton_trial(problem, form, previous, proposed, *, affine_projection, newton_limit, limit_changed=None):
     """Project, then limit, at the stage's physical time; neither operation advances history."""
     value = np.asarray(proposed, dtype=float)
+    if limit_changed is not None:
+        limit_changed[0] = False
     if affine_projection:
         argument = form.u_arg(value)
         projected = _physical(
@@ -42,6 +49,8 @@ def project_newton_trial(problem, form, previous, proposed, *, affine_projection
             argument.shape,
             'Newton trial limit',
         )
+        if limit_changed is not None:
+            limit_changed[0] = not np.array_equal(limited, argument)
         value = _lift(form, value, limited, argument)
     return value
 
