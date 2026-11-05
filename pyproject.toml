@@ -19,12 +19,13 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    # The build backend: this repo's own tool, not the test kit's.
     "maturin>=1.7",
-    "pytest",
-    "pytest-xdist",
-    "ruff",
-    # The family development system (verify door, rules). DEV ONLY: the engine imports neither dev_lab nor lab_commons.
+    # The family development system: verify door, rules, and the ONE test kit (pytest, xdist, cov, ruff,
+    # timeout, ...). DEV ONLY: the engine imports neither dev_lab nor lab_commons.
     "dev-lab[test] @ git+https://github.com/DawnEver/dev-lab.git",
+    # scripts/deny_rules.py reports through `lab_commons.log.emit`: a dev script declares what it imports.
+    "lab-commons @ git+https://github.com/DawnEver/lab-commons.git",
 ]
 
 [tool.maturin]
@@ -44,7 +45,6 @@ pythonpath = ["."]
 xfail_strict = true
 markers = [
     "unit: fast unit tests",
-    "timeout: per-test ceiling (pytest-timeout)",
 ]
 
 
