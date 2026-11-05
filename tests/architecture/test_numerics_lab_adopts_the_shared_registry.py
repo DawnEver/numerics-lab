@@ -52,6 +52,12 @@ _MECHANISMS: Final = {
     'ONE-SESSION-ONE-PR': (TestPath('pyproject.toml'),),
     'NO-STACKED-PRS': (TestPath('pyproject.toml'),),
     'DOCS-ONLY-CARRIES': (TestPath('pyproject.toml'),),
+    # Adopted 2026-11-03 with dev-lab integrate/main: three more PR-flow rows of the forge's own admission over
+    # the same declared integrator table (a PR opens as a draft, forge writes go through its doors, no push
+    # lands on a merged PR).
+    'DRAFT-UNTIL-READY': (TestPath('pyproject.toml'),),
+    'FORGE-DOORS-ARE-CONSENT': (TestPath('pyproject.toml'),),
+    'NO-PUSH-ONTO-A-LANDED-PR': (TestPath('pyproject.toml'),),
     # Adopted 2026-10-24 with dev-lab 1d74f38: the October summary is the first month this tree holds.
     'MONTHLY-PLANS-CARRIED': (TestPath('tests/architecture/test_every_month_carries_its_plans.py'),),
     # Adopted 2026-10-26 with dev-lab c9eaa7f: the agent guard ships in every family repo; the rendered
