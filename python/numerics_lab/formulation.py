@@ -27,6 +27,7 @@ __all__ = [
     'HistoryProblem',
     'InitialJointEvaluation',
     'IntegratorKind',
+    'NewtonTrialLimitProblem',
     'ResidualAssemblyBound',
     'ResidualFloorProblem',
     'SemiDiscreteProblem',
@@ -129,6 +130,23 @@ class AffineConstraintProjectionProblem(SemiDiscreteProblem, Protocol):
     """
 
     def project_affine_state(self, state: NDArray[np.floating], time: float) -> NDArray[np.floating]: ...
+
+
+@runtime_checkable
+class NewtonTrialLimitProblem(SemiDiscreteProblem, Protocol):
+    """A problem-owned, pure bound on a speculative Newton STATE, not its constitutive law.
+
+    The returned state must be same-shape, finite and real, and preserve any owned
+    affine constraints. No history may be committed. Directional energy search
+    requires the segment from previous to the bounded endpoint to be admissible;
+    a limiter must not encode a different residual along that segment.
+    """
+
+    def limit_newton_trial(
+        self, previous: NDArray[np.floating], proposed: NDArray[np.floating], t: float
+    ) -> NDArray[np.floating]:
+        """Return the bounded physical state at the same stage time (inputs are private copies)."""
+        ...
 
 
 @runtime_checkable

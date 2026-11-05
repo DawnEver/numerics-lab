@@ -16,6 +16,7 @@ from numerics_lab.formulation import (
     DerivativeWeights,
     FactorReusableProblem,
     HistoryProblem,
+    NewtonTrialLimitProblem,
     ResidualFloorProblem,
     SemiDiscreteProblem,
     StepEvaluationProblem,
@@ -30,6 +31,7 @@ from numerics_lab.time_integrators._forms import (
     change_below_residual_resolution,
     residual_floor_by_row,
 )
+from numerics_lab.time_integrators._trials import project_newton_trial, projection_fixed_point
 from numerics_lab.time_integrators.factor_reuse import FactorCache, apply_factor, factor_matrix
 from numerics_lab.time_integrators.local_convergence import LocalIterationCheck
 from numerics_lab.time_integrators.prepared import (
@@ -71,6 +73,7 @@ class ProblemCapabilities:
     #: The problem solves this step itself (a native kernel); ``None`` from it declines.
     native_step: bool = False
     affine_admission: bool = False
+    newton_trial_limit: bool = False
 
     @classmethod
     def resolve(cls, problem: SemiDiscreteProblem) -> ProblemCapabilities:
@@ -84,6 +87,7 @@ class ProblemCapabilities:
             isinstance(problem, AffineConstraintProjectionProblem),
             getattr(problem, 'native_step', None) is not None,
             isinstance(problem, AffineConstraintAdmissionProblem),
+            isinstance(problem, NewtonTrialLimitProblem),
         )
 
 
@@ -327,7 +331,15 @@ def _gmin_continue(
             else:
                 damped = jac + gmin * np.eye(jac.shape[0])
             delta = np.asarray(solve(damped, -r), dtype=float)
-            u = u + delta.reshape(u.shape)
+            proposed = u + delta.reshape(u.shape)
+            u = project_newton_trial(
+                problem,
+                form,
+                u,
+                proposed,
+                affine_projection=capabilities.affine_projection,
+                newton_limit=capabilities.newton_trial_limit,
+            )
     u_arg, u_dot, u_ddot = form.u_arg(u), form.u_dot(u), form.u_ddot(u)
     r = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
     residual = float(np.linalg.norm(r))
@@ -561,6 +573,7 @@ def _solve_step(
         and jacobian_tangent is None
         and gmin_stages is None
         and held is None
+        and not capabilities.newton_trial_limit
     ):
         # THE PROBLEM'S OWN KERNEL, on the default Newton options only: it is golden-equivalent to
         # this loop on that path and nowhere else, so every other option keeps the loop below.
@@ -593,19 +606,14 @@ def _solve_step(
     tangent_helpful = jacobian_tangent is not None or (alternative is not None and alternative.has_tangent_jacobian)
 
     def project_trial(value):
-        value = np.asarray(value, dtype=float)
-        if not capabilities.affine_projection:
-            return value
-        alpha = form.weights.alpha0
-        if alpha.imag != 0 or alpha.real == 0:
-            msg = 'affine state constraint projection requires a nonzero real state weight'
-            raise ValueError(msg)
-        argument = form.u_arg(value)
-        projected = np.asarray(problem.project_affine_state(argument.copy(), form.t_eval))
-        if projected.shape != argument.shape or not np.isrealobj(projected) or not np.isfinite(projected).all():
-            msg = 'affine constraint owner must return a same-shape finite real trial state'
-            raise ValueError(msg)
-        return value + (projected - argument) / alpha.real
+        return project_newton_trial(
+            problem,
+            form,
+            u,
+            value,
+            affine_projection=capabilities.affine_projection,
+            newton_limit=capabilities.newton_trial_limit,
+        )
 
     t = form.t_eval
     # THE GUESS IS NOT PROJECTED. A full Newton step lands every affine row exactly, so projecting
@@ -729,18 +737,31 @@ def _solve_step(
             tangent = factor_cache.matrix
         step = du.reshape(u.shape)
         if max_newton > 1 and line_search == 'directional':
+            # Search the bounded ray, not a nonlinear path of individually clipped probes.
+            bounded_step = project_trial(u + step) - u if capabilities.newton_trial_limit else step
+            if capabilities.newton_trial_limit and capabilities.affine_projection:
+                feasible = (
+                    _affine_admitted(problem, form, u, capabilities)
+                    if capabilities.affine_admission
+                    else projection_fixed_point(problem, form, u)
+                )
+                if not feasible:
+                    # Keep the first linearization unprojected, but restore feasibility before
+                    # searching an energy ray. This is an iterate, not an acceptance verdict.
+                    u = u + bounded_step
+                    continue
             u = directional_line_search(
                 lambda x: np.asarray(problem.residual(form.u_arg(x), form.u_dot(x), form.u_ddot(x), t), dtype=float),
                 u,
-                step,
+                bounded_step,
                 r,
             )
         elif max_newton > 1 and backtrack_cap > 0:
             limit = residual if backtrack_band is None else backtrack_band * residual
 
             def trial_at(lam, u=u, step=step):
-                u_try = project_trial(u + lam * step)
                 try:
+                    u_try = project_trial(u + lam * step)
                     r_try = problem.residual(form.u_arg(u_try), form.u_dot(u_try), form.u_ddot(u_try), t)
                 except TrialNotEvaluable:
                     # The problem cannot evaluate this trial (an inner solve without a root): the
