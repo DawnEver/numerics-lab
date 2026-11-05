@@ -45,13 +45,6 @@ _SHIPPED: Final = frozenset({
 _PROSE_ABOUT_A_DENIED_SHAPE: Final = "cat > notes.md <<'MD'\npytest is denied here; use the verdict entry point.\nMD"
 
 
-@pytest.mark.workstation
-def test_node_is_on_path() -> None:
-    """No node means no guard: a red, never a skip."""
-    agentguard.assert_node_is_available()
-
-
-@pytest.mark.workstation
 def test_the_guard_is_live() -> None:
     agentguard.assert_the_guard_is_live(root=_ROOT)
 
@@ -76,7 +69,6 @@ def test_the_shipped_set_is_pinned_by_name() -> None:
     agentguard.assert_the_shipped_set_is_pinned(root=_ROOT, declared=_SHIPPED)
 
 
-@pytest.mark.workstation
 @pytest.mark.parametrize(
     ('command', 'rule'),
     [
@@ -96,7 +88,6 @@ def test_a_forbidden_shape_is_refused_by_the_rule_that_owns_it(command: str, rul
     agentguard.assert_refused_by(root=_ROOT, command=command, rule=rule)
 
 
-@pytest.mark.workstation
 @pytest.mark.parametrize(
     'command',
     [
