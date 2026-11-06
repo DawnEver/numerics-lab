@@ -9,6 +9,7 @@ engine owns it and the product's study specification builds on it.
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol, runtime_checkable
@@ -19,6 +20,7 @@ from numpy.typing import NDArray
 __all__ = [
     'NEWMARK_BETA',
     'NEWMARK_GAMMA',
+    'AcceptedLinearizationProblem',
     'AffineConstraintAdmissionProblem',
     'AffineConstraintProjectionProblem',
     'AlternativeJacobianProblem',
@@ -104,6 +106,20 @@ class StepEvaluationProblem(SemiDiscreteProblem, Protocol):
 
     def step_problem(self, time: float) -> SemiDiscreteProblem:
         """Bind this solve's endpoint law without advancing physical history."""
+        ...
+
+
+@runtime_checkable
+class AcceptedLinearizationProblem(SemiDiscreteProblem, Protocol):
+    """A real accepted-state owner selecting its outgoing linearization law.
+
+    The caller already accepted/projected this point. The scope grants only
+    that matrix read, never a trial solve, history commit or state mutation.
+    Its cleanup must propagate model errors and control-flow stops unchanged.
+    """
+
+    def accepted_linearization_scope(self, time: float) -> AbstractContextManager[None]:
+        """Own one outgoing Jacobian read at the same actual accepted clock."""
         ...
 
 
