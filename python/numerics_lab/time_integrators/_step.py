@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -31,7 +32,7 @@ from numerics_lab.time_integrators._forms import (
     change_below_residual_resolution,
     residual_floor_by_row,
 )
-from numerics_lab.time_integrators._trials import project_newton_trial
+from numerics_lab.time_integrators._trials import affine_projection_is_noop, project_newton_trial
 from numerics_lab.time_integrators.factor_reuse import FactorCache, apply_factor, factor_matrix
 from numerics_lab.time_integrators.local_convergence import LocalIterationCheck
 from numerics_lab.time_integrators.prepared import (
@@ -614,6 +615,7 @@ def _solve_step(
     # so that discarded correction cannot inflate its generic arithmetic floor.
     increment_valid = False
     projected_iterate = False  # provenance of THIS retained, evaluated trial, not a convergence verdict
+    initial_projection_checked = False
 
     def project_trial(value):
         return project_newton_trial(
@@ -751,6 +753,17 @@ def _solve_step(
             tangent = factor_cache.matrix
         step = du.reshape(u.shape)
         directional = max_newton > 1 and line_search == 'directional'
+        if (
+            directional
+            and capabilities.newton_trial_limit
+            and capabilities.affine_projection
+            and not capabilities.affine_admission
+            and not initial_projection_checked
+        ):
+            initial_projection_checked = True
+            # No no-op evidence leaves the existing evaluated recovery in charge.
+            with suppress(TrialNotEvaluable):
+                projected_iterate = affine_projection_is_noop(problem, form, u)
         restore_ray = (
             directional
             and capabilities.newton_trial_limit

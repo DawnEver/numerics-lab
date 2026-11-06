@@ -136,6 +136,39 @@ def test_directional_search_starts_on_the_affine_plane_without_projecting_the_fi
     assert searches
 
 
+def test_a_noop_projection_without_admission_keeps_the_first_directional_search(monkeypatch):
+    class Projected:
+        def __init__(self) -> None:
+            self.evaluated = []
+
+        def residual(self, u, rate, acceleration, time):
+            self.evaluated.append(u.copy())
+            return u - 1.0
+
+        def jacobian(self, u, rate, acceleration, time, weights):
+            return np.eye(1) * weights.alpha0.real
+
+        def project_affine_state(self, state, time):
+            return state
+
+        def limit_newton_trial(self, previous, proposed, time):
+            return proposed
+
+    problem, starts = Projected(), []
+    search = step_module.directional_line_search
+
+    def checked(residual, previous, direction, r0, **options):
+        starts.append(previous.copy())
+        return search(residual, previous, direction, r0, **options)
+
+    monkeypatch.setattr(step_module, 'directional_line_search', checked)
+    outcome = _advance(problem, line_search='directional')
+    assert outcome.converged
+    np.testing.assert_array_equal(problem.evaluated[0], [0.0])
+    assert len(starts) == 1, 'a feasible first iterate must not be routed through merit recovery'
+    np.testing.assert_array_equal(starts[0], [0.0])
+
+
 @pytest.mark.parametrize('weight', [0.25, 1.0, -0.25])
 def test_the_limit_sees_the_physical_stage_and_not_the_endpoint_coordinate(weight):
     zero = np.zeros(1)

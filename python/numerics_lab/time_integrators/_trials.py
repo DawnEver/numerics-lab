@@ -13,6 +13,15 @@ def _physical(value, shape, owner):
     return value
 
 
+def affine_projection_is_noop(problem, form, endpoint):
+    """A sufficient first-ray fact, not a tolerance-based convergence verdict."""
+    argument = form.u_arg(endpoint)
+    projected = _physical(
+        problem.project_affine_state(argument.copy(), form.t_eval), argument.shape, 'affine constraint owner'
+    )
+    return bool(np.array_equal(projected, argument))
+
+
 def _lift(form, endpoint, physical, argument, *, incremental=False):
     alpha = form.weights.alpha0
     if alpha.imag != 0.0 or alpha.real == 0.0:
