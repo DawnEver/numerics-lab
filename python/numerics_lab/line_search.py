@@ -20,6 +20,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
+from fractions import Fraction
 from typing import TypeVar
 
 import numpy as np
@@ -246,7 +247,54 @@ def strong_wolfe(
 _DIRECTIONAL_EVALS = 12
 
 
-def directional_line_search(residual, u, step, r0, *, curvature: float = 0.5):
+def _directional_dot(residual, direction):
+    """Keep ordinary dot arithmetic; use exact finite inputs only on range overflow."""
+    values = np.ravel(residual)
+    if isinstance(direction, np.ndarray):
+        with np.errstate(over='ignore', invalid='ignore'):
+            value = float(np.dot(values, np.ravel(direction)))
+        if math.isfinite(value):
+            return value
+        direction = tuple(Fraction(float(v)) for v in np.ravel(direction))
+    return sum((Fraction(float(r)) * d for r, d in zip(values, direction, strict=True)), Fraction())
+
+
+def _slope_times(value, factor):
+    return value * Fraction(factor) if isinstance(value, Fraction) else value * factor
+
+
+def _directional_trial(lo, glo, hi, ghi):
+    if ghi is None:
+        return 0.5 * (lo + hi)
+    if not isinstance(glo, Fraction) and not isinstance(ghi, Fraction):
+        with np.errstate(over='ignore', invalid='ignore', divide='ignore'):
+            trial = lo - np.float64(glo) * (hi - lo) / (np.float64(ghi) - glo)
+        if lo < trial < hi:
+            return float(trial)
+    difference = Fraction(ghi) - Fraction(glo)
+    if difference:
+        ratio = Fraction(glo) / difference
+        if -1 <= ratio <= 0:
+            # Only the bounded interval parameter crosses back to float, never
+            # the possibly unrepresentable slope or its products.
+            trial = lo - float(ratio) * (hi - lo)
+            if lo < trial < hi:
+                return trial
+    return 0.5 * (lo + hi)
+
+
+def _directional_norm_decreases(value, previous):
+    value, previous = np.ravel(value), np.ravel(previous)
+    with np.errstate(over='ignore', invalid='ignore'):
+        current_norm, previous_norm = np.linalg.norm(value), np.linalg.norm(previous)
+    if math.isfinite(current_norm) and math.isfinite(previous_norm):
+        return current_norm < previous_norm
+    current_squared = sum(Fraction(float(v)) ** 2 for v in np.ravel(value))
+    previous_squared = sum(Fraction(float(v)) ** 2 for v in np.ravel(previous))
+    return current_squared < previous_squared
+
+
+def directional_line_search(residual, u, step, r0, *, curvature: float = 0.5, endpoint=None):
     """Minimize the step's ENERGY along ``step`` using only residuals: ``phi'(s) = R(u + s step) . step``.
 
     For a residual that IS the gradient of a convex potential (a magnetostatic step with a monotone
@@ -263,55 +311,105 @@ def directional_line_search(residual, u, step, r0, *, curvature: float = 0.5):
     A trial the problem cannot evaluate (:class:`TrialNotEvaluable`) is REJECTED like an overshoot: it
     closes the bracket from above without a slope, and the next trial bisects toward the low end. Only a
     point that evaluated is ever returned; a step none of whose trials evaluates raises.
-    """
-    g0 = float(np.dot(np.ravel(r0), np.ravel(step)))
-    if not g0 < 0.0:
-        return u + step
 
-    def slope(s):
+    An explicit bounded ``endpoint`` owns the direction (pass ``step=None``) and
+    is retained exactly. Its segment is a convex combination, not a subtraction
+    and re-addition of a discarded huge step. Ordinary finite dot/norm arithmetic
+    is unchanged; an unrepresentable direction or overflow uses exact finite-input
+    slope arithmetic, without discarding small components through rescaling.
+    """
+    if endpoint is not None:
+        endpoint = np.asarray(endpoint)
+        if endpoint.shape != np.shape(u) or not np.isrealobj(endpoint) or not np.isfinite(endpoint).all():
+            msg = 'a directional endpoint must be a same-shape finite real state'
+            raise ValueError(msg)
+        if step is not None:
+            msg = 'an explicit endpoint owns its direction; do not also supply a step'
+            raise ValueError(msg)
+        start = np.asarray(u)
+        if start.shape != endpoint.shape or not np.isrealobj(start) or not np.isfinite(start).all():
+            msg = 'a directional start must be a same-shape finite real state'
+            raise ValueError(msg)
+        start, endpoint = np.asarray(start, dtype=float), np.asarray(endpoint, dtype=float)
+        with np.errstate(over='ignore', invalid='ignore'):
+            direction = endpoint - start
+        if not np.isfinite(direction).all():
+            direction = tuple(
+                Fraction(float(end)) - Fraction(float(begin))
+                for end, begin in zip(endpoint.flat, start.flat, strict=True)
+            )
+    else:
+        direction = np.asarray(step)
+        if direction.shape != np.shape(u) or not np.isrealobj(direction) or not np.isfinite(direction).all():
+            msg = 'a directional step must be a same-shape finite real vector'
+            raise ValueError(msg)
+        direction = np.asarray(direction, dtype=float)
+    if np.size(r0) != np.size(u) or not np.isrealobj(r0) or not np.isfinite(r0).all():
+        msg = 'a directional starting residual must be an aligned finite real vector'
+        raise ValueError(msg)
+
+    def point(s):
+        if endpoint is None:
+            return u + step if s == 1.0 else u + s * step
+        if s == 1.0:
+            return endpoint.copy()
+        return (1.0 - s) * np.asarray(u) + s * endpoint
+
+    g0 = _directional_dot(r0, direction)
+
+    def evaluate_trial(s):
         try:
-            return float(np.dot(np.ravel(residual(u + s * step)), np.ravel(step)))
+            value = np.asarray(residual(point(s)))
         except TrialNotEvaluable:
             return None
+        if value.size != np.size(r0) or not np.isrealobj(value):
+            msg = 'a directional trial residual must be an aligned real vector'
+            raise ValueError(msg)
+        with np.errstate(over='ignore', invalid='ignore'):
+            value = np.asarray(value, dtype=float)
+        return value if np.isfinite(value).all() else None
 
-    try:
-        r1 = np.ravel(residual(u + step))
-    except TrialNotEvaluable:
-        r1 = None
-    g1 = None if r1 is None else float(np.dot(r1, np.ravel(step)))
+    def slope(s):
+        value = evaluate_trial(s)
+        return None if value is None else _directional_dot(value, direction)
+
+    r1 = evaluate_trial(1.0)
+    g1 = None if r1 is None else _directional_dot(r1, direction)
+    if r1 is not None and not g0 < 0.0:
+        return point(1.0)
     if g1 is not None and g1 <= 0.0:
-        return u + step
+        return point(1.0)
     # A full step a SLIVER past the minimum that lowers |R| is a smooth law's Newton finish, not a kink's
     # overshoot (which raises |R| by orders): taken whole, as the band below would take a low-side point.
-    if g1 is not None and g1 <= curvature * abs(g0) and np.linalg.norm(r1) < np.linalg.norm(np.ravel(r0)):
-        return u + step
+    if g1 is not None and g1 <= _slope_times(abs(g0), curvature) and _directional_norm_decreases(r1, r0):
+        return point(1.0)
     lo, glo, hi, ghi = 0.0, g0, 1.0, g1
     evaluated = None if g1 is None else 1.0
     side = 0
     for _ in range(_DIRECTIONAL_EVALS):
-        s = 0.5 * (lo + hi) if ghi is None else lo - glo * (hi - lo) / (ghi - glo)
+        s = _directional_trial(lo, glo, hi, ghi)
         g = slope(s)
         if g is None:
             hi, ghi, side = s, None, 0
             continue
         evaluated = s
-        if -curvature * abs(g0) <= g <= 0.0:
-            return u + s * step
+        if -_slope_times(abs(g0), curvature) <= g <= 0.0:
+            return point(s)
         if g < 0.0:
             lo, glo = s, g
             if side == -1 and ghi is not None:
-                ghi *= 0.5
+                ghi = _slope_times(ghi, 0.5)
             side = -1
         else:
             hi, ghi = s, g
             if side == 1:
-                glo *= 0.5
+                glo = _slope_times(glo, 0.5)
             side = 1
     # Unclosed: the bracket's LOW end, where phi' < 0 and so the energy fell; a point past the
     # minimum may sit above phi(0) however small its slope.
     if lo > 0.0:
-        return u + lo * step
+        return point(lo)
     if evaluated is None:
         msg = 'no trial along the step evaluates'
         raise TrialNotEvaluable(msg)
-    return u + evaluated * step
+    return point(evaluated)

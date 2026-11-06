@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -16,6 +17,7 @@ from numerics_lab.formulation import (
     DerivativeWeights,
     FactorReusableProblem,
     HistoryProblem,
+    NewtonTrialLimitProblem,
     ResidualFloorProblem,
     SemiDiscreteProblem,
     StepEvaluationProblem,
@@ -30,6 +32,7 @@ from numerics_lab.time_integrators._forms import (
     change_below_residual_resolution,
     residual_floor_by_row,
 )
+from numerics_lab.time_integrators._trials import affine_projection_is_noop, project_newton_trial
 from numerics_lab.time_integrators.factor_reuse import FactorCache, apply_factor, factor_matrix
 from numerics_lab.time_integrators.local_convergence import LocalIterationCheck
 from numerics_lab.time_integrators.prepared import (
@@ -72,6 +75,7 @@ class ProblemCapabilities:
     #: The problem solves this step itself (a native kernel); ``None`` from it declines.
     native_step: bool = False
     affine_admission: bool = False
+    newton_trial_limit: bool = False
 
     @classmethod
     def resolve(cls, problem: SemiDiscreteProblem) -> ProblemCapabilities:
@@ -85,6 +89,7 @@ class ProblemCapabilities:
             isinstance(problem, AffineConstraintProjectionProblem),
             getattr(problem, 'native_step', None) is not None,
             isinstance(problem, AffineConstraintAdmissionProblem),
+            isinstance(problem, NewtonTrialLimitProblem),
         )
 
 
@@ -315,6 +320,7 @@ def _gmin_continue(
     delta = None  # the last damped step, whose own solve error the exhaustion floor admits
     local = LocalIterationCheck(problem, tol_rel)
     capabilities = ProblemCapabilities.resolve(problem)
+    limit_changed = False
     for gmin in gmin_stages:
         for _it in range(max(2, max_newton)):
             u_arg, u_dot, u_ddot = form.u_arg(u), form.u_dot(u), form.u_ddot(u)
@@ -337,7 +343,15 @@ def _gmin_continue(
             else:
                 damped = jac + gmin * np.eye(jac.shape[0])
             delta = np.asarray(solve(damped, -r), dtype=float)
-            u = u + delta.reshape(u.shape)
+            proposed = u + delta.reshape(u.shape)
+            u, limit_changed = project_newton_trial(
+                problem,
+                form,
+                u,
+                proposed,
+                affine_projection=capabilities.affine_projection,
+                newton_limit=capabilities.newton_trial_limit,
+            )
     u_arg, u_dot, u_ddot = form.u_arg(u), form.u_dot(u), form.u_ddot(u)
     r = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
     residual = float(np.linalg.norm(r))
@@ -347,7 +361,9 @@ def _gmin_continue(
         return u, bool(local_ok and convergence.rows.accepts(u, r)), residual, False
     if local_ok and (residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0)):
         return u, True, residual, False
-    if local_ok and _at_roundoff_floor(problem, tangent, u, form, capabilities, r, increment=delta):
+    if local_ok and _at_roundoff_floor(
+        problem, tangent, u, form, capabilities, r, increment=None if limit_changed else delta
+    ):
         return u, True, residual, True
     return u, False, residual, False
 
@@ -628,6 +644,7 @@ def _solve_step(
         and jacobian_tangent is None
         and gmin_stages is None
         and held is None
+        and not capabilities.newton_trial_limit
     ):
         # THE PROBLEM'S OWN KERNEL, on the default Newton options only: it is golden-equivalent to
         # this loop on that path and nowhere else, so every other option keeps the loop below.
@@ -659,20 +676,23 @@ def _solve_step(
     )
     tangent_helpful = jacobian_tangent is not None or (alternative is not None and alternative.has_tangent_jacobian)
 
+    # Neither a rejected probe nor a newly discarded solve can supply increment
+    # error evidence for the retained iterate.
+    # An owner-altered trial did NOT execute the full linear solve's correction,
+    # so that discarded correction cannot inflate its generic arithmetic floor.
+    increment_valid = False
+    projected_iterate = False  # provenance of THIS retained, evaluated trial, not a convergence verdict
+    initial_projection_checked = False
+
     def project_trial(value):
-        value = np.asarray(value, dtype=float)
-        if not capabilities.affine_projection:
-            return value
-        alpha = form.weights.alpha0
-        if alpha.imag != 0 or alpha.real == 0:
-            msg = 'affine state constraint projection requires a nonzero real state weight'
-            raise ValueError(msg)
-        argument = form.u_arg(value)
-        projected = np.asarray(problem.project_affine_state(argument.copy(), form.t_eval))
-        if projected.shape != argument.shape or not np.isrealobj(projected) or not np.isfinite(projected).all():
-            msg = 'affine constraint owner must return a same-shape finite real trial state'
-            raise ValueError(msg)
-        return value + (projected - argument) / alpha.real
+        return project_newton_trial(
+            problem,
+            form,
+            u,
+            value,
+            affine_projection=capabilities.affine_projection,
+            newton_limit=capabilities.newton_trial_limit,
+        )
 
     t = form.t_eval
     # THE GUESS IS NOT PROJECTED. A full Newton step lands every affine row exactly, so projecting
@@ -755,7 +775,11 @@ def _solve_step(
             # monotonically, so no stall ratio can be relied on to see it). It is the same floor
             # verdict the exhaustion branch below gives, reached before the ceiling instead of at
             # it (measured on case_a's chopper: 50 iterations, ~30 s a step, at |r| ~ 4e-9).
-            if rows is None and local_ok and _at_roundoff_floor(problem, tangent, u, form, capabilities, r, step):
+            if (
+                rows is None
+                and local_ok
+                and _at_roundoff_floor(problem, tangent, u, form, capabilities, r, step if increment_valid else None)
+            ):
                 converged = True
                 on_floor = True
                 break
@@ -796,25 +820,52 @@ def _solve_step(
             )
             tangent = factor_cache.matrix
         step = du.reshape(u.shape)
-        if max_newton > 1 and line_search == 'directional':
+        directional = max_newton > 1 and line_search == 'directional'
+        if (
+            directional
+            and capabilities.newton_trial_limit
+            and capabilities.affine_projection
+            and not capabilities.affine_admission
+            and not initial_projection_checked
+        ):
+            initial_projection_checked = True
+            # No no-op evidence leaves the existing evaluated recovery in charge.
+            with suppress(TrialNotEvaluable):
+                projected_iterate = affine_projection_is_noop(problem, form, u)
+        restore_ray = (
+            directional
+            and capabilities.newton_trial_limit
+            and capabilities.affine_projection
+            and not (
+                _affine_admitted(problem, form, u, capabilities) if capabilities.affine_admission else projected_iterate
+            )
+        )
+        if directional and not restore_ray:
+            # Search the bounded ray, not a nonlinear path of individually clipped probes.
+            bounded_endpoint, bounded_was_limited = (
+                project_trial(u + step) if capabilities.newton_trial_limit else (None, False)
+            )
             u = directional_line_search(
                 lambda x: np.asarray(problem.residual(form.u_arg(x), form.u_dot(x), form.u_ddot(x), t), dtype=float),
                 u,
-                step,
+                None if bounded_endpoint is not None else step,
                 r,
+                **({'endpoint': bounded_endpoint} if bounded_endpoint is not None else {}),
             )
-        elif max_newton > 1 and backtrack_cap > 0:
+            increment_valid = not bounded_was_limited
+            projected_iterate = capabilities.affine_projection and bounded_endpoint is not None
+        elif max_newton > 1 and (backtrack_cap > 0 or restore_ray):
             limit = residual if backtrack_band is None else backtrack_band * residual
 
             def trial_at(lam, u=u, step=step):
-                u_try = project_trial(u + lam * step)
                 try:
+                    u_try, limited = project_trial(u + lam * step)
                     r_try = problem.residual(form.u_arg(u_try), form.u_dot(u_try), form.u_ddot(u_try), t)
                 except TrialNotEvaluable:
                     # The problem cannot evaluate this trial (an inner solve without a root): the
                     # trial is REJECTED exactly like one whose residual is too large -- halve.
                     return None
-                return u_try, float(np.linalg.norm(np.asarray(r_try, dtype=float))), r_try
+                return u_try, float(np.linalg.norm(np.asarray(r_try, dtype=float))), r_try, limited
 
             def accepts_trial(_lam, trial):
                 # An already floor-limited row can mask progress on another
@@ -829,17 +880,26 @@ def _solve_step(
                 if rows is not None:
                     return trial[1] < limit or rows.accepts(trial[0], trial[2])
                 return trial[1] < limit or _at_roundoff_floor(
-                    problem, tangent, trial[0], form, capabilities, trial[2], step
+                    problem, tangent, trial[0], form, capabilities, trial[2], None if trial[3] else step
                 )
 
-            search = backtracking(trial_at, accepts_trial, tries=backtrack_cap)
+            # The first unprojected linearization keeps its old semantics. Its
+            # recovery must earn the SAME existing merit before an energy ray
+            # can inherit projector/limiter provenance, never bitwise idempotence.
+            search = backtracking(trial_at, accepts_trial, tries=max(1, backtrack_cap))
             raised = search.accepted and search.trial[1] >= residual
             if search.accepted:
                 u = search.trial[0]
+                increment_valid = not search.trial[3]
+                projected_iterate = capabilities.affine_projection
             else:
                 # Exhausted: take the next, untried step only if the last trial could be evaluated at all.
-                if search.trial is not None:
-                    u = project_trial(u + search.step * step)
+                if search.trial is not None and not restore_ray:
+                    u, limited = project_trial(u + search.step * step)
+                    increment_valid = not limited
+                    projected_iterate = False
+                else:
+                    increment_valid = False
                 capped = True
             if tangent_active and (capped or raised):
                 # THE POLISH IS A TRIAL, NOT A ONE-WAY SWITCH: an alternative operator whose step
@@ -852,7 +912,9 @@ def _solve_step(
                 # t = 4.44 ms step 158 -> 445 over 100 iterations; withheld, it converged in 12.
                 tangent_active, polish_spent, slow = False, True, 0
         else:
-            u = project_trial(u + step)
+            u, limited = project_trial(u + step)
+            increment_valid = not limited
+            projected_iterate = False
     else:
         # The ceiling exhausted: re-evaluate the residual at the FINAL u (the last solve's
         # result). The loop's last check read the PRE-solve guess -- reporting that would
@@ -865,7 +927,11 @@ def _solve_step(
         # At the ceiling the bar alone decides: there is no further iteration to wait for.
         if local_ok and (rows.accepts(u, r) if rows is not None else met(residual, r, u)):
             converged = True
-        elif rows is None and local_ok and _at_roundoff_floor(problem, tangent, u, form, capabilities, r, step):
+        elif (
+            rows is None
+            and local_ok
+            and _at_roundoff_floor(problem, tangent, u, form, capabilities, r, step if increment_valid else None)
+        ):
             on_floor = True
             # THE ARITHMETIC FLOOR, and the reason an exactly-solved LINEAR step no longer lies.
             # ``tol`` is ABSOLUTE on a residual whose scale is the supply, so the same one-Newton
