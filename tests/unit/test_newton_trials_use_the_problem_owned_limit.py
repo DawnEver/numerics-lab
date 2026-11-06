@@ -321,7 +321,12 @@ def test_no_accepted_trial_means_no_new_linear_solve_floor_evidence(has_limit):
 
 @pytest.mark.parametrize(
     ('start', 'direction', 'endpoint'),
-    [([0.0], [2.0], [1.0]), ([0.0], [np.inf], [1.0]), ([np.finfo(float).max], [-np.inf], [-np.finfo(float).max])],
+    [
+        ([0.0], [1.0], [1.0]),
+        ([0.0], [2.0], [1.0]),
+        ([0.0], [np.inf], [1.0]),
+        ([np.finfo(float).max], [-np.inf], [-np.finfo(float).max]),
+    ],
 )
 def test_an_explicit_endpoint_cannot_declare_a_different_or_nonfinite_direction(start, direction, endpoint):
     with pytest.raises(ValueError, match='direction'):

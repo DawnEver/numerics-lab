@@ -764,11 +764,10 @@ def _solve_step(
             bounded_endpoint, bounded_was_limited = (
                 project_trial(u + step) if capabilities.newton_trial_limit else (None, False)
             )
-            bounded_step = bounded_endpoint - u if bounded_endpoint is not None else step
             u = directional_line_search(
                 lambda x: np.asarray(problem.residual(form.u_arg(x), form.u_dot(x), form.u_ddot(x), t), dtype=float),
                 u,
-                bounded_step,
+                None if bounded_endpoint is not None else step,
                 r,
                 **({'endpoint': bounded_endpoint} if bounded_endpoint is not None else {}),
             )
