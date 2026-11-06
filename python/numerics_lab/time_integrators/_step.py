@@ -46,6 +46,7 @@ __all__ = [
     'HELD_STALL_RATIO',
     'HeldFactor',
     'ProblemCapabilities',
+    'RowConvergence',
     'RowVerdict',
     'StepOutcome',
     'TrialNotEvaluable',
@@ -290,6 +291,7 @@ def _gmin_continue(
     tol_rel: float | None,
     residual_0: float,
     gmin_stages: tuple[float, ...],
+    convergence: RowConvergence | None = None,
 ) -> tuple[NDArray[np.floating], bool, float, bool]:
     """The gmin continuation for an exhausted step: solve ``(J + gmin I) delta = -R`` for
     each stage, the residual always the TRUE one (the same contract the DC-op's
@@ -302,6 +304,10 @@ def _gmin_continue(
     Returns ``(u, converged, residual, on_floor)``; ``on_floor`` says the verdict was the
     FLOOR's rather than the bar's, so :class:`TransientSolution` can record WHICH one carried
     the step.
+
+    Under a per-row verdict ``convergence`` (a fresh :class:`RowConvergence` for this path) replaces the
+    norm bars and the floor: a solved iterate is accepted by the SAME rule the plain Newton is -- every
+    row within its bar, iterated to round-off -- and the spent continuation by its bar alone.
     """
     t = form.t_eval
     u = np.asarray(guess, dtype=float).copy()
@@ -318,7 +324,11 @@ def _gmin_continue(
             stable = local.observe(u, t)
             local_ok = local.accepts(stable, residual, initial=initial)
             local_ok = local_ok and _affine_admitted(problem, form, u, capabilities)
-            if local_ok and (residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0)):
+            if convergence is not None:
+                # Only a SOLVED iterate is admitted (the plain loop's rule): the guess itself never is.
+                if local_ok and delta is not None and convergence.met(u, r, delta):
+                    return u, True, residual, False
+            elif local_ok and (residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0)):
                 return u, True, residual, False
             jac = problem.jacobian(u_arg, u_dot, u_ddot, t, form.weights)
             tangent = jac
@@ -333,6 +343,8 @@ def _gmin_continue(
     residual = float(np.linalg.norm(r))
     local_ok = local.observe(u, t)
     local_ok = local_ok and _affine_admitted(problem, form, u, capabilities)
+    if convergence is not None:
+        return u, bool(local_ok and convergence.rows.accepts(u, r)), residual, False
     if local_ok and (residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0)):
         return u, True, residual, False
     if local_ok and _at_roundoff_floor(problem, tangent, u, form, capabilities, r, increment=delta):
@@ -370,7 +382,9 @@ class RowVerdict:
 
 
 class RowAcceptance:
-    """The per-row step verdict: every row of the step residual at :data:`ADMISSION_BAR` of its own scale.
+    """The per-row step verdict: every row of the step residual within ``tol`` of its own scale.
+
+    ``tol`` defaults to :data:`ADMISSION_BAR`; :class:`RowConvergence` decides when to stop iterating.
 
     The scale is the admission's: ``|F_u| |u| + |F_u'| |u'| + |F(u, 0)|``, so a step this accepts is a
     state the finite-storage admission at the next law change can admit (ruling 2026-10-14; the NORM
@@ -397,9 +411,11 @@ class RowAcceptance:
     _SCREEN = 10.0
     _NEAR = 1e-3
 
-    def __init__(self, problem, form) -> None:
-        self.problem, self.form = problem, form
-        self.bars = self.judged = self.judged_rate = self.worst = None
+    def __init__(self, problem, form, tol: float = ADMISSION_BAR) -> None:
+        self.problem, self.form, self.tol = problem, form, tol
+        #: ``bars`` is the verdict; ``roundoff`` the same rows at ``FLOOR_SAFETY eps`` of their scale (never
+        #: above ``bars``) -- the floor no Newton step goes below. Both are read at the last judged iterate.
+        self.bars = self.roundoff = self.judged = self.judged_rate = self.worst = None
 
     def accepts(self, u, r) -> bool:
         residual = np.abs(np.asarray(r, dtype=float))
@@ -431,11 +447,14 @@ class RowAcceptance:
             resolved = np.maximum(resolved, np.abs(np.asarray(declared(u), dtype=float)).reshape(resolved.shape))
         built = abs(form.weights.alpha1.real) * resolved
         floor = FLOOR_SAFETY * float(np.finfo(float).eps) * np.asarray(magnitudes[1] @ built).ravel()
-        own = ADMISSION_BAR * scale
+        relative = self.tol * scale
         # A HOMOGENEOUS row (``u_i = 0`` beside a coupled system) holds only the solve's rounding, and its
-        # own bar ``ADMISSION_BAR |u_i|`` sits below its own residual for every nonzero iterate.
-        own = _noise_judged(problem, form, u, own, scale, system_resolution(scale))
+        # own bar ``tol |u_i|`` sits below its own residual for every nonzero iterate.
+        own = _noise_judged(problem, form, u, relative, scale, system_resolution(scale))
         self.bars = np.maximum(own, floor)
+        # A noise row's bar IS the system's resolution, a round-off already; every other row rounds at its own scale.
+        rounding = np.where(own != relative, own, FLOOR_SAFETY * float(np.finfo(float).eps) * scale)
+        self.roundoff = np.minimum(np.maximum(rounding, floor), self.bars)
         self.judged, self.judged_rate = u.copy(), rate.copy()
         with np.errstate(divide='ignore', invalid='ignore'):
             ratios = np.where(self.bars > 0, residual / self.bars, np.where(residual > 0, np.inf, 0.0))
@@ -456,6 +475,49 @@ class RowAcceptance:
 def _near(value, judged, relative: float) -> bool:
     """``value`` within ``relative`` of ``judged`` in their own max norm (a zero vector is near only to itself)."""
     return bool(np.max(np.abs(value - judged), initial=0.0) <= relative * np.max(np.abs(value), initial=0.0))
+
+
+#: A correction that no longer HALVES the per-row scaled residual has left Newton's quadratic regime:
+#: the rows are at their rounding (which reshuffles, never halves) or the iteration is only linear.
+#: Either way more iterations buy nothing the bar does not already certify.
+_STAGNATION_RATIO = 0.5
+
+
+class RowConvergence:
+    """Per-row acceptance carried to ROUND-OFF: within the bar, then Newton is allowed to finish.
+
+    A fixed ``ADMISSION_BAR`` of each row's scale is LOOSER than the arithmetic on a well-scaled step:
+    the quadratic last step lands at round-off, and stopping one step early left a varistor's exponent at
+    rel 2.9e-11 where the global-norm march reached 2e-15 (motronics, 2026-11-06). With ``tol=None`` an
+    iterate within :data:`ADMISSION_BAR` is accepted only once (a) every row is at its round-off bar
+    (:attr:`RowAcceptance.roundoff`), or (b) Newton has STAGNATED: the last correction did not halve
+    ``max |r_i| / roundoff_i`` (:data:`_STAGNATION_RATIO`), or it was itself at the state's round-off.
+    A caller's ``tol`` LOOSENS the bar for cost: an iterate within it is accepted at once.
+    """
+
+    def __init__(self, problem, form, tol: float | None = None) -> None:
+        self.rows = RowAcceptance(problem, form, ADMISSION_BAR if tol is None else tol)
+        self.to_roundoff = tol is None
+        self.scaled: float | None = None
+
+    def met(self, u, r, step) -> bool:
+        """Whether the solved iterate ``u`` (residual ``r``, reached by the correction ``step``) is accepted."""
+        if not self.rows.accepts(u, r):
+            return False
+        if not self.to_roundoff:
+            return True
+        residual, roundoff = np.abs(np.asarray(r, dtype=float)), self.rows.roundoff
+        if np.all(residual <= roundoff):
+            return True
+        # Within the bar, so a row whose round-off bar is zero holds a zero residual: it is finished.
+        scaled = float(np.max(np.divide(residual, roundoff, out=np.zeros_like(residual), where=roundoff > 0)))
+        previous, self.scaled = self.scaled, scaled
+        if previous is not None and scaled > _STAGNATION_RATIO * previous:
+            return True
+        if step is None:
+            return False
+        resolved = FLOOR_SAFETY * float(np.finfo(float).eps) * np.abs(np.asarray(u, dtype=float))
+        return bool(np.all(np.abs(np.asarray(step, dtype=float)).reshape(resolved.shape) <= resolved))
 
 
 def _locally_stable(local: LocalIterationCheck, u, t, observed, tangent) -> bool:
@@ -491,6 +553,7 @@ def _solve_step(
     held: HeldFactor | None = None,
     capabilities: ProblemCapabilities | None = None,
     row_acceptance: bool = False,
+    row_tol: float | None = None,
     row_report: list | None = None,
 ) -> NDArray[np.floating]:
     """Advance one step by a Newton loop on ``residual(u_arg, u_dot, u_ddot, t)`` for ``u_{n+1}``.
@@ -535,11 +598,15 @@ def _solve_step(
     rides out to :attr:`TransientSolution.floor_converged_times`.
 
     ``row_acceptance`` replaces every norm verdict (``tol``, ``tol_rel`` and the arithmetic floor) by
-    :class:`RowAcceptance`; it is the one bar there is, so the norm bars and the gmin continuation
-    beside it refuse.
+    :class:`RowConvergence`: every row within its bar, iterated to its own round-off. ``row_tol`` is its
+    one relative bar, ``None`` = round-off; a caller LOOSENS it for cost. The norm bar ``tol_rel`` beside
+    it refuses; the gmin continuation composes with it (a continuation is a path, not a bar).
     """
-    if row_acceptance and (tol_rel is not None or gmin_stages is not None):
-        msg = 'a per-row step acceptance is the only bar: it takes no tol_rel and no gmin continuation'
+    if row_acceptance and tol_rel is not None:
+        msg = 'a per-row step acceptance is the only bar: pass its relative bar as row_tol, not tol_rel'
+        raise ValueError(msg)
+    if row_tol is not None and not (row_acceptance and np.isfinite(row_tol) and row_tol > 0):
+        msg = f'row_tol is the per-row acceptance bar: it needs row_acceptance and a finite positive value, got {row_tol!r}'
         raise ValueError(msg)
     if capabilities is None:
         capabilities = ProblemCapabilities.resolve(problem)
@@ -634,14 +701,15 @@ def _solve_step(
     # equal jacobian -- stands in, and a hit still never pays a build.
     tangent = None
     step = None  # the last full Newton step: its solve's backward error is part of the floor
-    local = LocalIterationCheck(problem, ADMISSION_BAR if row_acceptance else tol_rel)
+    local = LocalIterationCheck(problem, (ADMISSION_BAR if row_tol is None else row_tol) if row_acceptance else tol_rel)
     observed = None  # the iterate the local check last observed, for the resolution test
 
-    rows = RowAcceptance(problem, form) if row_acceptance else None
+    convergence = RowConvergence(problem, form, row_tol) if row_acceptance else None
+    rows = None if convergence is None else convergence.rows
 
     def met(residual, r, u):
-        if rows is not None:
-            return rows.accepts(u, r)
+        if convergence is not None:
+            return convergence.met(u, r, step)
         return residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0)
 
     for _it in range(1, max_newton + 1):
@@ -794,7 +862,8 @@ def _solve_step(
         residual = float(np.linalg.norm(r))
         local_ok = _locally_stable(local, u, t, observed, tangent)
         local_ok = local_ok and _affine_admitted(problem, form, u, capabilities)
-        if local_ok and met(residual, r, u):
+        # At the ceiling the bar alone decides: there is no further iteration to wait for.
+        if local_ok and (rows.accepts(u, r) if rows is not None else met(residual, r, u)):
             converged = True
         elif rows is None and local_ok and _at_roundoff_floor(problem, tangent, u, form, capabilities, r, step):
             on_floor = True
@@ -833,6 +902,7 @@ def _solve_step(
             tol_rel=tol_rel,
             residual_0=residual_0,
             gmin_stages=gmin_stages,
+            convergence=None if convergence is None else RowConvergence(problem, form, row_tol),
         )
         if conv_g:
             u = u_g
