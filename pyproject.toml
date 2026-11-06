@@ -93,5 +93,4 @@ NETWORK-VERB = "<venv python> -m dev_lab.dev.netverb -- <git push|fetch|pull|clo
 ENV-MUTATION-THROUGH-THE-DOOR = "<any family venv python> -m dev_lab.dev.dep --bootstrap <this checkout> --extra dev  (run from this checkout)"
 
 [tool.uv.sources]
-# Held at 6f6b042a (#116): the review door runs from the base, which must take --keys-env before the render passes it; relock 2 floats it again.
-dev-lab = { git = "https://github.com/DawnEver/dev-lab.git", rev = "6f6b042a558fd11a4ea17a0fc6f364b3ab4bb4d3" }
+dev-lab = { git = "https://github.com/DawnEver/dev-lab.git", branch = "integrate/main" }
