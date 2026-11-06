@@ -13,18 +13,20 @@ def _physical(value, shape, owner):
     return value
 
 
-def _lift(form, endpoint, physical, argument):
+def _lift(form, endpoint, physical, argument, *, incremental=False):
     alpha = form.weights.alpha0
     if alpha.imag != 0.0 or alpha.real == 0.0:
         msg = 'physical trial transformations require a nonzero real state weight'
         raise ValueError(msg)
     if np.array_equal(physical, argument):
         return endpoint
-    # Do not cancel the small bound against the discarded, possibly enormous proposal.
-    # A huge history offset can still make a physical value unrepresentable in endpoint
-    # coordinates; all residual/admission checks use the reconstructed state, not this target.
+    # Affine projection corrects the existing endpoint; rebuilding it from a
+    # large history offset needlessly loses precision. A limiter instead owns
+    # the small bounded physical point, not the discarded enormous proposal.
     with np.errstate(over='ignore', invalid='ignore'):
-        lifted = (physical - form.h_u) / alpha.real
+        lifted = endpoint + (physical - argument) / alpha.real if incremental else (physical - form.h_u) / alpha.real
+    # A changed row grants no authority to perturb untouched endpoint rows.
+    lifted = np.where(physical == argument, endpoint, lifted)
     if not np.isfinite(lifted).all():
         msg = 'the bounded physical trial cannot be lifted to a finite endpoint'
         raise ValueError(msg)
@@ -41,7 +43,7 @@ def project_newton_trial(problem, form, previous, proposed, *, affine_projection
         projected = _physical(
             problem.project_affine_state(argument.copy(), form.t_eval), argument.shape, 'affine constraint owner'
         )
-        value = _lift(form, value, projected, argument)
+        value = _lift(form, value, projected, argument, incremental=True)
     if newton_limit:
         argument = form.u_arg(value)
         limited = _physical(

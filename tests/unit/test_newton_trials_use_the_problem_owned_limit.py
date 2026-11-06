@@ -226,6 +226,26 @@ def test_lifting_a_small_bound_does_not_cancel_against_the_discarded_large_propo
     np.testing.assert_array_equal(form.u_arg(endpoint), [offset + 1.0])
 
 
+@pytest.mark.parametrize('limited', [False, True])
+def test_affine_projection_preserves_untouched_endpoint_rows_with_nonbinary_weights_and_history(limited):
+    class Projected:
+        def project_affine_state(self, state, time):
+            state[0] = 1.0
+            return state
+
+        def limit_newton_trial(self, previous, proposed, time):
+            return proposed
+
+    zero = np.zeros(2)
+    form = StepForm(DerivativeWeights(0.3, 0, 0), np.array([0.7, 0.7]), zero, zero, 1.0)
+    proposed = np.array([0.0, 0.12345678901234568])
+    endpoint = project_newton_trial(Projected(), form, zero, proposed, affine_projection=True, newton_limit=limited)
+    expected = proposed + (np.array([1.0, form.u_arg(proposed)[1]]) - form.u_arg(proposed)) / 0.3
+    np.testing.assert_array_equal(endpoint, expected)
+    assert endpoint[1].tobytes() == proposed[1].tobytes()
+    assert form.u_arg(endpoint)[0] == 1.0
+
+
 def test_directional_search_keeps_the_representable_bounded_endpoint_after_a_huge_correction():
     class PositiveDomain:
         def __init__(self) -> None:
