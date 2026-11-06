@@ -117,6 +117,7 @@ from numerics_lab.time_integrators.event_checkpoint import EventCheckpointState
 from numerics_lab.time_integrators.factor_reuse import FactorCache
 from numerics_lab.time_integrators.instants import same_instant
 from numerics_lab.time_integrators.periodic import (
+    accepted_jacobian,
     bdf2_boundary_moment,
     canonical_eec_window,
     explicit_error_correction,
@@ -1141,7 +1142,7 @@ def integrate_transient(
             if eec_nonlinear_first_order:
                 cycle_converged = cycle_converged and converged
                 zero = np.zeros_like(u_new)
-                tangent = problem.jacobian(u_new, zero, zero, t_new, DerivativeWeights(alpha0=1.0)) * step_dt
+                tangent = accepted_jacobian(problem, u_new, zero, zero, t_new, DerivativeWeights(alpha0=1.0)) * step_dt
                 integrated_tangent = tangent if integrated_tangent is None else integrated_tangent + tangent
         steady = (
             steady_period is not None
