@@ -15,7 +15,15 @@ from dev_lab.dev.githooks.runner import hook_table
 
 _ROOT: Final = Path(__file__).resolve().parents[2]
 
-_DECLARED_STAGES: Final = frozenset({'commit-msg', 'post-commit', 'pre-commit', 'pre-push'})
+# post-merge and post-checkout: dev-lab VENV-FOLLOWS-THE-LOCK (user ruling 2026-11-04).
+_DECLARED_STAGES: Final = frozenset({
+    'commit-msg',
+    'post-checkout',
+    'post-commit',
+    'post-merge',
+    'pre-commit',
+    'pre-push',
+})
 
 
 def _row_module(stage: str, hook_id: str) -> str:

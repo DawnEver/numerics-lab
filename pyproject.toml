@@ -45,7 +45,6 @@ xfail_strict = true
 markers = [
     "unit: fast unit tests",
     "timeout: per-test ceiling (pytest-timeout)",
-    "workstation: needs a live checkout or agent tooling (hooks, origin refs, worktrees, node)",
 ]
 
 
@@ -64,12 +63,9 @@ collect = 'tests'
 
 [tool.dev_lab.parts]
 output = "output/logs"
-# User ruling 2026-10-30: no hosted runner is a workstation; the agent-guard tests need the installed guard.
-unproduced = ["workstation"]
 
 [tool.lab_commons.tests]
 produce = ["-m", "dev_lab.dev.verify", "--part", "{part}"]
-resources = ["workstation"]
 
 # The family branch flow: integrate/main coordinates; main moves only by `integrate promote` (fast-forward)
 # on a full forge PASS. integrate/main is cut at main's tip at adoption, so every commit after it is a merge.
