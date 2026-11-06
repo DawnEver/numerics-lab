@@ -13,7 +13,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 
 #: old spelling -> what replaced it (2026-10-18, Track B3).
 RETIRED: dict[str, str] = {
-    'time_integrators._trials.projection_fixed_point': 'retained owner-projected trial provenance, or explicit affine admission',
+    'projection_fixed_point': 'retained owner-projected trial provenance, or explicit affine admission',
     'linear::dirichlet': 'linear::constrained::fixed_values (pin_rows: linear::constrained::pin_rows)',
     'linear::constraints': 'linear::constrained::master_slave',
     'mod dirichlet': 'mod fixed_values',
@@ -34,6 +34,17 @@ def _sources() -> list[Path]:
 
 def test_the_scan_sees_a_planted_retired_spelling() -> None:
     assert live_spellings('use crate::linear::dirichlet::pin_rows;\nfine') == {'linear::dirichlet'}
+
+
+def test_the_removed_trial_helper_is_seen_in_each_real_python_spelling() -> None:
+    old = next(name for name, replacement in RETIRED.items() if replacement.startswith('retained owner-projected'))
+    for source in (
+        f'from numerics_lab.time_integrators._trials import {old}',
+        f'from ._trials import {old}',
+        f'_trials.{old}(problem)',
+        f'def {old}(problem): pass',
+    ):
+        assert live_spellings(source) == {old}
 
 
 def test_no_source_spells_a_retired_name() -> None:
