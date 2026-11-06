@@ -45,7 +45,7 @@ def test_the_row_bar_holds_every_row_at_its_own_scale() -> None:
 
 
 def test_the_row_bar_is_the_only_bar() -> None:
-    with pytest.raises(ValueError, match='only bar'):
+    with pytest.raises(ValueError, match='row_tol'):
         _march(row_acceptance=True, tol_rel=1e-12)
 
 

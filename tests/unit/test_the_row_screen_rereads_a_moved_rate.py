@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from numerics_lab.formulation import DerivativeWeights
+from numerics_lab.linear.resolution import ADMISSION_BAR
 from numerics_lab.time_integrators._step import _solve_step
 
 ALPHA1 = 1e6
@@ -58,6 +59,7 @@ def test_an_iterate_whose_rate_moved_is_reread_not_screened_against_rest_bars():
         max_newton=4,
         tol=1e-50,
         row_acceptance=True,
+        row_tol=ADMISSION_BAR,  # the screen at the fixed bar; to round-off, stagnation costs one more iteration
     )
     assert converged
     assert iterations == 2

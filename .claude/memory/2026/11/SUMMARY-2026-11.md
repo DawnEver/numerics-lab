@@ -19,6 +19,8 @@ catalogue and an invalid new positive fixture: march explicitly forbids
 on_accept with EEC. Preserve that guard and reassess the consumer contract.
 The earlier dated source note's observer-order rationale is not evidence of
 a reachable physical-history/EEC path. No consumer pin has changed.
+Per-row step acceptance now iterates to round-off
+(`06/row-acceptance-iterates-to-round-off.md`; not a plan entry).
 
 ## Plans
 
