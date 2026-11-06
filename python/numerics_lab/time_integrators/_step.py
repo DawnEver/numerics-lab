@@ -313,7 +313,7 @@ def _gmin_continue(
     delta = None  # the last damped step, whose own solve error the exhaustion floor admits
     local = LocalIterationCheck(problem, tol_rel)
     capabilities = ProblemCapabilities.resolve(problem)
-    limit_changed = [False]
+    limit_changed = False
     for gmin in gmin_stages:
         for _it in range(max(2, max_newton)):
             u_arg, u_dot, u_ddot = form.u_arg(u), form.u_dot(u), form.u_ddot(u)
@@ -333,14 +333,13 @@ def _gmin_continue(
                 damped = jac + gmin * np.eye(jac.shape[0])
             delta = np.asarray(solve(damped, -r), dtype=float)
             proposed = u + delta.reshape(u.shape)
-            u = project_newton_trial(
+            u, limit_changed = project_newton_trial(
                 problem,
                 form,
                 u,
                 proposed,
                 affine_projection=capabilities.affine_projection,
                 newton_limit=capabilities.newton_trial_limit,
-                limit_changed=limit_changed,
             )
     u_arg, u_dot, u_ddot = form.u_arg(u), form.u_dot(u), form.u_ddot(u)
     r = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
@@ -350,7 +349,7 @@ def _gmin_continue(
     if local_ok and (residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0)):
         return u, True, residual, False
     if local_ok and _at_roundoff_floor(
-        problem, tangent, u, form, capabilities, r, increment=None if limit_changed[0] else delta
+        problem, tangent, u, form, capabilities, r, increment=None if limit_changed else delta
     ):
         return u, True, residual, True
     return u, False, residual, False
@@ -613,7 +612,7 @@ def _solve_step(
     # error evidence for the retained iterate.
     # An owner-altered trial did NOT execute the full linear solve's correction,
     # so that discarded correction cannot inflate its generic arithmetic floor.
-    trial_limited, increment_valid = [False], False
+    increment_valid = False
 
     def project_trial(value):
         return project_newton_trial(
@@ -623,7 +622,6 @@ def _solve_step(
             value,
             affine_projection=capabilities.affine_projection,
             newton_limit=capabilities.newton_trial_limit,
-            limit_changed=trial_limited,
         )
 
     t = form.t_eval
@@ -753,9 +751,10 @@ def _solve_step(
         step = du.reshape(u.shape)
         if max_newton > 1 and line_search == 'directional':
             # Search the bounded ray, not a nonlinear path of individually clipped probes.
-            bounded_endpoint = project_trial(u + step) if capabilities.newton_trial_limit else None
+            bounded_endpoint, bounded_was_limited = (
+                project_trial(u + step) if capabilities.newton_trial_limit else (None, False)
+            )
             bounded_step = bounded_endpoint - u if bounded_endpoint is not None else step
-            bounded_was_limited = trial_limited[0] if bounded_endpoint is not None else False
             if capabilities.newton_trial_limit and capabilities.affine_projection:
                 feasible = (
                     _affine_admitted(problem, form, u, capabilities)
@@ -780,13 +779,13 @@ def _solve_step(
 
             def trial_at(lam, u=u, step=step):
                 try:
-                    u_try = project_trial(u + lam * step)
+                    u_try, limited = project_trial(u + lam * step)
                     r_try = problem.residual(form.u_arg(u_try), form.u_dot(u_try), form.u_ddot(u_try), t)
                 except TrialNotEvaluable:
                     # The problem cannot evaluate this trial (an inner solve without a root): the
                     # trial is REJECTED exactly like one whose residual is too large -- halve.
                     return None
-                return u_try, float(np.linalg.norm(np.asarray(r_try, dtype=float))), r_try, trial_limited[0]
+                return u_try, float(np.linalg.norm(np.asarray(r_try, dtype=float))), r_try, limited
 
             def accepts_trial(_lam, trial):
                 # An already floor-limited row can mask progress on another
@@ -812,8 +811,8 @@ def _solve_step(
             else:
                 # Exhausted: take the next, untried step only if the last trial could be evaluated at all.
                 if search.trial is not None:
-                    u = project_trial(u + search.step * step)
-                    increment_valid = not trial_limited[0]
+                    u, limited = project_trial(u + search.step * step)
+                    increment_valid = not limited
                 else:
                     increment_valid = False
                 capped = True
@@ -828,8 +827,8 @@ def _solve_step(
                 # t = 4.44 ms step 158 -> 445 over 100 iterations; withheld, it converged in 12.
                 tangent_active, polish_spent, slow = False, True, 0
         else:
-            u = project_trial(u + step)
-            increment_valid = not trial_limited[0]
+            u, limited = project_trial(u + step)
+            increment_valid = not limited
     else:
         # The ceiling exhausted: re-evaluate the residual at the FINAL u (the last solve's
         # result). The loop's last check read the PRE-solve guess -- reporting that would

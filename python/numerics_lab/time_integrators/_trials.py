@@ -33,11 +33,10 @@ def _lift(form, endpoint, physical, argument, *, incremental=False):
     return lifted
 
 
-def project_newton_trial(problem, form, previous, proposed, *, affine_projection, newton_limit, limit_changed=None):
-    """Project, then limit, at the stage's physical time; neither operation advances history."""
+def project_newton_trial(problem, form, previous, proposed, *, affine_projection, newton_limit):
+    """Return the endpoint and whether its owner limited it; do not advance history."""
     value = np.asarray(proposed, dtype=float)
-    if limit_changed is not None:
-        limit_changed[0] = False
+    limited_trial = False
     if affine_projection:
         argument = form.u_arg(value)
         projected = _physical(
@@ -51,10 +50,9 @@ def project_newton_trial(problem, form, previous, proposed, *, affine_projection
             argument.shape,
             'Newton trial limit',
         )
-        if limit_changed is not None:
-            limit_changed[0] = not np.array_equal(limited, argument)
+        limited_trial = not np.array_equal(limited, argument)
         value = _lift(form, value, limited, argument)
-    return value
+    return value, limited_trial
 
 
 def projection_fixed_point(problem, form, endpoint):

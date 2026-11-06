@@ -141,10 +141,11 @@ def test_the_limit_sees_the_physical_stage_and_not_the_endpoint_coordinate(weigh
     zero = np.zeros(1)
     form = StepForm(DerivativeWeights(weight, 0, 0), np.array([2.0]), zero, zero, 1.0)
     problem = LimitedProblem()
-    endpoint = project_newton_trial(
+    endpoint, limited = project_newton_trial(
         problem, form, zero, np.array([100.0 / weight]), affine_projection=False, newton_limit=True
     )
     np.testing.assert_allclose(form.u_arg(endpoint), [3.0], rtol=0, atol=1e-14)
+    assert limited
     np.testing.assert_array_equal(problem.proposals[0][0], [2.0])
     np.testing.assert_array_equal(problem.proposals[0][1], [102.0])
 
@@ -220,10 +221,11 @@ def test_an_unevaluable_probe_cannot_replace_the_retained_iterates_floor_provena
 def test_lifting_a_small_bound_does_not_cancel_against_the_discarded_large_proposal(offset, weight):
     zero = np.zeros(1)
     form = StepForm(DerivativeWeights(weight, 0, 0), np.array([offset]), zero, zero, 1.0)
-    endpoint = project_newton_trial(
+    endpoint, limited = project_newton_trial(
         LimitedProblem(), form, zero, np.array([1e20]), affine_projection=False, newton_limit=True
     )
     np.testing.assert_array_equal(form.u_arg(endpoint), [offset + 1.0])
+    assert limited
 
 
 @pytest.mark.parametrize('limited', [False, True])
@@ -239,11 +241,14 @@ def test_affine_projection_preserves_untouched_endpoint_rows_with_nonbinary_weig
     zero = np.zeros(2)
     form = StepForm(DerivativeWeights(0.3, 0, 0), np.array([0.7, 0.7]), zero, zero, 1.0)
     proposed = np.array([0.0, 0.12345678901234568])
-    endpoint = project_newton_trial(Projected(), form, zero, proposed, affine_projection=True, newton_limit=limited)
+    endpoint, changed = project_newton_trial(
+        Projected(), form, zero, proposed, affine_projection=True, newton_limit=limited
+    )
     expected = proposed + (np.array([1.0, form.u_arg(proposed)[1]]) - form.u_arg(proposed)) / 0.3
     np.testing.assert_array_equal(endpoint, expected)
     assert endpoint[1].tobytes() == proposed[1].tobytes()
     assert form.u_arg(endpoint)[0] == 1.0
+    assert not changed, 'affine projection is not evidence of limiter alteration'
 
 
 def test_directional_search_keeps_the_representable_bounded_endpoint_after_a_huge_correction():
