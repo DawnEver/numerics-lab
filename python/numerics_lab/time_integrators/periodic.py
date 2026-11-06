@@ -33,18 +33,20 @@ rule every solve here follows -- a periodic state that is not periodic is not an
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from numbers import Integral, Real
 
 import numpy as np
 from numpy.typing import NDArray
 
-from numerics_lab.formulation import DerivativeWeights
+from numerics_lab.formulation import AcceptedLinearizationProblem, DerivativeWeights
 from numerics_lab.time_integrators._forms import TransientSolution
 from numerics_lab.time_integrators.instants import same_instant
 
 __all__ = [
     'PeriodicFixedPoint',
+    'accepted_jacobian',
     'bdf2_boundary_moment',
     'canonical_eec_window',
     'explicit_error_correction',
@@ -125,6 +127,21 @@ def bdf2_boundary_moment(history):
     return 1.5 * history[-1] - 0.5 * history[-2]
 
 
+def accepted_jacobian(problem, state, rate, acceleration, time, weights):
+    """Read one actual accepted EEC matrix under its optional outgoing law owner.
+
+    Preserve all original arguments, derivative weights and return identity.
+    Ordinary stateless problems need no new method and keep their exact path.
+    """
+    scope = (
+        problem.accepted_linearization_scope(time)
+        if isinstance(problem, AcceptedLinearizationProblem)
+        else nullcontext()
+    )
+    with scope:
+        return problem.jacobian(state, rate, acceleration, time, weights)
+
+
 def nonlinear_error_correction(problem, current, previous, time, integrated_tangent, *, solve):
     """Uniform BE coarse linearization using the actual cycle-integrated Jacobian.
 
@@ -133,7 +150,7 @@ def nonlinear_error_correction(problem, current, previous, time, integrated_tang
     has no global contraction guarantee and is not proprietary HTP-EEC.
     """
     zero = np.zeros_like(current)
-    mass = problem.jacobian(current, zero, zero, time, DerivativeWeights(alpha0=0.0, alpha1=1.0))
+    mass = accepted_jacobian(problem, current, zero, zero, time, DerivativeWeights(alpha0=0.0, alpha1=1.0))
     return current + np.asarray(solve(integrated_tangent, mass @ (current - previous)), dtype=float)
 
 
@@ -161,8 +178,8 @@ def explicit_error_correction(problem, current, previous, period, time, *, solve
         msg = 'EEC correction interval must be a positive finite scalar'
         raise ValueError(msg)
     zero = np.zeros_like(current)
-    stiffness = problem.jacobian(current, zero, zero, time, DerivativeWeights(alpha0=1.0))
-    mass = problem.jacobian(current, zero, zero, time, DerivativeWeights(alpha0=0.0, alpha1=1.0))
+    stiffness = accepted_jacobian(problem, current, zero, zero, time, DerivativeWeights(alpha0=1.0))
+    mass = accepted_jacobian(problem, current, zero, zero, time, DerivativeWeights(alpha0=0.0, alpha1=1.0))
     if sign == -1:
         correction = solve(stiffness + 2 * mass / period, -mass @ ((current + previous) / period))
         return current + np.asarray(correction, dtype=float)
