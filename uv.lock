@@ -326,8 +326,8 @@ wheels = [
 
 [[package]]
 name = "dev-lab"
-version = "0.0.1.dev2296+gf359db349"
-source = { git = "https://github.com/DawnEver/dev-lab.git#f359db349e804e6037bc40263a4b990d5d8dd51f" }
+version = "0.0.1.dev2274+g6f6b042a5"
+source = { git = "https://github.com/DawnEver/dev-lab.git?rev=6f6b042a558fd11a4ea17a0fc6f364b3ab4bb4d3#6f6b042a558fd11a4ea17a0fc6f364b3ab4bb4d3" }
 dependencies = [
     { name = "commitizen" },
     { name = "cryptography" },
@@ -401,8 +401,8 @@ wheels = [
 
 [[package]]
 name = "lab-commons"
-version = "0.3.1.dev1270+ged24ab516"
-source = { git = "https://github.com/DawnEver/lab-commons.git#ed24ab516a140b62b77a89a1b546d5fee8903d22" }
+version = "0.3.1.dev1272+g09f66f9d1"
+source = { git = "https://github.com/DawnEver/lab-commons.git#09f66f9d11c4ad4f1e2aed6764a32024bba89692" }
 
 [package.optional-dependencies]
 io = [
@@ -575,7 +575,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dev-lab", extras = ["test"], marker = "extra == 'dev'", git = "https://github.com/DawnEver/dev-lab.git" },
+    { name = "dev-lab", extras = ["test"], marker = "extra == 'dev'", git = "https://github.com/DawnEver/dev-lab.git?rev=6f6b042a558fd11a4ea17a0fc6f364b3ab4bb4d3" },
     { name = "maturin", marker = "extra == 'dev'", specifier = ">=1.7" },
     { name = "numpy" },
     { name = "pytest", marker = "extra == 'dev'" },
