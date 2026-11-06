@@ -129,28 +129,25 @@ class _Cubic:
 class _ScopedCubic(_Cubic):
     def __init__(self) -> None:
         self.active = False
-        self.accepted_time = None
+        self.read_time = None
         self.accepted_reads, self.trial_calls = [], 0
 
     def step_problem(self, _time):
         return _Trial(self)
 
-    def accept(self, time, _state):
-        assert not self.active
-        self.accepted_time = time
-        return False
-
     @contextmanager
     def accepted_linearization_scope(self, time):
-        assert not self.active and self.accepted_time == time
+        assert not self.active
+        self.read_time = time
         self.active = True
         try:
             yield
         finally:
             self.active = False
+            self.read_time = None
 
     def jacobian(self, state, rate, acceleration, time, weights):
-        assert self.active and self.accepted_time == time
+        assert self.active and self.read_time == time
         self.accepted_reads.append((time, weights))
         return self.matrix_at(state, weights)
 
@@ -165,7 +162,6 @@ def test_real_march_scopes_cycle_accumulation_and_correction_but_never_trial_new
         max_newton=30,
         eec_period=0.5,
         eec_nonlinear_first_order=True,
-        on_accept=problem.accept,
     )
     ordinary = integrate_transient(
         _Cubic(),
@@ -179,3 +175,18 @@ def test_real_march_scopes_cycle_accumulation_and_correction_but_never_trial_new
     assert problem.trial_calls > 0 and not problem.active
     assert len(problem.accepted_reads) == len(actual.times) - 1 + len(actual.corrected_times)
     np.testing.assert_allclose(actual.states, ordinary.states, rtol=1e-13, atol=1e-13)
+
+
+def test_eec_still_refuses_an_accepted_observer_before_any_scope_or_trial():
+    problem = _ScopedCubic()
+    observed = []
+    with pytest.raises(ValueError, match='accepted observation requires a physical trajectory without EEC'):
+        integrate_transient(
+            problem,
+            TimeWindow(0.0, 0.75, 0.25, IntegratorKind.BDF1),
+            np.array([0.7]),
+            eec_period=0.5,
+            on_accept=lambda time, state: observed.append((time, state)),
+        )
+    assert not observed and not problem.accepted_reads
+    assert problem.trial_calls == 0 and not problem.active
