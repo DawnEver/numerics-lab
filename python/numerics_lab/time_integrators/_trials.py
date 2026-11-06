@@ -53,12 +53,3 @@ def project_newton_trial(problem, form, previous, proposed, *, affine_projection
         limited_trial = not np.array_equal(limited, argument)
         value = _lift(form, value, limited, argument)
     return value, limited_trial
-
-
-def projection_fixed_point(problem, form, endpoint):
-    """Conservative trial-ray eligibility without an admission certificate, NOT a convergence bar."""
-    argument = form.u_arg(endpoint)
-    projected = _physical(
-        problem.project_affine_state(argument.copy(), form.t_eval), argument.shape, 'affine constraint owner'
-    )
-    return bool(np.array_equal(projected, argument))

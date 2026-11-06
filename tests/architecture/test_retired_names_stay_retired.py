@@ -13,6 +13,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 
 #: old spelling -> what replaced it (2026-10-18, Track B3).
 RETIRED: dict[str, str] = {
+    'time_integrators._trials.projection_fixed_point': 'retained owner-projected trial provenance, or explicit affine admission',
     'linear::dirichlet': 'linear::constrained::fixed_values (pin_rows: linear::constrained::pin_rows)',
     'linear::constraints': 'linear::constrained::master_slave',
     'mod dirichlet': 'mod fixed_values',

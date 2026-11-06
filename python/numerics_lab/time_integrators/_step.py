@@ -31,7 +31,7 @@ from numerics_lab.time_integrators._forms import (
     change_below_residual_resolution,
     residual_floor_by_row,
 )
-from numerics_lab.time_integrators._trials import project_newton_trial, projection_fixed_point
+from numerics_lab.time_integrators._trials import project_newton_trial
 from numerics_lab.time_integrators.factor_reuse import FactorCache, apply_factor, factor_matrix
 from numerics_lab.time_integrators.local_convergence import LocalIterationCheck
 from numerics_lab.time_integrators.prepared import (
@@ -613,6 +613,7 @@ def _solve_step(
     # An owner-altered trial did NOT execute the full linear solve's correction,
     # so that discarded correction cannot inflate its generic arithmetic floor.
     increment_valid = False
+    projected_iterate = False  # provenance of THIS retained, evaluated trial, not a convergence verdict
 
     def project_trial(value):
         return project_newton_trial(
@@ -749,23 +750,21 @@ def _solve_step(
             )
             tangent = factor_cache.matrix
         step = du.reshape(u.shape)
-        if max_newton > 1 and line_search == 'directional':
+        directional = max_newton > 1 and line_search == 'directional'
+        restore_ray = (
+            directional
+            and capabilities.newton_trial_limit
+            and capabilities.affine_projection
+            and not (
+                _affine_admitted(problem, form, u, capabilities) if capabilities.affine_admission else projected_iterate
+            )
+        )
+        if directional and not restore_ray:
             # Search the bounded ray, not a nonlinear path of individually clipped probes.
             bounded_endpoint, bounded_was_limited = (
                 project_trial(u + step) if capabilities.newton_trial_limit else (None, False)
             )
             bounded_step = bounded_endpoint - u if bounded_endpoint is not None else step
-            if capabilities.newton_trial_limit and capabilities.affine_projection:
-                feasible = (
-                    _affine_admitted(problem, form, u, capabilities)
-                    if capabilities.affine_admission
-                    else projection_fixed_point(problem, form, u)
-                )
-                if not feasible:
-                    # Keep the first linearization unprojected, but restore feasibility before
-                    # searching an energy ray. This is an iterate, not an acceptance verdict.
-                    u, increment_valid = bounded_endpoint, not bounded_was_limited
-                    continue
             u = directional_line_search(
                 lambda x: np.asarray(problem.residual(form.u_arg(x), form.u_dot(x), form.u_ddot(x), t), dtype=float),
                 u,
@@ -774,7 +773,8 @@ def _solve_step(
                 **({'endpoint': bounded_endpoint} if bounded_endpoint is not None else {}),
             )
             increment_valid = not bounded_was_limited
-        elif max_newton > 1 and backtrack_cap > 0:
+            projected_iterate = capabilities.affine_projection and bounded_endpoint is not None
+        elif max_newton > 1 and (backtrack_cap > 0 or restore_ray):
             limit = residual if backtrack_band is None else backtrack_band * residual
 
             def trial_at(lam, u=u, step=step):
@@ -803,16 +803,21 @@ def _solve_step(
                     problem, tangent, trial[0], form, capabilities, trial[2], None if trial[3] else step
                 )
 
-            search = backtracking(trial_at, accepts_trial, tries=backtrack_cap)
+            # The first unprojected linearization keeps its old semantics. Its
+            # recovery must earn the SAME existing merit before an energy ray
+            # can inherit projector/limiter provenance, never bitwise idempotence.
+            search = backtracking(trial_at, accepts_trial, tries=max(1, backtrack_cap))
             raised = search.accepted and search.trial[1] >= residual
             if search.accepted:
                 u = search.trial[0]
                 increment_valid = not search.trial[3]
+                projected_iterate = capabilities.affine_projection
             else:
                 # Exhausted: take the next, untried step only if the last trial could be evaluated at all.
-                if search.trial is not None:
+                if search.trial is not None and not restore_ray:
                     u, limited = project_trial(u + search.step * step)
                     increment_valid = not limited
+                    projected_iterate = False
                 else:
                     increment_valid = False
                 capped = True
@@ -829,6 +834,7 @@ def _solve_step(
         else:
             u, limited = project_trial(u + step)
             increment_valid = not limited
+            projected_iterate = False
     else:
         # The ceiling exhausted: re-evaluate the residual at the FINAL u (the last solve's
         # result). The loop's last check read the PRE-solve guess -- reporting that would
