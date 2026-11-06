@@ -186,6 +186,7 @@ def test_eec_still_refuses_an_accepted_observer_before_any_scope_or_trial():
             TimeWindow(0.0, 0.75, 0.25, IntegratorKind.BDF1),
             np.array([0.7]),
             eec_period=0.5,
+            eec_nonlinear_first_order=True,
             on_accept=lambda time, state: observed.append((time, state)),
         )
     assert not observed and not problem.accepted_reads
