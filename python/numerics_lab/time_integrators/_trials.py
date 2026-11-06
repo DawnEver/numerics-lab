@@ -25,6 +25,18 @@ def _lift(form, endpoint, physical, argument, *, incremental=False):
     # the small bounded physical point, not the discarded enormous proposal.
     with np.errstate(over='ignore', invalid='ignore'):
         lifted = endpoint + (physical - argument) / alpha.real if incremental else (physical - form.h_u) / alpha.real
+        if incremental:
+            reconstructed = form.u_arg(lifted)
+            missed = (physical != argument) & (reconstructed != physical)
+            if np.any(missed):
+                # A huge discarded proposal can cancel away the projected
+                # point even in correction arithmetic. Compare actual affine
+                # reconstructions, retaining the legacy correction on ties.
+                rebuilt = (physical - form.h_u) / alpha.real
+                better = np.isfinite(rebuilt) & (
+                    ~np.isfinite(lifted) | (np.abs(form.u_arg(rebuilt) - physical) < np.abs(reconstructed - physical))
+                )
+                lifted = np.where(missed & better, rebuilt, lifted)
     # A changed row grants no authority to perturb untouched endpoint rows.
     lifted = np.where(physical == argument, endpoint, lifted)
     if not np.isfinite(lifted).all():

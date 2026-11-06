@@ -251,6 +251,43 @@ def test_affine_projection_preserves_untouched_endpoint_rows_with_nonbinary_weig
     assert not changed, 'affine projection is not evidence of limiter alteration'
 
 
+@pytest.mark.parametrize('offset', [0.0, 2.0])
+@pytest.mark.parametrize('weight', [1.0, 0.25])
+def test_affine_projection_recovers_its_small_point_from_a_discarded_huge_proposal(offset, weight):
+    class Projected:
+        def project_affine_state(self, state, time):
+            state[0] = offset + 1.0
+            return state
+
+    zero = np.zeros(2)
+    form = StepForm(DerivativeWeights(weight, 0, 0), np.array([offset, 0.7]), zero, zero, 1.0)
+    proposed = np.array([1e20, 0.12345678901234568])
+    with np.errstate(over='raise', invalid='raise'):
+        endpoint, changed = project_newton_trial(
+            Projected(), form, zero, proposed, affine_projection=True, newton_limit=False
+        )
+    np.testing.assert_array_equal(form.u_arg(endpoint), [offset + 1.0, form.u_arg(proposed)[1]])
+    assert endpoint[1].tobytes() == proposed[1].tobytes()
+    assert not changed
+
+
+def test_affine_projection_can_lift_opposite_finite_endpoints_when_their_difference_overflows():
+    maximum = np.finfo(float).max
+
+    class Projected:
+        def project_affine_state(self, state, time):
+            return np.array([-maximum])
+
+    zero = np.zeros(1)
+    form = StepForm(DerivativeWeights(1, 0, 0), zero, zero, zero, 1.0)
+    with np.errstate(over='raise', invalid='raise'):
+        endpoint, changed = project_newton_trial(
+            Projected(), form, zero, np.array([maximum]), affine_projection=True, newton_limit=False
+        )
+    np.testing.assert_array_equal(endpoint, [-maximum])
+    assert not changed
+
+
 def test_directional_search_keeps_the_representable_bounded_endpoint_after_a_huge_correction():
     class PositiveDomain:
         def __init__(self) -> None:
