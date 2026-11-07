@@ -58,6 +58,8 @@ _MECHANISMS: Final = {
     'DRAFT-UNTIL-READY': (TestPath('pyproject.toml'),),
     'FORGE-DOORS-ARE-CONSENT': (TestPath('pyproject.toml'),),
     'NO-PUSH-ONTO-A-LANDED-PR': (TestPath('pyproject.toml'),),
+    # Adopted 2026-11-07 with dev-lab #304: the base pre-push row `pr-current` this pyproject's hooks table runs.
+    'PR-HEAD-IS-CURRENT': (TestPath('pyproject.toml'),),
     # Adopted 2026-10-24 with dev-lab 1d74f38: the October summary is the first month this tree holds.
     'MONTHLY-PLANS-CARRIED': (TestPath('tests/architecture/test_every_month_carries_its_plans.py'),),
     # Adopted 2026-10-26 with dev-lab c9eaa7f: the agent guard ships in every family repo; the rendered
