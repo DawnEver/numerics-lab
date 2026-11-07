@@ -10,6 +10,7 @@ from __future__ import annotations
 import numpy as np
 
 from numerics_lab.nonlinear._seam import (
+    _ALPHA_MIN,
     _RTOL_ENERGY_PCT,
     AssembledState,
     IterationResult,
@@ -48,6 +49,17 @@ class AndersonStrategy:
     Bookkeeping matches the Picard strategies (assemble-at-top, one-step-delayed break on the
     energy-change test) so the returned state is the converged iterate's and the reference-energy
     gate holds. ``beta`` is the mixing (relaxation) factor; ``m`` the history depth.
+
+    SAFEGUARDED, AND JUDGED ON ITS OWN RESIDUAL (2026-11-07). Measured on a saturating slab, the
+    unguarded mix diverged on every source (field error 1.4..74 at the cap) and, worse, declared
+    convergence at 55-82 % field error: the convergence test read the MIXED step, which can land
+    next to ``x_k`` while ``x_k`` is far from ``g(x_k)``. Now the test reads ``g(x_k) - x_k``, and
+    a step that made the relative fixed-point residual ``||g(x) - x|| / ||x||`` grow (above the
+    convergence bar) is rejected: a mix restarts the history, a substitution halves ``beta``
+    (floor :data:`_ALPHA_MIN`), and the retry is a relaxed substitution from the last accepted
+    iterate. ``on_iteration`` reports the current ``beta``. Not the equation residual
+    ``||r(x)||`` as the merit: from a zero seed it is smallest AT the seed, and it refused every
+    useful step on the same slab.
     """
 
     name = 'anderson'
@@ -67,6 +79,9 @@ class AndersonStrategy:
         watch = _StagnationWatch(rtol_energy_pct)
         x_hist: list[np.ndarray] = []  # past g(x_k) images
         f_hist: list[np.ndarray] = []  # past residuals f_k = g(x_k) - x_k
+        beta = self.beta
+        accepted: tuple[np.ndarray, np.ndarray, float] | None = None  # (x, f, ||f||/||x||) last accepted
+        mixed = False  # whether the step that produced the current iterate was an Anderson mix
         for i in range(max_iter):
             ran = i + 1
             state = system.assemble(x)
@@ -77,15 +92,36 @@ class AndersonStrategy:
             x_prev = x
             gx = system.solve_linear(state)  # one Picard image g(x_k)
             f = gx - x  # fixed-point residual
+            f_ratio = increment_ratio(x, gx)
+            # Only a rise ABOVE the convergence bar: below it the residual is at its roundoff
+            # floor, and a noise-level rise is not a bad step.
+            rose = accepted is not None and not f_ratio <= accepted[2] and not f_ratio < rtol_energy_pct / 100.0
+            if rose and (mixed or beta > _ALPHA_MIN):
+                # SAFEGUARD (see the class docstring): the last step made the relative fixed-point
+                # residual GROW. A mix that did is no
+                # model of this map: reject it and restart the history. A substitution that did
+                # was too long: reject it and halve beta. Either way the retry is a relaxed
+                # substitution from the last accepted iterate, and a substitution at the floor is
+                # accepted whatever it does, so the loop always moves.
+                if not mixed:
+                    beta = max(_ALPHA_MIN, 0.5 * beta)
+                x_ok, f_ok, _ = accepted
+                x_hist.clear()
+                f_hist.clear()
+                x, mixed = x_ok + beta * f_ok, False
+                system.on_iteration(i, state, err, beta, increment_ratio(x_prev, gx))
+                continue
+            accepted = (x, f, f_ratio)
             x_hist.append(gx)
             f_hist.append(f)
             if len(f_hist) > self.m + 1:
                 x_hist.pop(0)
                 f_hist.pop(0)
             if system.is_linear or len(f_hist) == 1:
-                # First step (no history to mix) or a linear system (one solve is exact): plain
-                # substitution, identical first iterate to damped-Picard at alpha=1.
-                x = gx
+                # No history to mix (first step, or just restarted), or a linear system (one
+                # solve is exact): relaxed substitution.
+                x = gx if system.is_linear else x + beta * f
+                mixed = False
             else:
                 # Least-squares Anderson mix: minimise || f_k - dF @ gamma || over the m residual
                 # differences, then x <- (X_k @ w) with the relaxed combination of the g-images.
@@ -93,15 +129,19 @@ class AndersonStrategy:
                 dX = np.column_stack([x_hist[j + 1] - x_hist[j] for j in range(len(x_hist) - 1)])
                 gamma, *_ = np.linalg.lstsq(dF, f, rcond=None)
                 x = gx - dX @ gamma
-                if self.beta != 1.0:
-                    x = x + (self.beta - 1.0) * (f - dF @ gamma)
-            increment = increment_ratio(x_prev, x)
+                if beta != 1.0:
+                    x = x + (beta - 1.0) * (f - dF @ gamma)
+                mixed = True
+            # Judged on the fixed-point residual g(x_k) - x_k, not on the mixed step: a mix can
+            # land next to x_k while x_k is far from g(x_k) (measured: converged=True at 82 %
+            # field error, two Picard images apart).
+            increment = increment_ratio(x_prev, gx)
             converged = _has_converged(
-                err, x_prev, x, rtol_energy_pct, material_change=state.material_change
+                err, x_prev, gx, rtol_energy_pct, material_change=state.material_change
             ) or watch.observe(err, increment, state.material_change)
             if system.is_linear:
                 converged = True
-            system.on_iteration(i, state, err, self.beta, increment)
+            system.on_iteration(i, state, err, beta, increment)
         return IterationResult(x=x, state=state, iterations=ran, converged=converged)
 
 

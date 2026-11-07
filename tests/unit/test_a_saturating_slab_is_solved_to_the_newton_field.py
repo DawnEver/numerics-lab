@@ -5,6 +5,10 @@ THE DEFECTS THIS PINS (measured downstream 2026-11-06 on an FEA machine, reprodu
 * `coefficient-damped` declared convergence with the field still off: it relaxes the
   COEFFICIENTS, so under a small alpha the iterate creeps while the mixed reluctivity is still far
   from the one the iterate implies, and the iterate's increment alone reads settled.
+* `anderson` diverged, and on milder sources declared convergence at 82 % field error: its mix
+  can land next to the last iterate while that iterate is far from its own Picard image.
+* `modified-newton` diverged: a freshly refreshed tangent's full step from a zero field overshoots
+  deep into saturation, and nothing searched along it.
 
 THE FIXTURE. A 1-D slab, ``-(nu(B^2) A')' = J`` with ``A = 0`` at both ends, linear elements,
 an air gap in the middle, and an iron law that saturates TO VACUUM (``nu`` from ``1/mu_r`` to 1),
@@ -153,4 +157,20 @@ def test_coefficient_damped_does_not_declare_convergence_off_the_field():
         _SaturatingSlab(**slab), max_iter=_MAX_ITER, rtol_energy_pct=_RTOL_ENERGY_PCT
     )
     assert result.converged, 'the slab is solvable by coefficient-damped within the cap'
+    assert _field_error(result.x, reference) < _FIELD_BAR
+
+
+@pytest.mark.parametrize('j', [0.2, 1.0, 3.0, 6.0, 12.0])
+@pytest.mark.parametrize('name', ['anderson', 'modified-newton'])
+def test_a_globalised_strategy_converges_to_the_newton_field(name, j):
+    """Where Newton converges, anderson and modified-newton converge to the same field.
+
+    Measured before the fix, field error: anderson 1.4 (capped) / 0.82 / 0.55 at j = 0.2 / 1 / 3,
+    the last two DECLARED CONVERGED; modified-newton 43 / 65 / 16 at the cap. Every cell red
+    before. After: every cell converged within the bar, anderson in 35-45 iterations and
+    modified-newton in 10-15.
+    """
+    reference = _newton_field(j=j)
+    result = get_strategy(name).solve(_SaturatingSlab(j=j), max_iter=_MAX_ITER, rtol_energy_pct=_RTOL_ENERGY_PCT)
+    assert result.converged
     assert _field_error(result.x, reference) < _FIELD_BAR
