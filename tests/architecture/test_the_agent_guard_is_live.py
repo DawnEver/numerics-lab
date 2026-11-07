@@ -19,6 +19,8 @@ from deny_rules import ADOPTION  # noqa: E402
 
 #: THE FLOOR, BY NAME: the rules numerics-lab ships (adopted with dev-lab c9eaa7f).
 _SHIPPED: Final = frozenset({
+    # Gained 2026-11-07 with dev-lab #311 (consent credentials): an agent never types a consent code.
+    'CONSENT-CODE-NEVER-TYPED',
     'BARE-INTERPRETER',
     'BARE-PYTHON',
     'BARE-TEST-INVOCATION',
