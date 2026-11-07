@@ -32,7 +32,7 @@ def complete_rate_border(
     The caller proves independent mass rows AND columns. Field accelerations
     are solved sparsely; dense storage is state-by-small-border, never a dense
     field rank decomposition. A free acceleration of a coordinate with no
-    storage (a massless field) is not a border freedom: the caller's
+    storage (a massless field) past the bounded border is not a border freedom: the caller's
     ``algebraic_acceleration_rows`` -- twice-differentiated algebraic rows of
     ``matrix``, acceleration-only -- are matched to free accelerations and
     eliminated sparsely beside the stored rows. Only accelerations no such row
@@ -86,7 +86,10 @@ def complete_rate_border(
     # pair joins the sparse elimination; its nonsingularity is proven by the factorization below.
     algebraic_block = matrix[algebraic_rows][:, n + free_acceleration].tocsr()
     algebraic_block.eliminate_zeros()
-    matched_row = maximum_bipartite_matching(algebraic_block, perm_type='row') if algebraic_rows.size else None
+    # Only a border past its bound needs them: a bounded border keeps its rank-revealing dense
+    # treatment, where a structurally matched but numerically dependent row stays a border row.
+    needed = algebraic_rows.size and len(unknown) + len(free_acceleration) > 512
+    matched_row = maximum_bipartite_matching(algebraic_block, perm_type='row') if needed else None
     reached = np.zeros(len(free_acceleration), dtype=bool) if matched_row is None else matched_row >= 0
     eliminated_rows = algebraic_rows[matched_row[reached]] if reached.any() else np.array([], dtype=int)
     columns_eliminated = np.concatenate((columns, free_acceleration[reached])).astype(int)
