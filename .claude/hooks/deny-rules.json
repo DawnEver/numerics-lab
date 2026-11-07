@@ -143,6 +143,6 @@
     "name": "HPC-THROUGH-THE-DOOR",
     "pattern": "(?:(?:ssh|scp|sftp|rsync)\\b[^\\n;&|]*?[\\s@][\\w-]*[Ll][Oo][Gg][Ii][Nn][\\w-]*(?:\\.[\\w.-]+)?(?=[\\s:/\"\\x27]|$)|ssh\\b[^\\n]*?\\b(?:sbatch|srun|salloc|scancel)\\b|(?:sbatch|srun|salloc|scancel)\\b)",
     "matches": "command",
-    "reason": "HPC-THROUGH-THE-DOOR: an agent on an HPC login host or Slurm opens connections nobody budgets; a poll loop took the cluster's ssh down (2026-11-06).\nStatus: the forge host card, python -m dev_lab.dev.forge queue, forge run show <sha>; deploy: python -m dev_lab.dev.hpchost deploy, run by the user on the account; tests: push and let the forge run them.\ndetails: docs-src/dev/refusals.md#hpc-through-the-door (lab-commons)"
+    "reason": "HPC-THROUGH-THE-DOOR: an agent on an HPC login host or Slurm opens connections nobody budgets; a poll loop took the cluster's ssh down (2026-11-06).\nStatus: the forge host card, {python} -m dev_lab.dev.forge queue, forge run show <sha>; deploy: {python} -m dev_lab.dev.hpchost deploy, run by the user on the account; tests: push and let the forge run them.\ndetails: docs-src/dev/refusals.md#hpc-through-the-door (lab-commons)"
   }
 ]
