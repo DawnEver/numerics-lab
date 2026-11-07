@@ -24,9 +24,6 @@ Per-row step acceptance now iterates to round-off
 The November entries also describe the problem-owned trial limiter, its
 retained-increment arithmetic correction and publication against the actual
 integration branch -- a dated checkpoint, not a live acceptance verdict.
-The fixed-point strategies now hold the Newton field on deep saturation
-(`07/fixed-point-strategies-hold-the-newton-field-on-deep-saturation.md`; not a plan entry):
-coefficient-damped's coefficient lag, anderson's safeguard, modified-newton's search.
 
 ## Plans
 
