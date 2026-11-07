@@ -8,7 +8,7 @@
 //! [`StagnationWatch`], `on_iteration` — is shared.
 
 use super::{
-    energy_error_pct, has_converged, increment_ratio, IncrementTrend, IterationResult,
+    energy_error_pct, has_converged, increment_ratio, norm, IncrementTrend, IterationResult,
     IterationStrategy, NonlinearError, NonlinearSystem, RawState, ResultOf, SolveOptions,
     StagnationWatch, StateOf, ALPHA_CALM_STEPS, ALPHA_GROW, ALPHA_MIN,
 };
@@ -131,6 +131,9 @@ fn picard_loop<S: NonlinearSystem>(
     let mut x = opts.start(system);
     // Last iteration's MIXED raw arrays (`Relax::Coefficients` only); `None` before the first pass.
     let mut prev_mixed: Option<(Vec<f64>, Vec<f64>)> = None;
+    // The mixed coefficients' relative distance to the fresh ones the iterate implies; 0 when
+    // the iterate itself is what is relaxed (mirrors the Python `coefficient_lag`).
+    let mut coefficient_lag = 0.0_f64;
     let mut state: Option<StateOf<S>> = None;
     let mut last_energy: Option<f64> = None;
     let mut converged = false;
@@ -143,10 +146,13 @@ fn picard_loop<S: NonlinearSystem>(
                 let raw = system.raw_state(&x)?.ok_or_else(refuse)?;
                 let (vals, source) = match &prev_mixed {
                     None => (raw.vals, raw.source),
-                    Some((pv, pt)) => (
-                        mix(pv, &raw.vals, schedule.alpha),
-                        mix(pt, &raw.source, schedule.alpha),
-                    ),
+                    Some((pv, pt)) => {
+                        let vals = mix(pv, &raw.vals, schedule.alpha);
+                        let source = mix(pt, &raw.source, schedule.alpha);
+                        coefficient_lag = relative_distance(&raw.vals, &vals)
+                            .max(relative_distance(&raw.source, &source));
+                        (vals, source)
+                    }
                 };
                 let mixed = RawState {
                     rows: raw.rows,
@@ -169,7 +175,14 @@ fn picard_loop<S: NonlinearSystem>(
         let alpha = schedule.step(err, delta, rtol, &mut trend);
         let x_solve = system.solve_linear(&st)?;
         let increment = increment_ratio(&x, &x_solve);
-        converged = has_converged(err, &x, &x_solve, rtol) || watch.observe(err, increment);
+        // The mixed coefficients must settle with the iterate: under a small alpha the iterate
+        // creeps while they are still far from their fixed point.
+        let settled = coefficient_lag < rtol / 100.0;
+        if !settled {
+            watch.clear();
+        }
+        converged =
+            settled && (has_converged(err, &x, &x_solve, rtol) || watch.observe(err, increment));
         last_energy = Some(st.total_energy);
         trend.observe(increment);
         x = if relax == Relax::X && damped {
@@ -192,6 +205,25 @@ fn picard_loop<S: NonlinearSystem>(
         iterations: ran,
         converged,
     })
+}
+
+/// `||fresh - mixed|| / ||mixed||`; 0 when both vanish.
+fn relative_distance(fresh: &[f64], mixed: &[f64]) -> f64 {
+    let scale = norm(mixed);
+    let gap = norm(
+        &fresh
+            .iter()
+            .zip(mixed)
+            .map(|(f, m)| f - m)
+            .collect::<Vec<f64>>(),
+    );
+    if scale > 0.0 {
+        gap / scale
+    } else if gap == 0.0 {
+        0.0
+    } else {
+        f64::INFINITY
+    }
 }
 
 /// `(1-alpha) * prev + alpha * target`, elementwise.

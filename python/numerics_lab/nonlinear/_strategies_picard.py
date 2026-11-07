@@ -14,6 +14,8 @@ from __future__ import annotations
 from typing import Literal
 
 import numpy as np
+import scipy.sparse as sp
+import scipy.sparse.linalg  # noqa: F401 -- binds sp.linalg
 
 from numerics_lab.nonlinear._seam import (
     _ALPHA_CALM_STEPS,
@@ -114,7 +116,14 @@ class _PicardLoop:
         self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
     ) -> IterationResult:
         schedule = _AlphaSchedule(damped=self.damped)
-        assemble = self._coefficient_assembler(system, schedule) if self.relax == 'coefficients' else system.assemble
+        #: The relaxed coefficients' distance to the ones the current iterate implies; stays 0 when
+        #: the iterate itself is what is relaxed. See :meth:`_coefficient_assembler`.
+        coefficient_lag = [0.0]
+        assemble = (
+            self._coefficient_assembler(system, schedule, coefficient_lag)
+            if self.relax == 'coefficients'
+            else system.assemble
+        )
         trend = _IncrementTrend()
         watch = _StagnationWatch(rtol_energy_pct)
         x = system.initial_guess()
@@ -132,9 +141,12 @@ class _PicardLoop:
             alpha = schedule.step(err, delta, rtol_energy_pct, trend)
             x_solve = system.solve_linear(state)
             increment = increment_ratio(x, x_solve)
-            converged = _has_converged(
-                err, x, x_solve, rtol_energy_pct, material_change=state.material_change
-            ) or watch.observe(err, increment, state.material_change)
+            # State the iterate does not carry must settle with it: the irreversible material
+            # history, and -- relaxing coefficients -- the mixed coefficients themselves.
+            unsettled = max(float(state.material_change), coefficient_lag[0])
+            converged = _has_converged(err, x, x_solve, rtol_energy_pct, material_change=unsettled) or watch.observe(
+                err, increment, unsettled
+            )
             last_energy = state.total_energy
             trend.observe(increment)
             x = x + alpha * (x_solve - x) if self.relax == 'x' and self.damped else x_solve
@@ -143,8 +155,17 @@ class _PicardLoop:
             system.on_iteration(i, state, err, alpha, increment)
         return IterationResult(x=x, state=state, iterations=ran, converged=converged)
 
-    def _coefficient_assembler(self, system: NonlinearSystem, schedule: _AlphaSchedule):
-        """``assemble`` for ``relax='coefficients'``: raw arrays mixed with the current alpha, then folded."""
+    def _coefficient_assembler(self, system: NonlinearSystem, schedule: _AlphaSchedule, coefficient_lag: list[float]):
+        """``assemble`` for ``relax='coefficients'``: raw arrays mixed with the current alpha, then folded.
+
+        Writes ``coefficient_lag[0]``: the relative distance between the MIXED arrays and the fresh
+        ones the current iterate implies, the larger of the stiffness and the source. The solve
+        sees only the mixed coefficients, so under a small alpha the iterate creeps while the
+        coefficients are still far from their fixed point, and the iterate's increment alone
+        cannot tell (measured on a saturating slab: alpha 0.1, increment 2.6e-5, field 1.1e-4 off
+        and declared converged at the 1e-4 bar). A fixed point of the coefficient map has zero
+        lag, so holding the lag to the increment's bar costs a converged solve nothing.
+        """
         inner = unwrap_system(system)
         if not isinstance(inner, RawStateSystem):
             named = type(inner).__name__
@@ -158,12 +179,24 @@ class _PicardLoop:
             s_row, s_col, s_val, t_mat, total_energy = inner.raw_state(x)
             if prev:
                 a = schedule.alpha
-                s_val = (1.0 - a) * prev[0] + a * s_val
-                t_mat = (1.0 - a) * prev[1] + a * t_mat
+                fresh_s, fresh_t = s_val, t_mat
+                s_val = (1.0 - a) * prev[0] + a * fresh_s
+                t_mat = (1.0 - a) * prev[1] + a * fresh_t
+                coefficient_lag[0] = max(_relative_distance(fresh_s, s_val), _relative_distance(fresh_t, t_mat))
             prev[:] = [s_val, t_mat]
             return inner.fold_raw(s_row, s_col, s_val, t_mat, total_energy)
 
         return assemble
+
+
+def _relative_distance(fresh, mixed) -> float:
+    """``||fresh - mixed|| / ||mixed||`` (Frobenius for a sparse array); 0 when both vanish."""
+    scale, gap = _norm(mixed), _norm(fresh - mixed)
+    return gap / scale if scale > 0.0 else (0.0 if gap == 0.0 else np.inf)
+
+
+def _norm(a) -> float:
+    return float(sp.linalg.norm(a)) if sp.issparse(a) else float(np.linalg.norm(np.asarray(a, dtype=float)))
 
 
 class DampedPicardStrategy(_PicardLoop):

@@ -451,6 +451,19 @@ def _energy_error_pct(total_energy: float, last_energy: float | None) -> float:
     return abs(total_energy - last_energy) / denom * 100.0
 
 
+def _free_residual_norm(system, x, state) -> float:
+    """``system.residual_norm`` when the system defines it, else the Protocol's default ``||r||``.
+
+    A duck-typed system inherits nothing from a ``Protocol``, so the default body has to be
+    spelled where it is consumed.
+    """
+    try:
+        norm_of = system.residual_norm
+    except AttributeError:
+        return float(np.linalg.norm(system.residual(x, state)))
+    return float(norm_of(x, state))
+
+
 def _has_converged(
     err: float,
     x: np.ndarray,

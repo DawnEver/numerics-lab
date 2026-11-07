@@ -194,6 +194,111 @@ impl NonlinearSystem for Affine {
     }
 }
 
+/// The golden's `_SaturatingDiagonal`: `nu(x_i) x_i = b_i`, `nu` saturating from `k1` to 1.
+///
+/// The affine fixtures never leave a strategy's happy path; here a substitution from zero lands
+/// ~1000x past the root, so the Anderson safeguard, the modified-Newton search and the
+/// coefficient lag all fire. Carries the raw pair, so `coefficient-damped` runs on it too.
+struct Saturating {
+    b: Vec<f64>,
+    k1: f64,
+    /// The uniform seed (not zero: see the Python fixture's `initial_guess`).
+    seed: f64,
+    trace: Vec<(f64, f64, f64)>,
+}
+
+impl Saturating {
+    fn nu(&self, x: f64) -> f64 {
+        let x8 = x.powi(8);
+        self.k1 + (1.0 - self.k1) * x8 / (x8 + 1.0)
+    }
+
+    fn dnu(&self, x: f64) -> f64 {
+        (1.0 - self.k1) * 8.0 * x.powi(7) / (x.powi(8) + 1.0).powi(2)
+    }
+}
+
+impl NonlinearSystem for Saturating {
+    type Matrix = Vec<f64>;
+    type Payload = ();
+
+    fn initial_guess(&self) -> Vec<f64> {
+        vec![self.seed; self.b.len()]
+    }
+
+    fn assemble(&mut self, x: &[f64]) -> Result<StateOf<Self>, NonlinearError> {
+        let raw = self.raw_state(x)?.expect("always raw");
+        Ok(self.fold_raw(&raw)?.expect("always folds"))
+    }
+
+    fn solve_linear(&mut self, state: &StateOf<Self>) -> Result<Vec<f64>, NonlinearError> {
+        let vals = state.system_matrix.as_ref().expect("always set");
+        Ok(self.b.iter().zip(vals).map(|(t, v)| t / v).collect())
+    }
+
+    fn residual(&mut self, x: &[f64], state: &StateOf<Self>) -> Result<Vec<f64>, NonlinearError> {
+        let vals = state.system_matrix.as_ref().expect("always set");
+        Ok(x.iter()
+            .zip(vals)
+            .zip(&self.b)
+            .map(|((xi, v), t)| v * xi - t)
+            .collect())
+    }
+
+    fn tangent(
+        &mut self,
+        x: &[f64],
+        _state: &StateOf<Self>,
+    ) -> Result<Option<Self::Matrix>, NonlinearError> {
+        Ok(Some(x.iter().map(|&xi| self.nu(xi) + xi * self.dnu(xi)).collect()))
+    }
+
+    fn solve_system(
+        &mut self,
+        matrix: &Self::Matrix,
+        rhs: &[f64],
+    ) -> Result<Vec<f64>, NonlinearError> {
+        Ok(matrix.iter().zip(rhs).map(|(d, r)| r / d).collect())
+    }
+
+    fn supports_raw_mixing(&self) -> bool {
+        true
+    }
+
+    fn raw_state(&mut self, x: &[f64]) -> Result<Option<RawState>, NonlinearError> {
+        let vals: Vec<f64> = x.iter().map(|&xi| self.nu(xi)).collect();
+        let total_energy = x.iter().zip(&vals).map(|(xi, c)| 0.5 * c * xi * xi).sum();
+        let idx: Vec<u32> = (0..self.b.len() as u32).collect();
+        Ok(Some(RawState {
+            rows: idx.clone(),
+            cols: idx,
+            vals,
+            source: self.b.clone(),
+            total_energy,
+        }))
+    }
+
+    fn fold_raw(&mut self, raw: &RawState) -> Result<Option<StateOf<Self>>, NonlinearError> {
+        // The source is the fixed `b` on both sides, so only the mixed coefficients are carried.
+        Ok(Some(AssembledState {
+            system_matrix: Some(raw.vals.clone()),
+            total_energy: raw.total_energy,
+            payload: None,
+        }))
+    }
+
+    fn on_iteration(
+        &mut self,
+        _i: usize,
+        _state: &StateOf<Self>,
+        err: f64,
+        alpha: f64,
+        increment: f64,
+    ) {
+        self.trace.push((alpha, err, increment));
+    }
+}
+
 /// The golden's `_NuMixSystem`: raw arrays linear in one scalar per call.
 struct NuMix {
     k_seq: Vec<f64>,
@@ -327,6 +432,66 @@ fn every_strategy_walks_the_python_trajectory_on_every_fixture() {
             for (k, (got, w)) in res.x.iter().zip(want_x).enumerate() {
                 close_opt(*got, w, &format!("{where_}.x[{k}]"));
             }
+        }
+    }
+}
+
+#[test]
+fn the_saturating_fixture_walks_the_python_recovery() {
+    let g = golden();
+    let sat = &g["saturating"];
+    let rtol_pct = g["rtol_energy_pct"].as_f64().expect("rtol");
+    let max_iter = sat["max_iter"].as_u64().expect("max_iter") as usize;
+    for (name, want) in sat["strategies"].as_object().expect("strategies") {
+        let mut sys = Saturating {
+            b: floats(&sat["b"]),
+            k1: sat["k1"].as_f64().expect("k1"),
+            seed: sat["seed"].as_f64().expect("seed"),
+            trace: Vec::new(),
+        };
+        let opts = SolveOptions {
+            max_iter,
+            rtol_energy_pct: rtol_pct,
+            seed: None,
+        };
+        let strategy: Box<dyn IterationStrategy<Saturating>> =
+            get_strategy(Some(name)).unwrap_or_else(|e| panic!("saturating/{name}: {e}"));
+        let res = strategy
+            .solve(&mut sys, &opts)
+            .unwrap_or_else(|e| panic!("saturating/{name} refused: {e}"));
+        let where_ = format!("saturating/{name}");
+        if name == "anderson" {
+            // Held by CONVERGENCE, not by trajectory: the inner lstsq is the port's named
+            // deviation (QR, not numpy's SVD), ~1e-12 apart on this ill-conditioned history, and
+            // the safeguard's decisions amplify that. See the Python `_SAT_STRATEGIES` note.
+            assert!(res.converged, "{where_}: did not converge");
+            assert!(
+                sys.trace.iter().any(|(beta, _, _)| *beta < 1.0),
+                "{where_}: the safeguard never fired, so this fixture no longer tests it"
+            );
+            let want_x = floats(&want["x"]);
+            for (k, (got, w)) in res.x.iter().zip(&want_x).enumerate() {
+                let bar = 1e-3 * w.abs();
+                assert!((got - w).abs() <= bar, "{where_}.x[{k}]: {got} vs python {w}");
+            }
+            continue;
+        }
+        let want_trace = want["trace"].as_array().expect("trace is an array");
+        for (k, ((alpha, err, inc), w)) in sys.trace.iter().zip(want_trace).enumerate() {
+            close_opt(*alpha, &w["alpha"], &format!("{where_}.trace[{k}].alpha"));
+            close_opt(*err, &w["err"], &format!("{where_}.trace[{k}].err"));
+            close_opt(*inc, &w["increment"], &format!("{where_}.trace[{k}].increment"));
+        }
+        assert_eq!(sys.trace.len(), want_trace.len(), "{where_}: trace length");
+        assert_eq!(
+            res.iterations,
+            want["iterations"].as_u64().expect("iterations") as usize,
+            "{where_}: iteration count"
+        );
+        assert_eq!(res.converged, want["converged"].as_bool().expect("converged"), "{where_}: converged");
+        let want_x = want["x"].as_array().expect("x is an array");
+        for (k, (got, w)) in res.x.iter().zip(want_x).enumerate() {
+            close_opt(*got, w, &format!("{where_}.x[{k}]"));
         }
     }
 }
