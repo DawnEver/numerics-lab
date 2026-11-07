@@ -78,8 +78,15 @@ pr_merges_since = "7dbdfb3a9c67d0408d29e36b121f37989f172731"  # INTEGRATION-TAKE
 # .github/workflows/ci.yml by `python -m dev_lab.dev.ciworkflows render`, never hand-edited.
 [tool.dev_lab.ci."ci.yml"]
 
-# Git hooks: the family base (dev_lab/dev/githooks/base.toml) as is; numerics-lab adds no row.
+# Git hooks: the family base (dev_lab/dev/githooks/base.toml) plus numerics-lab's one row.
 [tool.dev_lab.hooks]
+
+# PUBLIC-ROOT-ONLY (integrator guard D78/D86): a GitHub push publishes only history descending from the
+# public root, never a second (private Gitea) root. A security control; see scripts/public_root.py.
+[[tool.dev_lab.hooks.pre-push]]
+id = "public-root"
+run = ["python", "scripts/public_root.py"]
+always_run = true
 
 [tool.dev_lab.branchset]
 trunk = 'main'

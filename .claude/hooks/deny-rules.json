@@ -14,6 +14,12 @@
     "scope": "subagent"
   },
   {
+    "name": "CONSENT-CODE-NEVER-TYPED",
+    "pattern": "(?:(?:dev_lab\\.ops\\.consent\\b|\\bconsent\\s+(?:grant|serve|enrol)\\b|\\bbreakglass\\s+(?:open|enrol|serve)\\b|\\b[Tt][Oo][Tt][Pp]\\b)[^\\n;&|]*[\\s=][\"']?\\d{6}[\"']?(?=[\\s;&|)]|$)|\\b\\d{6}\\b[^\\n;&|]*\\|[^\\n;&]*(?:dev_lab\\.ops\\.consent\\b|\\bconsent\\s+(?:grant|serve|enrol)\\b|\\bbreakglass\\s+(?:open|enrol|serve)\\b|\\b[Tt][Oo][Tt][Pp]\\b)|(?:dev_lab\\.ops\\.consent\\b|\\bconsent\\s+(?:grant|serve|enrol)\\b|\\bbreakglass\\s+(?:open|enrol|serve)\\b|\\b[Tt][Oo][Tt][Pp]\\b)[^\\n]*<<<\\s*[\"']?\\d{6}[\"']?|(?:dev_lab\\.ops\\.consent\\b|\\bconsent\\s+(?:grant|serve|enrol)\\b|\\bbreakglass\\s+(?:open|enrol|serve)\\b|\\b[Tt][Oo][Tt][Pp]\\b)[^\\n]*<<-?\\s*[\"\\']?\\w+[\"\\']?[^\\n]*\\n\\s*[\"']?\\d{6}[\"']?\\s*(?:\\n|$)|(?:>|\\btee\\b|\\bcp\\b|\\bmv\\b|\\bmkdir\\b|\\btouch\\b|Set-Content|Out-File|Add-Content|New-Item|Copy-Item|Move-Item)[^\\n;&|]*\\.motronics[\\\\/]+state[\\\\/]+consent)",
+    "matches": "line",
+    "reason": "CONSENT-CODE-NEVER-TYPED: a consent code is the USER's word: an agent typing, piping or planting one forges the consent.\nWrite the request JSON, hand the user `{python} -m dev_lab.ops.consent grant <request.json>` to run in their own terminal, then read the credential it wrote.\ndetails: docs-src/dev/refusals.md#consent-code-never-typed (lab-commons)"
+  },
+  {
     "name": "BARE-TEST-INVOCATION",
     "pattern": "(?:\\S*python[\\w.]*\\s+-m\\s+pytest\\b|pytest\\b)",
     "matches": "command",
