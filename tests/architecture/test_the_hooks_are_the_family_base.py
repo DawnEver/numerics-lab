@@ -1,4 +1,4 @@
-"""numerics-lab runs the family git hooks: `[tool.dev_lab.hooks]` over `githooks/base.toml`, no row added.
+"""numerics-lab runs the family git hooks: `[tool.dev_lab.hooks]` over `githooks/base.toml`, plus `public-root`.
 
 Installing the shims is the developer's (`<venv python> -m dev_lab.dev.hook_install --install --repo .`);
 this file pins what the merged table DECLARES, as a named set of stages and the rows the registry cites.
