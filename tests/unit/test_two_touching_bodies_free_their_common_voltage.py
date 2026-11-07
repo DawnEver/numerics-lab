@@ -55,20 +55,32 @@ def test_neither_voltage_column_is_index_two_but_their_sum_is():
     np.testing.assert_allclose(basis[:, 0] / basis[0, 0], [1.0, 1.0], rtol=1e-15)
 
 
-def test_the_common_voltage_is_re_solved_and_every_row_holds():
-    hidden = certified_sparse_product(_Y, _J)
-    np.testing.assert_allclose(_Y @ (_J @ _STATE - _F), 0.0, atol=1e-15)
-    forcing = -(_J @ _STATE - _F)
+@pytest.mark.parametrize('copies', [1, 260])
+def test_the_common_voltage_is_re_solved_and_every_row_holds(copies):
+    mass = sp.block_diag([_M] * copies, format='csr')
+    jacobian = sp.block_diag([_J] * copies, format='csr')
+    algebraic = sp.block_diag([_Y] * copies, format='csr')
+    initial, source = np.tile(_STATE, copies), np.tile(_F, copies)
+    hidden = certified_sparse_product(algebraic, jacobian)
+    np.testing.assert_allclose(algebraic @ (jacobian @ initial - source), 0.0, atol=1e-15)
+    forcing = -(jacobian @ initial - source)
     columns, step, rate, unique = index_two_frozen_rate(
-        _Y, hidden, _M, _J, np.zeros(2), forcing, tolerance=1e-12, allowance=np.zeros(5)
+        algebraic,
+        hidden,
+        mass,
+        jacobian,
+        np.zeros(2 * copies),
+        forcing,
+        tolerance=1e-12,
+        allowance=np.zeros(5 * copies),
     )
-    assert columns.tolist() == [3, 4]
-    assert step[0] == pytest.approx(step[1], rel=1e-14)
-    state = _STATE.copy()
+    np.testing.assert_array_equal(columns, np.concatenate([np.array([3, 4]) + 5 * i for i in range(copies)]))
+    np.testing.assert_allclose(step[::2], step[1::2], rtol=1e-14)
+    state = initial.copy()
     state[columns] += step
-    np.testing.assert_allclose(_J @ state + _M @ rate - _F, 0.0, atol=1e-14)
+    np.testing.assert_allclose(jacobian @ state + mass @ rate - source, 0.0, atol=1e-14)
     np.testing.assert_allclose(hidden @ rate, 0.0, atol=1e-14)
-    assert unique[:3].all()
+    assert unique.reshape(copies, 5)[:, :3].all()
 
 
 def test_a_pair_that_cancels_only_to_rounding_is_one_null_direction():

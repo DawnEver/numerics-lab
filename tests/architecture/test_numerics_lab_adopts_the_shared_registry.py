@@ -46,7 +46,7 @@ _MECHANISMS: Final = {
         TestPath('pyproject.toml'),
         TestPath('tests/architecture/test_this_repo_declares_the_one_pr_flow.py'),
     ),
-    'PR-REVIEW-BLOCKS-ON-HIGH-OR-SECURITY': (TestPath('pyproject.toml'),),
+    'PR-REVIEW-IS-ONE-SHOT-ADVICE': (TestPath('pyproject.toml'),),
     # Adopted 2026-10-23 with the move to dev-lab: the PR-flow rows are the forge's own admission and carry
     # steps (dev_lab.dev.pradmit, dev_lab.dev.forgecarry) over the same declared integrator table.
     'ONE-SESSION-ONE-PR': (TestPath('pyproject.toml'),),
@@ -73,6 +73,8 @@ _MECHANISMS: Final = {
             # wiring (pinned live by the same test) runs `dev_lab.dev.pushwatch` on PostToolUse.
             'RECURSIVE-DELETE',
             'PUSHED-HEAD-IS-WATCHED',
+            # Adopted 2026-11-07 with dev-lab 8c4ab734: the guard refuses a write outside the checkout.
+            'WRITES-STAY-IN-THE-TREE',
         ),
         (TestPath('tests/architecture/test_the_agent_guard_is_live.py'),),
     ),
