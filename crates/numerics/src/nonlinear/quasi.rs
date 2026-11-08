@@ -25,13 +25,9 @@ use super::{
 /// convergence bar is rejected -- a mix restarts the history, a substitution halves `beta` (floor
 /// [`ALPHA_MIN`]) -- and retried as a relaxed substitution from the last accepted iterate.
 ///
-/// DEVIATION FROM THE PYTHON, named because it can matter. The Python solves the inner
-/// least-squares with `numpy.linalg.lstsq`, an SVD that returns the MINIMUM-NORM solution when
-/// `dF` is rank-deficient. This uses a Householder QR, which returns a basic solution instead and
-/// falls back to the plain Picard image `gx` when the triangular factor is numerically singular.
-/// On a full-column-rank `dF` — every step where the history is genuinely informative — the two
-/// agree to rounding. They can differ on a degenerate history, and that is a real difference, not
-/// a rounding one.
+/// The inner least-squares is the Householder QR [`lstsq`], and the Python runs the SAME
+/// algorithm (`householder_lstsq`), so the two walk one trajectory; a numerically singular
+/// triangular factor falls back to the plain Picard image `gx` in both.
 #[derive(Debug, Clone, Copy)]
 pub struct AndersonStrategy {
     pub m: usize,

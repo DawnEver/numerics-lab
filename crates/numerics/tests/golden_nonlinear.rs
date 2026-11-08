@@ -460,22 +460,6 @@ fn the_saturating_fixture_walks_the_python_recovery() {
             .solve(&mut sys, &opts)
             .unwrap_or_else(|e| panic!("saturating/{name} refused: {e}"));
         let where_ = format!("saturating/{name}");
-        if name == "anderson" {
-            // Held by CONVERGENCE, not by trajectory: the inner lstsq is the port's named
-            // deviation (QR, not numpy's SVD), ~1e-12 apart on this ill-conditioned history, and
-            // the safeguard's decisions amplify that. See the Python `_SAT_STRATEGIES` note.
-            assert!(res.converged, "{where_}: did not converge");
-            assert!(
-                sys.trace.iter().any(|(beta, _, _)| *beta < 1.0),
-                "{where_}: the safeguard never fired, so this fixture no longer tests it"
-            );
-            let want_x = floats(&want["x"]);
-            for (k, (got, w)) in res.x.iter().zip(&want_x).enumerate() {
-                let bar = 1e-3 * w.abs();
-                assert!((got - w).abs() <= bar, "{where_}.x[{k}]: {got} vs python {w}");
-            }
-            continue;
-        }
         let want_trace = want["trace"].as_array().expect("trace is an array");
         for (k, ((alpha, err, inc), w)) in sys.trace.iter().zip(want_trace).enumerate() {
             close_opt(*alpha, &w["alpha"], &format!("{where_}.trace[{k}].alpha"));

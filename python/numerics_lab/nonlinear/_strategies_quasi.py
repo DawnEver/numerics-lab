@@ -127,10 +127,17 @@ class AndersonStrategy:
                 # differences, then x <- (X_k @ w) with the relaxed combination of the g-images.
                 dF = np.column_stack([f_hist[j + 1] - f_hist[j] for j in range(len(f_hist) - 1)])
                 dX = np.column_stack([x_hist[j + 1] - x_hist[j] for j in range(len(x_hist) - 1)])
-                gamma, *_ = np.linalg.lstsq(dF, f, rcond=None)
-                x = gx - dX @ gamma
-                if beta != 1.0:
-                    x = x + (beta - 1.0) * (f - dF @ gamma)
+                gamma = householder_lstsq(dF, f)
+                x = gx
+                if gamma is not None:
+                    # Column by column, in the port's order, so both languages round alike.
+                    for j, g in enumerate(gamma):
+                        x = x - g * dX[:, j]
+                    if beta != 1.0:
+                        mixed_f = f
+                        for j, g in enumerate(gamma):
+                            mixed_f = mixed_f - g * dF[:, j]
+                        x = x + (beta - 1.0) * mixed_f
                 mixed = True
             # Judged on the fixed-point residual g(x_k) - x_k, not on the mixed step: a mix can
             # land next to x_k while x_k is far from g(x_k) (measured: converged=True at 82 %
@@ -295,3 +302,46 @@ class LBFGSStrategy(BFGSStrategy):
 
     # `solve` is BFGS's own: the two differ only in `m`, the depth of the history the shared
     # `_two_loop` recursion is applied over.
+
+
+def householder_lstsq(a: np.ndarray, b: np.ndarray) -> np.ndarray | None:
+    """``min ||a gamma - b||`` by Householder QR; ``None`` when ``R`` is numerically singular.
+
+    The SAME algorithm as the Rust port's ``quasi.rs::lstsq``, step for step: vectorised over the
+    ``n`` rows, a fixed loop over the ``k`` history columns. Not ``numpy.linalg.lstsq``: that is a
+    LAPACK SVD whose rounding depends on the LAPACK build, and on the ill-conditioned Anderson
+    history of the golden's ``saturating`` fixture two builds (CI Linux, CI Windows, the freezing
+    workstation) parted at ~1e-12 relative, which the safeguard's accept/reject decisions then
+    amplified. The reductions are ``np.sum`` (numpy's own pairwise sum, never BLAS), so the result
+    does not depend on the machine. A rank-deficient ``a`` returns ``None`` -- the caller falls
+    back to the Picard image -- never a minimum-norm solution.
+    """
+    k = a.shape[1]
+    n = b.size
+    if k == 0 or n < k:
+        return None
+    m = np.column_stack([a, b]).astype(float)
+    for c in range(k):
+        s = float(np.sqrt(np.sum(m[c:, c] * m[c:, c])))
+        alpha = -s if m[c, c] > 0.0 else s
+        if abs(alpha) < 1e-300:
+            return None
+        v = m[c:, c].copy()
+        v[0] -= alpha
+        vv = float(np.sum(v * v))
+        if vv < 1e-300:
+            continue
+        # Every remaining column INCLUDING the augmented rhs at index ``k``.
+        for col in range(c, k + 1):
+            scale = float(np.sum(v * m[c:, col])) * 2.0 / vv
+            m[c:, col] = m[c:, col] - scale * v
+    gamma = np.zeros(k)
+    for c in range(k - 1, -1, -1):
+        diag = m[c, c]
+        if abs(diag) < 1e-12:
+            return None
+        acc = 0.0
+        for j in range(c + 1, k):
+            acc += m[c, j] * gamma[j]
+        gamma[c] = (m[c, k] - acc) / diag
+    return gamma

@@ -184,8 +184,8 @@ class _SaturatingDiagonal:
 
     def initial_guess(self):
         # NOT zero: from zero every early residual is parallel to `b`, so the Anderson history is
-        # rank-deficient, where numpy's minimum-norm lstsq and the port's QR legitimately differ
-        # (the port's named deviation). A uniform seed breaks the proportionality.
+        # rank-deficient and every mix falls back to the Picard image. A uniform seed breaks the
+        # proportionality.
         return np.full(self.b.size, _SAT_SEED)
 
     def raw_state(self, x):
@@ -307,10 +307,9 @@ _RTOL_PCT = 0.01
 _NU_K_SEQ = [1.0, 3.0, 2.0, 5.0]
 #: The saturating fixture: one component per regime, unsaturated to deep, and the strategies
 #: whose recovery branches only it reaches (plus the damped Picard beside them). The port walks
-#: every trajectory here EXCEPT anderson's, which it is held to by convergence instead: on this
-#: ill-conditioned history numpy's SVD lstsq and the port's QR differ at ~1e-12 relative, the
-#: safeguard's accept/reject decisions amplify it, and no seed tried (five) stayed inside the 1e-12
-#: port bar. That is the port's named lstsq deviation, met, not a porting error.
+#: every trajectory here, anderson's included: its inner least-squares is the port's Householder QR
+#: in both languages, because numpy's LAPACK SVD lstsq parted across builds at ~1e-12 relative on
+#: this ill-conditioned history and the safeguard amplified it.
 _SAT_B = [0.3, 0.9, 2.5, 6.0]
 _SAT_MAX_ITER = 60
 _SAT_STRATEGIES = ['anderson', 'coefficient-damped', 'modified-newton', 'picard-damped']
