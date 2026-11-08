@@ -101,3 +101,8 @@ ENV-MUTATION-THROUGH-THE-DOOR = "<any family venv python> -m dev_lab.dev.dep --b
 
 [tool.uv.sources]
 dev-lab = { git = "https://github.com/DawnEver/dev-lab.git", branch = "integrate/main" }
+
+[tool.dev_lab.render]
+# What the family renderers read from this repo (dev_lab.dev.famfiles.RENDERERS); a relock re-runs each one due.
+deltas = "tests/architecture/_famconfig.py"
+adoption = "scripts/deny_rules.py"
