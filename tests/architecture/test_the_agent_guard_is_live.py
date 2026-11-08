@@ -34,6 +34,7 @@ _SHIPPED: Final = frozenset({
     'HPC-THROUGH-THE-DOOR',  # gained 2026-11-07 with dev-lab 8c4ab734
     'PUSH-FORCE',
     'PUSH-NO-VERIFY',
+    'REMOTE-WRITE-THROUGH-A-DOOR',  # gained 2026-11-08 with dev-lab #313 (agentpolicy)
     'PUSH-REMOTE-DELETE',
     'RECURSIVE-DELETE',  # gained 2026-10-29 with dev-lab e8b8991
     'RECURSIVE-GREP',
