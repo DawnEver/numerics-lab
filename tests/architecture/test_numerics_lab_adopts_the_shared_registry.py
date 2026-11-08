@@ -54,10 +54,14 @@ _MECHANISMS: Final = {
     'DOCS-ONLY-CARRIES': (TestPath('pyproject.toml'),),
     # Adopted 2026-11-03 with dev-lab integrate/main: three more PR-flow rows of the forge's own admission over
     # the same declared integrator table (a PR opens as a draft, forge writes go through its doors, no push
-    # lands on a merged PR).
+    # lands on a merged PR -- retired 2026-11-08 by dev-lab #320, see LANDED-BRANCH-CONTINUES below).
     'DRAFT-UNTIL-READY': (TestPath('pyproject.toml'),),
     'FORGE-DOORS-ARE-CONSENT': (TestPath('pyproject.toml'),),
-    'NO-PUSH-ONTO-A-LANDED-PR': (TestPath('pyproject.toml'),),
+    # Adopted 2026-11-08 with dev-lab #320: a push onto a landed branch is carried by a continuation PR, opened by
+    # the rendered `continue.yml` push job (it replaces NO-PUSH-ONTO-A-LANDED-PR).
+    'LANDED-BRANCH-CONTINUES': (TestPath('.github/workflows/continue.yml'),),
+    # Adopted 2026-11-08 with dev-lab #320: the base pre-push row `closed-push` this pyproject's hooks table runs.
+    'NO-PUSH-ONTO-A-CLOSED-PR': (TestPath('pyproject.toml'),),
     # Adopted 2026-11-07 with dev-lab #304: the base pre-push row `pr-current` this pyproject's hooks table runs.
     'PR-HEAD-IS-CURRENT': (TestPath('pyproject.toml'),),
     # Adopted 2026-10-24 with dev-lab 1d74f38: the October summary is the first month this tree holds.
