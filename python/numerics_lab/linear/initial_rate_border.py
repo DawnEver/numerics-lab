@@ -2,13 +2,44 @@
 
 import numpy as np
 import scipy.sparse as sp
-from scipy.sparse.csgraph import maximum_bipartite_matching
+from scipy.sparse.csgraph import min_weight_full_bipartite_matching
 from scipy.sparse.linalg import splu
 
 from numerics_lab.formulation import ResidualAssemblyBound
 from numerics_lab.linear.border_rank import border_affine_space, rank_bar
 
 __all__ = ['complete_rate_border']
+
+
+def _pivot_matching(block):
+    """Per column of ``block``, its matched row (``-1`` when none): maximum cardinality, then maximum pivot product.
+
+    A STRUCTURAL maximum matching is any one of many, chosen by storage order; it can pair a column with a
+    negligible entry while the row that actually pins it stays unmatched (the motronics chopper paired an
+    open node's acceleration with a 2e-9 coupling, leaving its own unit row ``a = 0`` out). Weights are the
+    MC64 row-scaled ``log(row_max / |a_ij|)`` (0 at each row's largest entry), shifted by one so no edge is a
+    structural zero. Each column also has a private slack row of weight ``slack``, larger than any
+    matching's total real weight, so one more real pivot always beats any product: the cardinality is the
+    structural maximum, and among those the pivots are the largest. The order of entries cannot decide it.
+    """
+    block = abs(sp.csr_matrix(block, copy=True))
+    block.sum_duplicates()
+    block.eliminate_zeros()
+    rows, columns = block.shape
+    if not block.nnz:
+        return np.full(columns, -1)
+    row_max = np.asarray(block.max(axis=1).todense()).ravel()
+    coo = block.tocoo()
+    weight = 1.0 + np.log(row_max[coo.row]) - np.log(coo.data)
+    slack = 1.0 + columns * float(weight.max())
+    real = sp.csr_matrix((weight, (coo.row, coo.col)), shape=block.shape)
+    graph = sp.vstack((real, sp.diags(np.full(columns, slack), format='csr')), format='csr')
+    # Transposed, each COLUMN is a row that must be matched (fully) to a real or a slack row of ``block``.
+    matched_columns, matched_rows = min_weight_full_bipartite_matching(graph.T.tocsr())
+    matched = np.full(columns, -1)
+    real_pair = matched_rows < rows
+    matched[matched_columns[real_pair]] = matched_rows[real_pair]
+    return matched
 
 
 def complete_rate_border(
@@ -38,7 +69,10 @@ def complete_rate_border(
     eliminated sparsely beside the stored rows. Only accelerations no such row
     reaches stay in the border. Every original equation is checked afterwards.
     """
-    mass, jacobian, matrix = map(sp.csr_matrix, (mass, jacobian, matrix))
+    # Private canonical copies: the caller's storage is never reordered, and its order never decides a pivot.
+    mass, jacobian, matrix = (sp.csr_matrix(value, copy=True) for value in (mass, jacobian, matrix))
+    for value in (mass, jacobian, matrix):
+        value.sum_duplicates()
     n = mass.shape[0]
     rhs, acceleration_rhs, evaluation_scale = map(np.asarray, (rhs, acceleration_rhs, evaluation_scale))
     rate_is_unique = np.asarray(rate_is_unique)
@@ -82,14 +116,13 @@ def complete_rate_border(
     algebraic_rows = algebraic_rows.astype(int)
     unknown = np.flatnonzero(~np.asarray(rate_is_unique))
     free_acceleration = np.setdiff1d(np.arange(n), columns)
-    # Structural matching of the acceleration-only rows onto the free accelerations: a matched
+    # Magnitude-aware matching of the acceleration-only rows onto the free accelerations: a matched
     # pair joins the sparse elimination; its nonsingularity is proven by the factorization below.
-    algebraic_block = matrix[algebraic_rows][:, n + free_acceleration].tocsr()
-    algebraic_block.eliminate_zeros()
+    algebraic_block = matrix[algebraic_rows][:, n + free_acceleration]
     # Only a border past its bound needs them: a bounded border keeps its rank-revealing dense
     # treatment, where a structurally matched but numerically dependent row stays a border row.
     needed = algebraic_rows.size and len(unknown) + len(free_acceleration) > 512
-    matched_row = maximum_bipartite_matching(algebraic_block, perm_type='row') if needed else None
+    matched_row = _pivot_matching(algebraic_block) if needed else None
     reached = np.zeros(len(free_acceleration), dtype=bool) if matched_row is None else matched_row >= 0
     eliminated_rows = algebraic_rows[matched_row[reached]] if reached.any() else np.array([], dtype=int)
     columns_eliminated = np.concatenate((columns, free_acceleration[reached])).astype(int)
