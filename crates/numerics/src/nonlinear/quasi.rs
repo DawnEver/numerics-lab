@@ -4,7 +4,7 @@
 use super::newton::{axpy, dot, neg, sub};
 use super::{
     energy_error_pct, has_converged, increment_ratio, IterationResult, IterationStrategy,
-    NonlinearError, NonlinearSystem, ResultOf, SolveOptions, StagnationWatch, StateOf,
+    NonlinearError, NonlinearSystem, ResultOf, SolveOptions, StagnationWatch, StateOf, ALPHA_MIN,
 };
 
 /// Anderson acceleration of the Picard fixed-point map.
@@ -20,13 +20,14 @@ use super::{
 /// returned state is the converged iterate's and the reference-energy gate holds. `beta` is the
 /// mixing (relaxation) factor; `m` the history depth.
 ///
-/// DEVIATION FROM THE PYTHON, named because it can matter. The Python solves the inner
-/// least-squares with `numpy.linalg.lstsq`, an SVD that returns the MINIMUM-NORM solution when
-/// `dF` is rank-deficient. This uses a Householder QR, which returns a basic solution instead and
-/// falls back to the plain Picard image `gx` when the triangular factor is numerically singular.
-/// On a full-column-rank `dF` — every step where the history is genuinely informative — the two
-/// agree to rounding. They can differ on a degenerate history, and that is a real difference, not
-/// a rounding one.
+/// SAFEGUARDED, AND JUDGED ON ITS OWN RESIDUAL (2026-11-07, as the Python): convergence reads
+/// `g(x_k) - x_k`, not the mixed step, and a step that made `||g(x) - x|| / ||x||` grow above the
+/// convergence bar is rejected -- a mix restarts the history, a substitution halves `beta` (floor
+/// [`ALPHA_MIN`]) -- and retried as a relaxed substitution from the last accepted iterate.
+///
+/// The inner least-squares is the Householder QR [`lstsq`], and the Python runs the SAME
+/// algorithm (`householder_lstsq`), so the two walk one trajectory; a numerically singular
+/// triangular factor falls back to the plain Picard image `gx` in both.
 #[derive(Debug, Clone, Copy)]
 pub struct AndersonStrategy {
     pub m: usize,
@@ -54,6 +55,10 @@ impl<S: NonlinearSystem> IterationStrategy<S> for AndersonStrategy {
         let mut watch = StagnationWatch::new(rtol);
         let mut x_hist: Vec<Vec<f64>> = Vec::new(); // past g(x_k) images
         let mut f_hist: Vec<Vec<f64>> = Vec::new(); // past residuals f_k = g(x_k) - x_k
+        let mut beta = self.beta;
+        // (x, f, ||f||/||x||) at the last accepted iterate.
+        let mut accepted: Option<(Vec<f64>, Vec<f64>, f64)> = None;
+        let mut mixed = false; // whether the step that produced `x` was an Anderson mix
         for i in 0..opts.max_iter {
             ran = i + 1;
             let st = system.assemble(&x)?;
@@ -66,45 +71,72 @@ impl<S: NonlinearSystem> IterationStrategy<S> for AndersonStrategy {
             let x_prev = x.clone();
             let gx = system.solve_linear(&st)?; // one Picard image g(x_k)
             let f = sub(&gx, &x); // fixed-point residual
+            let f_ratio = increment_ratio(&x, &gx);
+            // Only a rise ABOVE the convergence bar: below it the residual is roundoff.
+            let rose = matches!(&accepted, Some((_, _, best)) if !(f_ratio <= *best))
+                && !(f_ratio < rtol / 100.0);
+            if rose && (mixed || beta > ALPHA_MIN) {
+                // SAFEGUARD (as the Python): a step that made the relative fixed-point residual
+                // grow is rejected; a mix restarts the history, a substitution halves beta, and
+                // the retry is a relaxed substitution from the last accepted iterate.
+                if !mixed {
+                    beta = ALPHA_MIN.max(0.5 * beta);
+                }
+                let (x_ok, f_ok, _) = accepted.as_ref().expect("rose implies an accepted iterate");
+                x = axpy(x_ok, beta, f_ok);
+                x_hist.clear();
+                f_hist.clear();
+                mixed = false;
+                system.on_iteration(i, &st, err, beta, increment_ratio(&x_prev, &gx));
+                state = Some(st);
+                continue;
+            }
+            accepted = Some((x.clone(), f.clone(), f_ratio));
             x_hist.push(gx.clone());
             f_hist.push(f.clone());
             if f_hist.len() > self.m + 1 {
                 x_hist.remove(0);
                 f_hist.remove(0);
             }
-            if system.is_linear() || f_hist.len() == 1 {
-                // Nothing to mix yet (or nothing to gain): the plain Picard image.
-                x = gx;
+            if system.is_linear() {
+                x = gx.clone();
+                mixed = false;
+            } else if f_hist.len() == 1 {
+                // Nothing to mix yet (first step, or just restarted): the relaxed substitution.
+                x = axpy(&x, beta, &f);
+                mixed = false;
             } else {
                 // Column-stacked first differences of the two histories.
                 let k = f_hist.len() - 1;
                 let d_f: Vec<Vec<f64>> = (0..k).map(|j| sub(&f_hist[j + 1], &f_hist[j])).collect();
                 let d_x: Vec<Vec<f64>> = (0..k).map(|j| sub(&x_hist[j + 1], &x_hist[j])).collect();
                 match lstsq(&d_f, &f) {
-                    None => x = gx,
+                    None => x = gx.clone(),
                     Some(gamma) => {
                         // x = gx - dX gamma, then the beta relaxation on the mixed residual.
-                        let mut next = gx;
+                        let mut next = gx.clone();
                         for (col, g) in d_x.iter().zip(&gamma) {
                             next = axpy(&next, -*g, col);
                         }
-                        if (self.beta - 1.0).abs() > 0.0 {
-                            let mut mixed_f = f;
+                        if (beta - 1.0).abs() > 0.0 {
+                            let mut mixed_f = f.clone();
                             for (col, g) in d_f.iter().zip(&gamma) {
                                 mixed_f = axpy(&mixed_f, -*g, col);
                             }
-                            next = axpy(&next, self.beta - 1.0, &mixed_f);
+                            next = axpy(&next, beta - 1.0, &mixed_f);
                         }
                         x = next;
                     }
                 }
+                mixed = true;
             }
-            let increment = increment_ratio(&x_prev, &x);
-            converged = has_converged(err, &x_prev, &x, rtol) || watch.observe(err, increment);
+            // Judged on the fixed-point residual g(x_k) - x_k, not on the mixed step.
+            let increment = increment_ratio(&x_prev, &gx);
+            converged = has_converged(err, &x_prev, &gx, rtol) || watch.observe(err, increment);
             if system.is_linear() {
                 converged = true;
             }
-            system.on_iteration(i, &st, err, self.beta, increment);
+            system.on_iteration(i, &st, err, beta, increment);
             state = Some(st);
         }
         Ok(IterationResult {

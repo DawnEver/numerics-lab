@@ -26,6 +26,7 @@ from numerics_lab.nonlinear._seam import (
     ResidualReferencedSystem,
     SourceScalableSystem,
     _energy_error_pct,
+    _free_residual_norm,
     _has_converged,
     _StagnationWatch,
     increment_ratio,
@@ -49,19 +50,6 @@ __all__ = [
     'NewtonLineSearchStrategy',
     'NewtonStrategy',
 ]
-
-
-def _free_residual_norm(system, x, state) -> float:
-    """``system.residual_norm`` when the system defines it, else the Protocol's default ``||r||``.
-
-    A duck-typed system inherits nothing from a ``Protocol``, so the default body has to be
-    spelled where it is consumed.
-    """
-    try:
-        norm_of = system.residual_norm
-    except AttributeError:
-        return float(np.linalg.norm(system.residual(x, state)))
-    return float(norm_of(x, state))
 
 
 def _residual_reference(system, state, seed_norm: float) -> float:
@@ -325,14 +313,16 @@ class ModifiedNewtonStrategy:
     ``solve_system`` for a non-scipy tangent (FEA's opaque bundle). Converges to the same root as
     Newton; same delayed-break energy bookkeeping.
 
-    MANUAL-20260721-419: a HELD tangent step is only amortized cheaply while it is still a good local
-    model. On the sharper-curvature FEMM-matching BH spline the tangent goes stale mid-hold and the
-    step over-shoots into a spurious root -- a near-zero field on the sdm map, an outright energy
-    blow-up on MEC/FEA (``newton`` / ``newton-linesearch``, which refresh every step, land the correct
-    root on the same maps). So every HELD (non-refresh) step is checked against the RAW (unfiltered)
-    ``residual`` norm before/after: if the step would GROW ``||residual||``, the held tangent is stale
-    for the current curvature -- refresh it right there and retake the step with the fresh one,
-    instead of marching toward the spurious root.
+    EVERY STEP IS SEARCHED (2026-11-07). An Armijo backtracking along the direction, on the RAW
+    residual norm, accepts the first ``lam`` in ``1, shrink, shrink**2, ...`` that decreases it; an
+    unaccepted search takes the full step, as :class:`NewtonStrategy` does. A HELD step that needs
+    any search (not accepted at ``lam = 1``) means the held tangent is stale for the current
+    curvature, so the tangent is refreshed right there and the step retaken and re-searched.
+    Before, only HELD steps were checked and a REFRESHED step was "trusted": measured on a
+    saturating slab, the fresh tangent at a zero field gives a full step ~180x past the root, and
+    the solve diverged (field error 16..65 at the cap) where full Newton converged in 11 steps.
+    MANUAL-20260721-419 is the held-step half of the same failure: on the sharper FEMM-matching
+    spline the held tangent went stale mid-hold and over-shot into a spurious root.
 
     Deliberately the raw residual, not :meth:`NonlinearSystem.residual_norm`: that hook is
     scale-RELATIVE (``||g(x)-x|| / ||x||``), which is exactly blind to this failure mode -- once a
@@ -340,15 +330,54 @@ class ModifiedNewtonStrategy:
     that no longer scales with ``x``, so the RATIO plateaus near a fixed asymptote even as the
     ABSOLUTE residual (and ``x`` itself) keeps growing without bound (measured: a stale sdm step took
     ``||x||`` 1.6e3 -> 1.4e8 while the relative residual read a near-constant ~1.0 throughout). The raw
-    norm has no such blind spot: it grows in lockstep with the divergence. A held step that genuinely
-    shrinks the residual (every low-curvature case, and the common case generally) never trips this
-    guard, so the amortization -- and its bit-for-bit iterate -- is unchanged.
+    norm has no such blind spot. ``on_iteration`` reports the accepted ``lam`` as its alpha.
     """
 
     name = 'modified-newton'
 
-    def __init__(self, refresh_every: int = 3) -> None:
+    def __init__(
+        self, refresh_every: int = 3, max_backtracks: int = 12, shrink: float = 0.5, armijo: float = 1e-4
+    ) -> None:
         self.refresh_every = max(1, refresh_every)
+        self.max_backtracks = int(max_backtracks)
+        if self.max_backtracks < 0:
+            msg = f'max_backtracks must be nonnegative, got {max_backtracks!r}'
+            raise ValueError(msg)
+        self.shrink = float(shrink)
+        self.armijo = float(armijo)
+
+    def _direction(self, system, x, state, r, held):
+        """``(dx, held)``: the Newton direction through the held factor, refreshing it when ``held`` is None."""
+        if held is None:
+            jac = system.tangent(x, state)
+            if jac is None:
+                return None, None
+            lu = _lu_factorize(jac)
+            held = lu.solve if lu is not None else (lambda rhs, jac=jac: system.solve_system(jac, rhs))
+        return held(-r), held
+
+    def _search(self, system, x, dx, r0):
+        """Armijo backtracking on the RAW residual norm: ``(accepted, lam, trial)``.
+
+        When no ``lam`` is accepted, ``trial`` is the full step and ``lam`` is 1 -- an unaccepted
+        search takes the full step, as :class:`NewtonStrategy` does.
+        """
+
+        def trial_at(lam: float):
+            trial = x + lam * dx
+            return trial, float(np.linalg.norm(np.asarray(system.residual(trial, system.assemble(trial)), dtype=float)))
+
+        decreases = sufficient_decrease(r0, -r0, c1=self.armijo)
+        search = backtracking(
+            trial_at,
+            lambda lam, t: bool(np.isfinite(t[1])) and decreases(lam, t[1]),
+            tries=self.max_backtracks + 1,
+            shrink=self.shrink,
+        )
+        assert search.trial is not None and search.first is not None
+        if search.accepted:
+            return True, search.step, search.trial[0]
+        return False, 1.0, search.first[0]
 
     def solve(
         self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
@@ -359,8 +388,7 @@ class ModifiedNewtonStrategy:
         converged = False
         ran = 0
         watch = _StagnationWatch(rtol_energy_pct)
-        cached_jac = None
-        cached_lu = None  # splu factor of cached_jac, reused across the held (non-refresh) steps
+        held = None  # back-substitution through the factor of the held tangent; None = refresh
         for i in range(max_iter):
             ran = i + 1
             state = system.assemble(x)
@@ -369,45 +397,33 @@ class ModifiedNewtonStrategy:
             err = _energy_error_pct(state.total_energy, last_energy)
             last_energy = state.total_energy
             x_prev = x
-            refresh = i % self.refresh_every == 0 or cached_jac is None
-            if refresh:
-                cached_jac = system.tangent(x, state)  # refresh (re-assemble)
-                cached_lu = _lu_factorize(cached_jac)  # re-factorize ONCE; reused below until next refresh
-            if cached_jac is None:
+            if i % self.refresh_every == 0:
+                held = None
+            fresh = held is None
+            r = np.asarray(system.residual(x, state), dtype=float)
+            dx, held = self._direction(system, x, state, r, held)
+            lam = 1.0
+            if dx is None:
                 x = system.solve_linear(state)  # no Jacobian -> Picard substitution
             else:
-                r = np.asarray(system.residual(x, state), dtype=float)
-                # Reuse the cached factorization: bit-for-bit the spsolve step, without re-factorizing.
-                dx = cached_lu.solve(-r) if cached_lu is not None else system.solve_system(cached_jac, -r)
-                if refresh:
-                    x = x + dx  # freshly-refreshed tangent: trusted, no staleness check needed
-                else:
-                    # Staleness guard (MANUAL-20260721-419): a HELD step must not GROW the RAW
-                    # (unfiltered) residual norm -- see the class docstring for why the scale-relative
-                    # residual_norm hook is blind to this. It never grows on a low-curvature hold, so
-                    # this branch is a no-op there and the iterate stays bit-for-bit the pre-guard step.
-                    r0 = float(np.linalg.norm(r))
-                    trial = x + dx
-                    r1 = float(np.linalg.norm(np.asarray(system.residual(trial, system.assemble(trial)), dtype=float)))
-                    if np.isfinite(r1) and r1 <= r0:
-                        x = trial
+                r0 = float(np.linalg.norm(r))
+                accepted, lam, trial = self._search(system, x, dx, r0)
+                if not fresh and not (accepted and lam == 1.0):
+                    # A HELD step that needs a search is a stale tangent: refresh it and retake
+                    # the step with the fresh factor.
+                    dx, held = self._direction(system, x, state, r, None)
+                    if dx is None:
+                        accepted, lam, trial = True, 1.0, system.solve_linear(state)
                     else:
-                        # Stale for the current curvature: refresh right here and retake the step with
-                        # the fresh tangent, instead of marching toward the spurious root.
-                        cached_jac = system.tangent(x, state)
-                        cached_lu = _lu_factorize(cached_jac)
-                        if cached_jac is None:
-                            x = system.solve_linear(state)
-                        else:
-                            dx = cached_lu.solve(-r) if cached_lu is not None else system.solve_system(cached_jac, -r)
-                            x = x + dx
+                        accepted, lam, trial = self._search(system, x, dx, r0)
+                x = trial
             increment = increment_ratio(x_prev, x)
             converged = _has_converged(
                 err, x_prev, x, rtol_energy_pct, material_change=state.material_change
             ) or watch.observe(err, increment, state.material_change)
             if system.is_linear:
                 converged = True
-            system.on_iteration(i, state, err, 1.0, increment)
+            system.on_iteration(i, state, err, lam, increment)
         return IterationResult(x=x, state=state, iterations=ran, converged=converged)
 
 

@@ -151,6 +151,79 @@ class _AffineSystem:
         self.trace.append({'alpha': _num(alpha), 'err': _num(err), 'increment': _num(increment)})
 
 
+#: The saturating fixture's iron floor: ``nu`` runs from this (unsaturated) to 1 (vacuum).
+_SAT_K1 = 1e-3
+#: The saturating fixture's seed, unsaturated (``nu(0.5) ~ 5e-3``), so the first substitution still lands deep.
+_SAT_SEED = 0.5
+
+
+class _SaturatingDiagonal:
+    """``nu(x_i) x_i = b_i`` per component, ``nu`` saturating from ``_SAT_K1`` to 1 -- deep B-H in miniature.
+
+    The affine fixtures never leave a strategy's happy path: every Anderson mix is exact and every
+    Newton step is accepted at ``lam = 1``, so the Anderson safeguard, the modified-Newton search
+    and the coefficient lag are untouched by them. Here a substitution from zero lands ~1000x
+    past the root, so all three fire, and the port must walk the same recovery. Carries the raw
+    pair too, so ``coefficient-damped`` runs on it. Every operation is elementwise, so both
+    languages evaluate the same closed form.
+    """
+
+    is_linear = False
+
+    def __init__(self, b) -> None:
+        self.b = np.asarray(b, float)
+        self.trace: list[dict] = []
+
+    @staticmethod
+    def nu(x: np.ndarray) -> np.ndarray:
+        return _SAT_K1 + (1.0 - _SAT_K1) * x**8 / (x**8 + 1.0)
+
+    @staticmethod
+    def dnu(x: np.ndarray) -> np.ndarray:
+        return (1.0 - _SAT_K1) * 8.0 * x**7 / (x**8 + 1.0) ** 2
+
+    def initial_guess(self):
+        # NOT zero: from zero every early residual is parallel to `b`, so the Anderson history is
+        # rank-deficient and every mix falls back to the Picard image. A uniform seed breaks the
+        # proportionality.
+        return np.full(self.b.size, _SAT_SEED)
+
+    def raw_state(self, x):
+        x = np.asarray(x, float)
+        idx = np.arange(self.b.size)
+        c = self.nu(x)
+        return idx, idx, c, self.b.copy(), float(np.sum(0.5 * c * x * x))
+
+    def fold_raw(self, s_row, s_col, s_val, t_mat, total_energy=0.0):
+        return AssembledState(
+            system_matrix=(np.asarray(s_val, float), np.asarray(t_mat, float)), total_energy=total_energy
+        )
+
+    def assemble(self, x, /):
+        return self.fold_raw(*self.raw_state(x))
+
+    def solve_linear(self, state, /):
+        vals, source = state.system_matrix
+        return source / vals
+
+    def residual(self, x, state, /):
+        vals, source = state.system_matrix
+        return vals * np.asarray(x, float) - source
+
+    def residual_norm(self, x, state, /) -> float:
+        return float(np.linalg.norm(self.residual(x, state)))
+
+    def tangent(self, x, state, /):
+        x = np.asarray(x, float)
+        return self.nu(x) + x * self.dnu(x)
+
+    def solve_system(self, matrix, rhs, /):
+        return np.asarray(rhs, float) / np.asarray(matrix, float)
+
+    def on_iteration(self, i, state, err, alpha, increment, /) -> None:
+        self.trace.append({'alpha': _num(alpha), 'err': _num(err), 'increment': _num(increment)})
+
+
 class _NuMixSystem:
     """The FEA `raw_state`/`fold_raw` contract, reduced to one scalar per call.
 
@@ -232,6 +305,25 @@ _FIXTURES: dict[str, dict] = {
 
 _RTOL_PCT = 0.01
 _NU_K_SEQ = [1.0, 3.0, 2.0, 5.0]
+#: The saturating fixture: one component per regime, unsaturated to deep, and the strategies
+#: whose recovery branches only it reaches (plus the damped Picard beside them). The port walks
+#: every trajectory here, anderson's included: its inner least-squares is the port's Householder QR
+#: in both languages, because numpy's LAPACK SVD lstsq parted across builds at ~1e-12 relative on
+#: this ill-conditioned history and the safeguard amplified it.
+_SAT_B = [0.3, 0.9, 2.5, 6.0]
+_SAT_MAX_ITER = 60
+_SAT_STRATEGIES = ['anderson', 'coefficient-damped', 'modified-newton', 'picard-damped']
+
+
+def _run_saturating(name: str) -> dict:
+    system = _SaturatingDiagonal(_SAT_B)
+    result = get_strategy(name).solve(system, max_iter=_SAT_MAX_ITER, rtol_energy_pct=_RTOL_PCT)
+    return {
+        'trace': system.trace,
+        'x': [_num(v) for v in np.asarray(result.x, float).ravel()],
+        'iterations': int(result.iterations),
+        'converged': bool(result.converged),
+    }
 
 
 def _run_generic(name: str, fixture: dict) -> dict:
@@ -274,6 +366,13 @@ def _build() -> dict:
         ),
         'rtol_energy_pct': _RTOL_PCT,
         'fixtures': fixtures,
+        'saturating': {
+            'b': _SAT_B,
+            'k1': _SAT_K1,
+            'seed': _SAT_SEED,
+            'max_iter': _SAT_MAX_ITER,
+            'strategies': {name: _run_saturating(name) for name in _SAT_STRATEGIES},
+        },
         'coefficient_damped': {
             'k_seq': _NU_K_SEQ,
             'max_iter': 4,
@@ -335,6 +434,31 @@ def test_the_trajectory_comparison_rejects_behavior_changes_and_nonfinite_number
         _same(got, want, 'planted defect')
 
 
+def _same_run(got: dict, want: dict, where: str) -> None:
+    """One strategy run against its frozen record: decisions exact, numbers on the port bar."""
+    assert got['iterations'] == want['iterations'], f'{where}.iterations'
+    assert got['converged'] == want['converged'], f'{where}.converged'
+    assert len(got['trace']) == len(want['trace']), f'{where}: trace length'
+    for k, (g, w) in enumerate(zip(got['trace'], want['trace'], strict=True)):
+        for field in ('alpha', 'err', 'increment'):
+            _same(g[field], w[field], f'{where}.trace[{k}].{field}')
+    for k, (g, w) in enumerate(zip(got['x'], want['x'], strict=True)):
+        _same(g, w, f'{where}.x[{k}]')
+
+
+@pytest.mark.unit
+def test_the_saturating_fixture_reaches_every_recovery_branch() -> None:
+    """THE FLOOR for the saturating fixture, without which it could stop exercising its branches.
+
+    The Anderson safeguard reports a halved beta, the modified-Newton search a ``lam`` below 1,
+    and every strategy on it converges.
+    """
+    runs = _load()['saturating']['strategies']
+    assert min(t['alpha'] for t in runs['anderson']['trace']) < 1.0, 'the anderson safeguard never fired'
+    assert min(t['alpha'] for t in runs['modified-newton']['trace']) < 1.0, 'the search never shrank'
+    assert all(run['converged'] for run in runs.values()), {n: r['converged'] for n, r in runs.items()}
+
+
 @pytest.mark.unit
 def test_the_live_python_still_produces_the_frozen_trajectories() -> None:
     """Freeze the iteration behavior, not an assumed BLAS or compiler operation order.
@@ -354,16 +478,12 @@ def test_the_live_python_still_produces_the_frozen_trajectories() -> None:
         assert sorted(want_fixture['strategies']) == sorted(got_fixture['strategies']), fixture_name
         assert want_fixture['strategies'], f'{fixture_name}: the golden drives no strategy at all'
         for name, want in want_fixture['strategies'].items():
-            got = got_fixture['strategies'][name]
-            where = f'{fixture_name}/{name}'
-            assert got['iterations'] == want['iterations'], f'{where}.iterations'
-            assert got['converged'] == want['converged'], f'{where}.converged'
-            assert len(got['trace']) == len(want['trace']), f'{where}: trace length'
-            for k, (g, w) in enumerate(zip(got['trace'], want['trace'], strict=True)):
-                for field in ('alpha', 'err', 'increment'):
-                    _same(g[field], w[field], f'{where}.trace[{k}].{field}')
-            for k, (g, w) in enumerate(zip(got['x'], want['x'], strict=True)):
-                _same(g, w, f'{where}.x[{k}]')
+            _same_run(got_fixture['strategies'][name], want, f'{fixture_name}/{name}')
+
+    want_sat, got_sat = golden['saturating'], live['saturating']
+    assert sorted(want_sat['strategies']) == sorted(got_sat['strategies']), 'saturating: strategy set'
+    for name, want in want_sat['strategies'].items():
+        _same_run(got_sat['strategies'][name], want, f'saturating/{name}')
 
     want_nu, got_nu = golden['coefficient_damped'], live['coefficient_damped']
     assert len(got_nu['folded']) == len(want_nu['folded']), 'coefficient_damped: fold count'
