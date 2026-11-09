@@ -13,7 +13,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from numerics_lab.quasi_newton import LbfgsMemory, bfgs_update
+from numerics_lab.quasi_newton import LbfgsMemory, SecantPair, SingularCompactModel, bfgs_update
 
 _RNG = np.random.default_rng(11)
 _N = 6
@@ -68,3 +68,42 @@ def test_planted_control_a_perturbed_pair_breaks_the_identity() -> None:
     for p in memory.pairs:
         planted.push(p.s, p.y + (1e-3 * _RNG.standard_normal(_N) if p is pair else 0.0))
     assert not np.allclose(compact, _dense_chain(planted), rtol=1e-10, atol=1e-10)
+
+
+def _middle(memory: LbfgsMemory) -> np.ndarray:
+    theta = 1.0 / memory.gamma
+    s = np.column_stack([pair.s for pair in memory.pairs])
+    y = np.column_stack([pair.y for pair in memory.pairs])
+    sy = s.T @ y
+    lower = np.tril(sy, -1)
+    return np.block([[-np.diag(np.diag(sy)), lower.T], [lower, theta * (s.T @ s)]])
+
+
+def test_a_well_scaled_memory_keeps_the_explicit_inverse_golden() -> None:
+    memory = _filled(4, 5)
+    _theta, _w, m = memory.compact_factors()
+    golden = np.linalg.inv(_middle(memory))
+    assert np.allclose(m, golden, rtol=1e-12, atol=1e-12 * float(np.max(np.abs(golden))))
+
+
+def test_a_pair_with_curvature_below_eps_of_its_y_norm_is_rejected_and_the_model_stays() -> None:
+    memory = _filled(3, 5)
+    reference = memory.hessian()
+    u = _RNG.standard_normal(_N)
+    v = _RNG.standard_normal(_N)
+    v -= (v @ u) / (u @ u) * u  # y nearly orthogonal to s: s.y ~ 1e-18, far above SECANT_FLOOR
+    s, y = 1e-12 * u / np.linalg.norm(u), v / np.linalg.norm(v) + 1e-6 * u / np.linalg.norm(u)
+    assert float(s @ y) > 1e-30
+    assert not memory.push(s, y)
+    hessian = memory.hessian()
+    assert np.all(np.isfinite(hessian))
+    assert np.allclose(hessian, reference, rtol=1e-12, atol=1e-12)
+
+
+def test_a_singular_middle_matrix_raises_the_named_error() -> None:
+    memory = _filled(2, 5)
+    newest = memory.pairs[-1]
+    memory.pairs = (*memory.pairs, SecantPair(np.zeros(_N), newest.y, newest.rho))  # a zero step: a null row
+    with pytest.raises(SingularCompactModel):
+        memory.compact_factors()
+    assert issubclass(SingularCompactModel, np.linalg.LinAlgError)

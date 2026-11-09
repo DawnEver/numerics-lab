@@ -20,14 +20,18 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
+import warnings
+
 import numpy as np
 from numpy.typing import NDArray
+from scipy.linalg import LinAlgError, LinAlgWarning, solve
 
 __all__ = [
     'SECANT_FLOOR',
     'BroydenUpdate',
     'LbfgsMemory',
     'SecantPair',
+    'SingularCompactModel',
     'bfgs_inverse_update',
     'bfgs_update',
     'broyden_apply',
@@ -42,7 +46,15 @@ __all__ = [
 #: carries no information; the pair is skipped.
 SECANT_FLOOR = 1e-30
 
+#: An L-BFGS pair is kept only if ``s . y > CURVATURE_EPS * y . y`` (Byrd, Lu, Nocedal and Zhu 1995):
+#: a curvature that is roundoff against ``|y|^2`` would scale ``theta = y.y / s.y`` past float range.
+CURVATURE_EPS = float(np.finfo(float).eps)
+
 Vector = NDArray[np.float64]
+
+
+class SingularCompactModel(LinAlgError):
+    """The compact L-BFGS middle matrix is singular in floating point; reset the memory."""
 
 
 @dataclass(frozen=True)
@@ -154,7 +166,7 @@ def broyden_inverse_update(h: NDArray[np.float64], s: Vector, y: Vector) -> NDAr
 class LbfgsMemory:
     """The L-BFGS pair memory: the ONE bookkeeping behind every limited-memory BFGS model here.
 
-    Keeps the last ``size`` secant pairs (oldest first), SKIPS a pair whose curvature ``y . s`` is not
+    Keeps the last ``size`` secant pairs (oldest first), SKIPS a pair whose curvature ``y . s`` is not above ``CURVATURE_EPS * y . y`` or
     above :data:`SECANT_FLOOR`, and scales by ``gamma = s.y / y.y`` of the newest kept pair (``1``
     when empty). One model, two forms: :meth:`inverse_apply` is the two-loop ``H q`` on ``gamma I``;
     :meth:`hessian` is the compact direct form ``B = theta I - W M W^T`` with ``theta = 1 / gamma``
@@ -171,11 +183,11 @@ class LbfgsMemory:
         self._dimension: int | None = None
 
     def push(self, s: Vector, y: Vector) -> bool:
-        """Keep ``(s, y)`` if its curvature is positive, dropping the oldest past ``size``; True if kept."""
+        """Keep ``(s, y)`` if ``s.y`` clears both :data:`SECANT_FLOOR` and ``CURVATURE_EPS * y.y``; True if kept."""
         s, y = np.asarray(s, dtype=float), np.asarray(y, dtype=float)
         self._dimension = s.size
         ys = float(y @ s)
-        if not ys > SECANT_FLOOR:
+        if not (ys > SECANT_FLOOR and ys > CURVATURE_EPS * float(y @ y)):
             return False
         self.pairs = (*self.pairs[max(0, len(self.pairs) + 1 - self.size) :], SecantPair(s.copy(), y.copy(), 1.0 / ys))
         self.gamma = ys / float(y @ y)
@@ -199,7 +211,14 @@ class LbfgsMemory:
         sy = s.T @ y
         lower = np.tril(sy, -1)
         middle = np.block([[-np.diag(np.diag(sy)), lower.T], [lower, theta * (s.T @ s)]])
-        return theta, np.hstack([y, theta * s]), np.linalg.inv(middle)
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', LinAlgWarning)
+            try:
+                m = solve(middle, np.eye(middle.shape[0]))
+            except (LinAlgError, LinAlgWarning) as exc:
+                msg = f'the compact L-BFGS middle matrix ({middle.shape[0]}x{middle.shape[0]}) is singular'
+                raise SingularCompactModel(msg) from exc
+        return theta, np.hstack([y, theta * s]), m
 
     def hessian(self) -> NDArray[np.float64]:
         """The dense direct model ``B`` (the compact form expanded); for small ``n`` and for tests."""
