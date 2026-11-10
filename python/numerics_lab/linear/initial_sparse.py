@@ -502,6 +502,7 @@ def sparse_complete_initial_rate(
             equation_bound=equation_bound,
             tolerance=tolerance,
             acceleration_equation_start=n + algebraic.shape[0],
+            algebraic_acceleration_rows=np.arange(2 * n + algebraic.shape[0], 2 * n + 2 * algebraic.shape[0]),
         )
         return SparseInitialPair(pair.state, pair.rate + correction[:n], unique)
     nonzero = np.asarray(matrix.getnnz(axis=0)).ravel() != 0
