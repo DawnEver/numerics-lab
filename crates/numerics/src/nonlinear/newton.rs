@@ -264,21 +264,19 @@ impl<S: NonlinearSystem> IterationStrategy<S> for NewtonStrategy {
 /// Picard step when `tangent` returns `None`. Converges to the same root as Newton; same
 /// delayed-break energy bookkeeping.
 ///
-/// MANUAL-20260721-419: a HELD tangent step is only amortized cheaply while it is still a good
-/// local model. On the sharper-curvature FEMM-matching BH spline the tangent goes stale mid-hold
-/// and the step over-shoots into a spurious root — a near-zero field on the sdm map, an outright
-/// energy blow-up on MEC/FEA (`newton` / `newton-linesearch`, which refresh every step, land the
-/// correct root on the same maps). So every HELD (non-refresh) step is checked against the RAW
-/// (unfiltered) `residual` norm before/after: if the step would GROW `||residual||`, the held
-/// tangent is stale for the current curvature — refresh it right there and retake the step with
-/// the fresh one, instead of marching toward the spurious root.
+/// EVERY STEP IS SEARCHED (2026-11-07, as the Python): Armijo backtracking on the RAW residual
+/// norm, the full step when nothing is accepted, and a HELD step that needs any search refreshes
+/// the tangent and is retaken. A refreshed step used to be trusted unsearched, and from a zero
+/// field on a saturating map it diverged where full Newton converged. MANUAL-20260721-419 is the
+/// held-step half of the same failure.
 ///
 /// Deliberately the raw residual, not [`NonlinearSystem::residual_norm`]: that hook is
 /// scale-RELATIVE, which is exactly blind to this failure mode — once a stale step has pushed `x`
 /// far outside the physical range, `g(x)` saturates to a value that no longer scales with `x`, so
 /// the RATIO plateaus near a fixed asymptote even as the ABSOLUTE residual keeps growing without
 /// bound (measured: a stale sdm step took `||x||` 1.6e3 -> 1.4e8 while the relative residual read
-/// a near-constant ~1.0 throughout). The raw norm has no such blind spot.
+/// a near-constant ~1.0 throughout). The raw norm has no such blind spot. `on_iteration` reports
+/// the accepted `lam` as its alpha.
 ///
 /// NOT PORTED: the Python caches an `splu` FACTOR of the held tangent and reuses it across the
 /// held steps. Its own docstring records that this is bit-for-bit the iterate a per-step solve
@@ -288,11 +286,51 @@ impl<S: NonlinearSystem> IterationStrategy<S> for NewtonStrategy {
 #[derive(Debug, Clone, Copy)]
 pub struct ModifiedNewtonStrategy {
     pub refresh_every: usize,
+    pub max_backtracks: usize,
+    pub shrink: f64,
+    pub armijo: f64,
 }
 
 impl Default for ModifiedNewtonStrategy {
     fn default() -> Self {
-        Self { refresh_every: 3 }
+        Self {
+            refresh_every: 3,
+            max_backtracks: 12,
+            shrink: 0.5,
+            armijo: 1e-4,
+        }
+    }
+}
+
+impl ModifiedNewtonStrategy {
+    /// Armijo backtracking on the RAW residual norm: `(accepted, lam, trial)`, where `trial` is
+    /// the full step when no `lam` is accepted (mirrors the Python `_search`).
+    fn search<S: NonlinearSystem>(
+        &self,
+        system: &mut S,
+        x: &[f64],
+        dx: &[f64],
+        r0: f64,
+    ) -> Result<(bool, f64, Vec<f64>), NonlinearError> {
+        let mut lam = 1.0_f64;
+        let mut full: Option<Vec<f64>> = None;
+        for _ in 0..=self.max_backtracks {
+            let trial = axpy(x, lam, dx);
+            let trial_state = system.assemble(&trial)?;
+            let r1 = norm(&system.residual(&trial, &trial_state)?);
+            if full.is_none() {
+                full = Some(trial.clone());
+            }
+            if r1.is_finite() && r1 <= (1.0 - self.armijo * lam) * r0 {
+                return Ok((true, lam, trial));
+            }
+            lam *= self.shrink;
+        }
+        Ok((
+            false,
+            1.0,
+            full.expect("the search evaluates at least one trial"),
+        ))
     }
 }
 
@@ -310,7 +348,7 @@ impl<S: NonlinearSystem> IterationStrategy<S> for ModifiedNewtonStrategy {
         let mut converged = false;
         let mut ran = 0;
         let mut watch = StagnationWatch::new(rtol);
-        let mut cached_jac: Option<S::Matrix> = None;
+        let mut held: Option<S::Matrix> = None;
         for i in 0..opts.max_iter {
             ran = i + 1;
             let st = system.assemble(&x)?;
@@ -321,38 +359,40 @@ impl<S: NonlinearSystem> IterationStrategy<S> for ModifiedNewtonStrategy {
             let err = energy_error_pct(st.total_energy, last_energy);
             last_energy = Some(st.total_energy);
             let x_prev = x.clone();
-            let refresh = i % every == 0 || cached_jac.is_none();
-            if refresh {
-                cached_jac = system.tangent(&x, &st)?;
+            if i % every == 0 {
+                held = None;
             }
-            match &cached_jac {
+            let fresh = held.is_none();
+            if fresh {
+                held = system.tangent(&x, &st)?;
+            }
+            let mut lam = 1.0;
+            match &held {
                 // No Jacobian -> Picard substitution.
                 None => x = system.solve_linear(&st)?,
                 Some(jac) => {
                     let r = system.residual(&x, &st)?;
+                    let r0 = norm(&r);
                     let dx = system.solve_system(jac, &neg(&r))?;
-                    if refresh {
-                        // Freshly-refreshed tangent: trusted, no staleness check needed.
-                        x = axpy(&x, 1.0, &dx);
-                    } else {
-                        let r0 = norm(&r);
-                        let trial = axpy(&x, 1.0, &dx);
-                        let trial_state = system.assemble(&trial)?;
-                        let r1 = norm(&system.residual(&trial, &trial_state)?);
-                        if r1.is_finite() && r1 <= r0 {
-                            x = trial;
-                        } else {
-                            // Stale: refresh right here and retake the step.
-                            cached_jac = system.tangent(&x, &st)?;
-                            match &cached_jac {
-                                None => x = system.solve_linear(&st)?,
-                                Some(fresh) => {
-                                    let dx = system.solve_system(fresh, &neg(&r))?;
-                                    x = axpy(&x, 1.0, &dx);
-                                }
+                    let (mut accepted, mut step, mut trial) = self.search(system, &x, &dx, r0)?;
+                    if !fresh && !(accepted && step == 1.0) {
+                        // A held step that needs a search is a stale tangent: refresh and retake.
+                        held = system.tangent(&x, &st)?;
+                        match &held {
+                            None => {
+                                trial = system.solve_linear(&st)?;
+                                accepted = true;
+                                step = 1.0;
+                            }
+                            Some(jac) => {
+                                let dx = system.solve_system(jac, &neg(&r))?;
+                                (accepted, step, trial) = self.search(system, &x, &dx, r0)?;
                             }
                         }
                     }
+                    // An unaccepted search takes the full step, as Newton does.
+                    lam = if accepted { step } else { 1.0 };
+                    x = trial;
                 }
             }
             let increment = increment_ratio(&x_prev, &x);
@@ -360,7 +400,7 @@ impl<S: NonlinearSystem> IterationStrategy<S> for ModifiedNewtonStrategy {
             if system.is_linear() {
                 converged = true;
             }
-            system.on_iteration(i, &st, err, 1.0, increment);
+            system.on_iteration(i, &st, err, lam, increment);
             state = Some(st);
         }
         Ok(IterationResult {

@@ -254,8 +254,8 @@ wheels = [
 
 [[package]]
 name = "dev-lab"
-version = "0.0.1.dev2467+g5aab8293d"
-source = { git = "https://github.com/DawnEver/dev-lab.git?branch=integrate%2Fmain#5aab8293d6342cf8a6df11e7c5b459cdbc53197a" }
+version = "0.0.1.dev2718+gcde66818c"
+source = { git = "https://github.com/DawnEver/dev-lab.git?branch=integrate%2Fmain#cde66818c8c5fdcc2f06dea5cd67acdaec85aa20" }
 dependencies = [
     { name = "cryptography" },
     { name = "lab-commons", extra = ["io", "paths", "structured", "units"] },
@@ -401,8 +401,8 @@ wheels = [
 
 [[package]]
 name = "lab-commons"
-version = "0.3.1.dev1335+gffe6893bb"
-source = { git = "https://github.com/DawnEver/lab-commons.git#ffe6893bb9c476df2d52a9425cc1a8f87fb62cf3" }
+version = "0.3.1.dev1398+g75261a272"
+source = { git = "https://github.com/DawnEver/lab-commons.git#75261a2725afe4a3cf6250d55da9da50f2f9d41c" }
 
 [package.optional-dependencies]
 io = [
@@ -585,16 +585,20 @@ dependencies = [
 [package.optional-dependencies]
 dev = [
     { name = "dev-lab", extra = ["test"] },
-    { name = "lab-commons" },
     { name = "maturin" },
+    { name = "pytest" },
+    { name = "pytest-xdist" },
+    { name = "ruff" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "dev-lab", extras = ["test"], marker = "extra == 'dev'", git = "https://github.com/DawnEver/dev-lab.git?branch=integrate%2Fmain" },
-    { name = "lab-commons", marker = "extra == 'dev'", git = "https://github.com/DawnEver/lab-commons.git" },
     { name = "maturin", marker = "extra == 'dev'", specifier = ">=1.7" },
     { name = "numpy" },
+    { name = "pytest", marker = "extra == 'dev'" },
+    { name = "pytest-xdist", marker = "extra == 'dev'" },
+    { name = "ruff", marker = "extra == 'dev'" },
     { name = "scipy" },
 ]
 provides-extras = ["dev"]

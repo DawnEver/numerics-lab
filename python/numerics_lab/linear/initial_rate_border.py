@@ -2,12 +2,44 @@
 
 import numpy as np
 import scipy.sparse as sp
+from scipy.sparse.csgraph import min_weight_full_bipartite_matching
 from scipy.sparse.linalg import splu
 
 from numerics_lab.formulation import ResidualAssemblyBound
 from numerics_lab.linear.border_rank import border_affine_space, rank_bar
 
 __all__ = ['complete_rate_border']
+
+
+def _pivot_matching(block):
+    """Per column of ``block``, its matched row (``-1`` when none): maximum cardinality, then maximum pivot product.
+
+    A STRUCTURAL maximum matching is any one of many, chosen by storage order; it can pair a column with a
+    negligible entry while the row that actually pins it stays unmatched (the motronics chopper paired an
+    open node's acceleration with a 2e-9 coupling, leaving its own unit row ``a = 0`` out). Weights are the
+    MC64 row-scaled ``log(row_max / |a_ij|)`` (0 at each row's largest entry), shifted by one so no edge is a
+    structural zero. Each column also has a private slack row of weight ``slack``, larger than any
+    matching's total real weight, so one more real pivot always beats any product: the cardinality is the
+    structural maximum, and among those the pivots are the largest. The order of entries cannot decide it.
+    """
+    block = abs(sp.csr_matrix(block, copy=True))
+    block.sum_duplicates()
+    block.eliminate_zeros()
+    rows, columns = block.shape
+    if not block.nnz:
+        return np.full(columns, -1)
+    row_max = np.asarray(block.max(axis=1).todense()).ravel()
+    coo = block.tocoo()
+    weight = 1.0 + np.log(row_max[coo.row]) - np.log(coo.data)
+    slack = 1.0 + columns * float(weight.max())
+    real = sp.csr_matrix((weight, (coo.row, coo.col)), shape=block.shape)
+    graph = sp.vstack((real, sp.diags(np.full(columns, slack), format='csr')), format='csr')
+    # Transposed, each COLUMN is a row that must be matched (fully) to a real or a slack row of ``block``.
+    matched_columns, matched_rows = min_weight_full_bipartite_matching(graph.T.tocsr())
+    matched = np.full(columns, -1)
+    real_pair = matched_rows < rows
+    matched[matched_columns[real_pair]] = matched_rows[real_pair]
+    return matched
 
 
 def complete_rate_border(
@@ -24,14 +56,23 @@ def complete_rate_border(
     equation_bound,
     tolerance,
     acceleration_equation_start,
+    algebraic_acceleration_rows,
 ):
     """Keep admitted rates exact; expose remaining rate freedoms, not chosen zeros.
 
     The caller proves independent mass rows AND columns. Field accelerations
     are solved sparsely; dense storage is state-by-small-border, never a dense
-    field rank decomposition. Every original equation is checked afterwards.
+    field rank decomposition. A free acceleration of a coordinate with no
+    storage (a massless field) past the bounded border is not a border freedom: the caller's
+    ``algebraic_acceleration_rows`` -- twice-differentiated algebraic rows of
+    ``matrix``, acceleration-only -- are matched to free accelerations and
+    eliminated sparsely beside the stored rows. Only accelerations no such row
+    reaches stay in the border. Every original equation is checked afterwards.
     """
-    mass, jacobian, matrix = map(sp.csr_matrix, (mass, jacobian, matrix))
+    # Private canonical copies: the caller's storage is never reordered, and its order never decides a pivot.
+    mass, jacobian, matrix = (sp.csr_matrix(value, copy=True) for value in (mass, jacobian, matrix))
+    for value in (mass, jacobian, matrix):
+        value.sum_duplicates()
     n = mass.shape[0]
     rhs, acceleration_rhs, evaluation_scale = map(np.asarray, (rhs, acceleration_rhs, evaluation_scale))
     rate_is_unique = np.asarray(rate_is_unique)
@@ -60,8 +101,32 @@ def complete_rate_border(
         msg = 'stored acceleration border requires finite aligned actual equations and a boolean rate mask'
         raise ValueError(msg)
     rows, columns = np.asarray(stored_rows), np.asarray(stored_columns)
+    algebraic_rows = np.asarray(algebraic_acceleration_rows)
+    if (
+        algebraic_rows.ndim != 1
+        or (algebraic_rows.size and algebraic_rows.dtype.kind not in 'iu')
+        or len(set(algebraic_rows.tolist())) != len(algebraic_rows)
+        or np.any(algebraic_rows < 0)
+        or np.any(algebraic_rows >= matrix.shape[0])
+        or np.isin(algebraic_rows, acceleration_equation_start + np.arange(n)).any()
+        or matrix[algebraic_rows.astype(int)][:, :n].count_nonzero()
+    ):
+        msg = 'algebraic acceleration rows must be distinct acceleration-only rows of the actual equations'
+        raise ValueError(msg)
+    algebraic_rows = algebraic_rows.astype(int)
     unknown = np.flatnonzero(~np.asarray(rate_is_unique))
     free_acceleration = np.setdiff1d(np.arange(n), columns)
+    # Magnitude-aware matching of the acceleration-only rows onto the free accelerations: a matched
+    # pair joins the sparse elimination; its nonsingularity is proven by the factorization below.
+    algebraic_block = matrix[algebraic_rows][:, n + free_acceleration]
+    # Only a border past its bound needs them: a bounded border keeps its rank-revealing dense
+    # treatment, where a structurally matched but numerically dependent row stays a border row.
+    needed = algebraic_rows.size and len(unknown) + len(free_acceleration) > 512
+    matched_row = _pivot_matching(algebraic_block) if needed else None
+    reached = np.zeros(len(free_acceleration), dtype=bool) if matched_row is None else matched_row >= 0
+    eliminated_rows = algebraic_rows[matched_row[reached]] if reached.any() else np.array([], dtype=int)
+    columns_eliminated = np.concatenate((columns, free_acceleration[reached])).astype(int)
+    free_acceleration = free_acceleration[~reached]
     width = len(unknown) + len(free_acceleration)
     if (
         mass.shape != (n, n)
@@ -82,16 +147,21 @@ def complete_rate_border(
     ):
         msg = 'stored acceleration elimination requires proven independent coordinates and a bounded actual border'
         raise ValueError(msg)
+    # The eliminated equations in acceleration form: stored rows ``J v + M a = r`` and the
+    # matched acceleration-only rows ``A a = r`` (their own rows of ``matrix``, scaled alike).
+    acceleration_rows = sp.vstack((mass[rows], matrix[eliminated_rows][:, n:]), format='csr')
+    rate_rows = sp.vstack((jacobian[rows], sp.csr_matrix((len(eliminated_rows), n))), format='csr')
+    eliminated_rhs = np.concatenate((np.asarray(acceleration_rhs)[rows], rhs[eliminated_rows]))
     try:
-        factor = splu(mass[rows][:, columns].tocsc())
+        factor = splu(acceleration_rows[:, columns_eliminated].tocsc())
     except RuntimeError as exc:
         msg = 'declared stored acceleration coordinates are not independent'
         raise ValueError(msg) from exc
     base = np.zeros(2 * n)
-    base[n + columns] = factor.solve(np.asarray(acceleration_rhs)[rows])
+    base[n + columns_eliminated] = factor.solve(eliminated_rhs)
     sensitivity = np.zeros((n, width))
-    forcing = sp.hstack((-jacobian[rows][:, unknown], -mass[rows][:, free_acceleration]), format='csr')
-    sensitivity[columns] = factor.solve(forcing.toarray())
+    forcing = sp.hstack((-rate_rows[:, unknown], -acceleration_rows[:, free_acceleration]), format='csr')
+    sensitivity[columns_eliminated] = factor.solve(forcing.toarray())
     sensitivity[free_acceleration, len(unknown) + np.arange(len(free_acceleration))] = 1
     rate_mapping = sp.hstack((sp.eye(n, format='csr')[:, unknown], sp.csr_matrix((n, len(free_acceleration)))))
     mapping = sp.vstack((rate_mapping, sp.csr_matrix(sensitivity)), format='csr')
@@ -99,7 +169,7 @@ def complete_rate_border(
     forcing = rhs - matrix @ base
     # These equations DEFINE the sparse elimination, rather than independent
     # numerical rank authority manufactured from its floating-point remainder.
-    eliminated = acceleration_equation_start + rows
+    eliminated = np.concatenate((acceleration_equation_start + rows, eliminated_rows))
     reduced[eliminated] = 0
     forcing[eliminated] = 0
     norms = np.linalg.norm(reduced, axis=1)
@@ -119,18 +189,18 @@ def complete_rate_border(
     # Summing base and sensitivity solves can lose a small prescribed
     # acceleration between huge opposing storage/source contributions.
     stored_rhs = (
-        acceleration_rhs[rows]
-        - jacobian[rows] @ correction[:n]
-        - mass[rows][:, free_acceleration] @ correction[n + free_acceleration]
+        eliminated_rhs
+        - rate_rows @ correction[:n]
+        - acceleration_rows[:, free_acceleration] @ correction[n + free_acceleration]
     )
-    stored_block = mass[rows][:, columns]
+    stored_block = acceleration_rows[:, columns_eliminated]
     stored_acceleration = factor.solve(stored_rhs)
     for _ in range(3):
         stored_defect = stored_rhs - stored_block @ stored_acceleration
         if not np.any(stored_defect):
             break
         stored_acceleration += factor.solve(stored_defect)
-    correction[n + columns] = stored_acceleration
+    correction[n + columns_eliminated] = stored_acceleration
     defect = matrix @ correction - rhs
     scale = np.asarray(abs(matrix) @ abs(correction)).ravel() + abs(rhs) + evaluation_scale
     if np.any(abs(defect) > tolerance * scale + performed_allowance):

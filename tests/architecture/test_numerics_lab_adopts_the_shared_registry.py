@@ -54,10 +54,16 @@ _MECHANISMS: Final = {
     'DOCS-ONLY-CARRIES': (TestPath('pyproject.toml'),),
     # Adopted 2026-11-03 with dev-lab integrate/main: three more PR-flow rows of the forge's own admission over
     # the same declared integrator table (a PR opens as a draft, forge writes go through its doors, no push
-    # lands on a merged PR).
+    # lands on a merged PR -- retired 2026-11-08 by dev-lab #320, see LANDED-BRANCH-CONTINUES below).
     'DRAFT-UNTIL-READY': (TestPath('pyproject.toml'),),
     'FORGE-DOORS-ARE-CONSENT': (TestPath('pyproject.toml'),),
-    'NO-PUSH-ONTO-A-LANDED-PR': (TestPath('pyproject.toml'),),
+    # Adopted 2026-11-08 with dev-lab #320: a push onto a landed branch is carried by a continuation PR, opened by
+    # the rendered `continue.yml` push job (it replaces NO-PUSH-ONTO-A-LANDED-PR).
+    'LANDED-BRANCH-CONTINUES': (TestPath('.github/workflows/continue.yml'),),
+    # Adopted 2026-11-08 with dev-lab #320: the base pre-push row `closed-push` this pyproject's hooks table runs.
+    'NO-PUSH-ONTO-A-CLOSED-PR': (TestPath('pyproject.toml'),),
+    # Adopted 2026-11-07 with dev-lab #304: the base pre-push row `pr-current` this pyproject's hooks table runs.
+    'PR-HEAD-IS-CURRENT': (TestPath('pyproject.toml'),),
     # Adopted 2026-10-24 with dev-lab 1d74f38: the October summary is the first month this tree holds.
     'MONTHLY-PLANS-CARRIED': (TestPath('tests/architecture/test_every_month_carries_its_plans.py'),),
     # Adopted 2026-10-26 with dev-lab c9eaa7f: the agent guard ships in every family repo; the rendered
@@ -98,7 +104,6 @@ _ABSENT: Final = frozenset({
     'NO-REFLECTION', 'PUBLIC-SURFACE-DECLARED', 'FIX-THE-CAUSE',
     # Docs and memory: no rules pages, injected docs or dated-memory guard in this repo yet.
     'DOCS-SPLIT', 'MEMORY-SHAPE', 'INJECTED-DOC-WIDTH-CEILING',
-    'NO-CJK-IN-TRACKED-SOURCE',
     # Code placement and scratch: one python/ and one tests/ tree, no scratch.
     'CODE-IN-CODE-ROOTS', 'SCRATCH-IS-NEVER-COMMITTED', 'STRAY-FILE-REFUSED', 'SPLIT-BY-CONCEPT',
     'TRACKED-CITES-NO-EPHEMERAL',
@@ -110,7 +115,8 @@ _ABSENT: Final = frozenset({
 #: The size of the absent set at adoption (2026-10-18: 47; 2026-10-23: 50, the three rules the registry gained
 #: with the dev-lab split, none with a mechanism here yet); lowering it is the only legal edit.
 #: Lowered to 45 on 2026-10-26: the agent guard took AGENT-GUARD and the four rules it refuses.
-_ABSENT_CEILING: Final = 45
+#: Lowered to 44 on 2026-11-07: NO-CJK-IN-TRACKED-SOURCE is always on (dev_lab.dev.famtests.alwayson).
+_ABSENT_CEILING: Final = 44
 
 
 def test_every_rule_is_enforced_or_declared_absent() -> None:

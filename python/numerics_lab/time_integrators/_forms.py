@@ -100,10 +100,17 @@ def change_below_residual_resolution(
     pure solve noise, and their change relative to their own noise scale stayed 0.03..2 on every
     iteration, so the relative bar refused a step whose residual was already at its floor and the
     adaptive march halved the step to its minimum.
+
+    The change is measured by what it DOES to each row, ``|J du|``, never by the bound ``|J| |du|``: a
+    change along a direction the residual cannot see is rounding however large its bound. MEASURED
+    2026-11-08 on the motronics three-phase transformer chopper: nodal A moved 1e-8 relative per iteration,
+    the rounding of a 1e17-scale row propagated through an ill-conditioned field solve; ``|J du|`` read
+    0.02..0.11 of the rows' rounding bar and the bound 5e3..1.5e4, so every probe of the 330 A trip was
+    refused 50 times while every residual row sat at 1e-5 of its own bar.
     """
     before = np.asarray(before, dtype=float).reshape(-1)
     after = np.asarray(after, dtype=float).reshape(-1)
-    change = _abs_matvec(tangent, np.abs(after - before))
+    change = np.abs(np.asarray(tangent @ (after - before), dtype=float)).reshape(-1)
     magnitude = _abs_matvec(tangent, np.maximum(np.abs(before), np.abs(after)))
     if not (np.isfinite(change).all() and np.isfinite(magnitude).all()):
         return False
