@@ -384,3 +384,66 @@ def test_original_homogeneous_rate_equations_survive_a_scaled_factor_roundoff_re
     assert rate[0] == rate[4] == rate[5] == 0.0
     np.testing.assert_allclose(rate, drive * np.array([0, 1, -1, 3, 0, 0]), rtol=1e-10, atol=0.0)
     np.testing.assert_allclose(matrix @ rate, rhs, rtol=1e-10, atol=0.0)
+
+
+def _inductor_cutset(first_inductance, second_inductance):
+    """Two flux-form inductors in series around a floating capacitor: the current they share ties their fluxes.
+
+    Unknowns: v(in), v(sw), v(a), v(b), v(c), v(out), i(V), i(L1), psi(L1), i(L2), psi(L2). The law rows
+    ``L i - psi`` and the stored fluxes state the tie twice; which copy is redundant is decided by ``L`` alone.
+    """
+    jacobian = np.zeros((11, 11))
+    jacobian[0, [0, 1, 6]] = 100.0, -100.0, 1.0
+    jacobian[1, [0, 1, 7]] = -100.0, 100.000001, 1.0
+    jacobian[2, 7] = -1.0
+    jacobian[3, [3, 4]] = 2.0, -2.0
+    jacobian[4, [3, 4, 9]] = -2.0, 2.0, 1.0
+    jacobian[5, [5, 9]] = 0.2, -1.0
+    jacobian[6, 0] = -1.0
+    jacobian[7, [1, 2]] = -1.0, 1.0
+    jacobian[8, [7, 8]] = first_inductance, -1.0
+    jacobian[9, [4, 5]] = -1.0, 1.0
+    jacobian[10, [9, 10]] = second_inductance, -1.0
+    mass = np.zeros((11, 11))
+    mass[np.ix_([2, 3], [2, 3])] = [[1e-5, -1e-5], [-1e-5, 1e-5]]
+    mass[5, 5], mass[7, 8], mass[9, 10] = 2e-5, 1.0, 1.0
+    algebraic = np.zeros((7, 11))
+    algebraic[[0, 1, 2, 2, 3, 4, 5, 6], [0, 1, 2, 3, 4, 6, 8, 10]] = 1.0
+    supply = 12.0
+    initial = np.zeros(11)
+    initial[[0, 1]] = supply
+    residual = np.zeros(11)
+    residual[7] = -supply  # the whole supply stands across L1 at the start: its flux rate, not its flux
+    return sp.csr_matrix(jacobian), residual, sp.csr_matrix(mass), initial, sp.csr_matrix(algebraic)
+
+
+@pytest.mark.parametrize(
+    ('first_inductance', 'second_inductance'),
+    [(2.0**-13, 2.0**-14), (1e-4, 5e-5)],
+    ids=['exact-in-binary', 'decimal'],
+)
+def test_a_redundant_row_left_as_a_roundoff_pivot_does_not_drop_a_physical_equation(
+    first_inductance, second_inductance
+):
+    """``1e-4`` is no binary fraction, so the redundant copy of the tie survives the scaled factorisation as a pivot of
+    round-off size: ``splu`` does not raise on it, and the consistent start was refused as a contradiction although
+    the same circuit with ``L = 2**-13`` is admitted. Planted control: the binary case, admitted before this fix.
+    """
+    jacobian, residual, mass, initial, algebraic = _inductor_cutset(first_inductance, second_inductance)
+    pair = sparse_initial_pair(
+        jacobian,
+        residual,
+        mass,
+        initial,
+        algebraic_rows=algebraic,
+        stored_rows=np.array([2, 5, 7, 9]),
+        partial_time=np.zeros(11),
+        stored_increment=np.zeros(4),
+        tolerance=1e-10,
+    )
+    np.testing.assert_allclose(pair.state[[8, 10]], 0.0, atol=1e-18)  # Wb: the stored fluxes do not jump
+    current_rate = pair.rate[7]
+    assert current_rate > 0.0
+    assert pair.rate[9] == pytest.approx(current_rate, rel=1e-9, abs=1e-6)  # A/s: one current through both
+    assert pair.rate[8] == pytest.approx(first_inductance * current_rate, rel=1e-9, abs=1e-12)  # V: Faraday, L1
+    assert pair.rate[10] == pytest.approx(second_inductance * current_rate, rel=1e-9, abs=1e-12)  # V: Faraday, L2
