@@ -585,20 +585,16 @@ dependencies = [
 [package.optional-dependencies]
 dev = [
     { name = "dev-lab", extra = ["test"] },
+    { name = "lab-commons" },
     { name = "maturin" },
-    { name = "pytest" },
-    { name = "pytest-xdist" },
-    { name = "ruff" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "dev-lab", extras = ["test"], marker = "extra == 'dev'", git = "https://github.com/DawnEver/dev-lab.git?branch=integrate%2Fmain" },
+    { name = "lab-commons", marker = "extra == 'dev'", git = "https://github.com/DawnEver/lab-commons.git" },
     { name = "maturin", marker = "extra == 'dev'", specifier = ">=1.7" },
     { name = "numpy" },
-    { name = "pytest", marker = "extra == 'dev'" },
-    { name = "pytest-xdist", marker = "extra == 'dev'" },
-    { name = "ruff", marker = "extra == 'dev'" },
     { name = "scipy" },
 ]
 provides-extras = ["dev"]
