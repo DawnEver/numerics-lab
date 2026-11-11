@@ -79,6 +79,7 @@ _MECHANISMS: Final = {
             # wiring (pinned live by the same test) runs `dev_lab.dev.pushwatch` on PostToolUse.
             'RECURSIVE-DELETE',
             'PUSHED-HEAD-IS-WATCHED',
+            'SESSION-HEARS-ITS-PRS',
             # Adopted 2026-11-07 with dev-lab 8c4ab734: the guard refuses a write outside the checkout.
             'WRITES-STAY-IN-THE-TREE',
         ),
