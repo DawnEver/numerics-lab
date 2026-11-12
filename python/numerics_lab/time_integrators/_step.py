@@ -462,7 +462,13 @@ class RowAcceptance:
         if declared is not None:
             resolved = np.maximum(resolved, np.abs(np.asarray(declared(u), dtype=float)).reshape(resolved.shape))
         built = abs(form.weights.alpha1.real) * resolved
-        floor = FLOOR_SAFETY * float(np.finfo(float).eps) * np.asarray(magnitudes[1] @ built).ravel()
+        eps = FLOOR_SAFETY * float(np.finfo(float).eps)
+        # An ALGEBRAIC row reads its unknowns through ``|F_u|``: it resolves no finer than their declared resolution
+        # either (an ideal transformer's idle current, placed by ``i0 + i1 - i2 = 0`` with i0, i2 ~ 3.7 A, is known
+        # to ~1e-15 A however small it is; barred at face value, Newton spun to its ceiling every step).
+        floor = eps * np.maximum(
+            np.asarray(magnitudes[1] @ built).ravel(), np.asarray(magnitudes[0] @ resolved).ravel()
+        )
         relative = self.tol * scale
         # A HOMOGENEOUS row (``u_i = 0`` beside a coupled system) holds only the solve's rounding, and its
         # own bar ``tol |u_i|`` sits below its own residual for every nonzero iterate.
