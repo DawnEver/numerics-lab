@@ -447,7 +447,9 @@ class RowAcceptance:
         ):
             return False
         zero = np.zeros_like(np.asarray(u_dot, dtype=float))
-        scale = np.abs(np.asarray(problem.residual(u_arg, zero, zero, t), dtype=float))
+        # ``F(u, 0)``, read ONCE: the scale takes its magnitude, the homogeneity screen its sign.
+        source = np.asarray(problem.residual(u_arg, zero, zero, t), dtype=float).ravel()
+        scale = np.abs(source)
         magnitudes = []
         for weights, operand in ((DerivativeWeights(1, 0, 0), u_arg), (DerivativeWeights(0, 1, 0), u_dot)):
             matrix = problem.jacobian(u_arg, u_dot, u_ddot, t, weights)
@@ -472,7 +474,7 @@ class RowAcceptance:
         relative = self.tol * scale
         # A HOMOGENEOUS row (``u_i = 0`` beside a coupled system) holds only the solve's rounding, and its
         # own bar ``tol |u_i|`` sits below its own residual for every nonzero iterate.
-        own = _noise_judged(problem, form, u, relative, scale, system_resolution(scale))
+        own = _noise_judged(problem, form, u, relative, scale, system_resolution(scale), source=source)
         self.bars = np.maximum(own, floor)
         # A noise row's bar IS the system's resolution, a round-off already; every other row rounds at its own scale.
         rounding = np.where(own != relative, own, FLOOR_SAFETY * float(np.finfo(float).eps) * scale)
