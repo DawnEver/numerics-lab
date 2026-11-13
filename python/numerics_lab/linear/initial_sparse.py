@@ -230,7 +230,7 @@ def sparse_initial_pair(
     factor_error = None
     if not np.any(matched < 0):
         try:
-            factor = splu(reduced[matched_rows].tocsc())
+            factor = _factor_of_independent_rows(reduced[matched_rows])
         except RuntimeError as error:
             factor_error = error
     if factor is None:
@@ -247,7 +247,7 @@ def sparse_initial_pair(
             msg = 'initial state/rate subsystem cannot discard actual stored-coordinate constraints'
             raise ValueError(msg) from factor_error
         try:
-            factor = splu(reduced[matched_rows].tocsc())
+            factor = _factor_of_independent_rows(reduced[matched_rows])
         except RuntimeError:
             # Structural matching proves only a nonzero pattern, not actual row
             # independence. Keep every stored equation and choose an exact basis
@@ -299,6 +299,23 @@ def sparse_initial_pair(
     unique = nonzero[n:].copy()
     unique[[column - n for column in duplicate_rates]] = False
     return SparseInitialPair(initial + pair[:n], pair[n:], unique)
+
+
+def _factor_of_independent_rows(subsystem):
+    """Sparse LU of structurally matched rows, refused where a pivot is round-off of a dependent row.
+
+    ``splu`` raises only on an exactly zero pivot. Row scaling and a coefficient that is no binary fraction
+    (``L = 1e-4``) leave a dependent row a pivot near machine epsilon instead: the factor exists, solves for
+    noise, and the physical equation the matching displaced is lost. Raising hands the choice to the exact row
+    basis, which decides independence in rational arithmetic: a pivot refused here by mistake costs that
+    elimination and never an equation.
+    """
+    factor = splu(subsystem.tocsc())
+    pivots = np.abs(factor.U.diagonal())
+    if pivots.min() <= subsystem.shape[0] * np.finfo(float).eps * pivots.max():
+        msg = 'a round-off pivot: the structurally matched rows are numerically dependent'
+        raise RuntimeError(msg)
+    return factor
 
 
 def _matched_factor(matrix, selected, row_order, mandatory):
@@ -502,6 +519,7 @@ def sparse_complete_initial_rate(
             equation_bound=equation_bound,
             tolerance=tolerance,
             acceleration_equation_start=n + algebraic.shape[0],
+            algebraic_acceleration_rows=np.arange(2 * n + algebraic.shape[0], 2 * n + 2 * algebraic.shape[0]),
         )
         return SparseInitialPair(pair.state, pair.rate + correction[:n], unique)
     nonzero = np.asarray(matrix.getnnz(axis=0)).ravel() != 0

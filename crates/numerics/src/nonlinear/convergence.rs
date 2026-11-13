@@ -123,6 +123,13 @@ impl StagnationWatch {
         }
     }
 
+    /// Empty the window: state the iterate does not carry is still moving (the Python passes it
+    /// as `material_change` and clears on it).
+    pub fn clear(&mut self) {
+        self.errs.clear();
+        self.increments.clear();
+    }
+
     /// Record one iteration's pair; `true` iff the full window is settled AND stationary
     /// (inside the band AND not trending upward - see the body).
     pub fn observe(&mut self, err: f64, increment: f64) -> bool {

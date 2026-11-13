@@ -19,6 +19,9 @@ from deny_rules import ADOPTION  # noqa: E402
 
 #: THE FLOOR, BY NAME: the rules numerics-lab ships (adopted with dev-lab c9eaa7f).
 _SHIPPED: Final = frozenset({
+    # Gained 2026-11-07 with dev-lab #311 (consent credentials): an agent never types a consent code.
+    'COMMIT-HOOKS-RUN',  # 2026-11-13 dev-lab 61560e40
+    'CONSENT-CODE-FROM-THE-USER',  # 2026-11-08 dev-lab #325: replaces CONSENT-CODE-NEVER-TYPED (user ruling)
     'BARE-INTERPRETER',
     'BARE-PYTHON',
     'BARE-TEST-INVOCATION',
@@ -29,8 +32,10 @@ _SHIPPED: Final = frozenset({
     'GIT-RESET',
     'GIT-STAGE-EVERYTHING',
     'GIT-STASH',
+    'HPC-THROUGH-THE-DOOR',  # gained 2026-11-07 with dev-lab 8c4ab734
     'PUSH-FORCE',
     'PUSH-NO-VERIFY',
+    'REMOTE-WRITE-THROUGH-A-DOOR',  # gained 2026-11-08 with dev-lab #313 (agentpolicy)
     'PUSH-REMOTE-DELETE',
     'RECURSIVE-DELETE',  # gained 2026-10-29 with dev-lab e8b8991
     'RECURSIVE-GREP',
@@ -40,18 +45,12 @@ _SHIPPED: Final = frozenset({
     'TREE-HAS-A-LIVE-RUN',
     'WORKTREE-BASE-IS-EXPLICIT',
     'WORKTREES-STAY-INSIDE',
+    'WRITES-STAY-IN-THE-TREE',  # gained 2026-11-07 with dev-lab 8c4ab734
 })
 
 _PROSE_ABOUT_A_DENIED_SHAPE: Final = "cat > notes.md <<'MD'\npytest is denied here; use the verdict entry point.\nMD"
 
 
-@pytest.mark.workstation
-def test_node_is_on_path() -> None:
-    """No node means no guard: a red, never a skip."""
-    agentguard.assert_node_is_available()
-
-
-@pytest.mark.workstation
 def test_the_guard_is_live() -> None:
     agentguard.assert_the_guard_is_live(root=_ROOT)
 
@@ -76,7 +75,6 @@ def test_the_shipped_set_is_pinned_by_name() -> None:
     agentguard.assert_the_shipped_set_is_pinned(root=_ROOT, declared=_SHIPPED)
 
 
-@pytest.mark.workstation
 @pytest.mark.parametrize(
     ('command', 'rule'),
     [
@@ -96,7 +94,6 @@ def test_a_forbidden_shape_is_refused_by_the_rule_that_owns_it(command: str, rul
     agentguard.assert_refused_by(root=_ROOT, command=command, rule=rule)
 
 
-@pytest.mark.workstation
 @pytest.mark.parametrize(
     'command',
     [

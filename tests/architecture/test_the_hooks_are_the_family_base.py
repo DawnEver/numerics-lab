@@ -1,4 +1,4 @@
-"""numerics-lab runs the family git hooks: `[tool.dev_lab.hooks]` over `githooks/base.toml`, no row added.
+"""numerics-lab runs the family git hooks: `[tool.dev_lab.hooks]` over `githooks/base.toml`, plus `public-root`.
 
 Installing the shims is the developer's (`<venv python> -m dev_lab.dev.hook_install --install --repo .`);
 this file pins what the merged table DECLARES, as a named set of stages and the rows the registry cites.
@@ -15,7 +15,15 @@ from dev_lab.dev.githooks.runner import hook_table
 
 _ROOT: Final = Path(__file__).resolve().parents[2]
 
-_DECLARED_STAGES: Final = frozenset({'commit-msg', 'post-commit', 'pre-commit', 'pre-push'})
+# post-merge and post-checkout: dev-lab VENV-FOLLOWS-THE-LOCK (user ruling 2026-11-04).
+_DECLARED_STAGES: Final = frozenset({
+    'commit-msg',
+    'post-checkout',
+    'post-commit',
+    'post-merge',
+    'pre-commit',
+    'pre-push',
+})
 
 
 def _row_module(stage: str, hook_id: str) -> str:

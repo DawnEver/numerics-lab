@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -16,6 +17,7 @@ from numerics_lab.formulation import (
     DerivativeWeights,
     FactorReusableProblem,
     HistoryProblem,
+    NewtonTrialLimitProblem,
     ResidualFloorProblem,
     SemiDiscreteProblem,
     StepEvaluationProblem,
@@ -30,6 +32,7 @@ from numerics_lab.time_integrators._forms import (
     change_below_residual_resolution,
     residual_floor_by_row,
 )
+from numerics_lab.time_integrators._trials import affine_projection_is_noop, project_newton_trial
 from numerics_lab.time_integrators.factor_reuse import FactorCache, apply_factor, factor_matrix
 from numerics_lab.time_integrators.local_convergence import LocalIterationCheck
 from numerics_lab.time_integrators.prepared import (
@@ -46,6 +49,7 @@ __all__ = [
     'HELD_STALL_RATIO',
     'HeldFactor',
     'ProblemCapabilities',
+    'RowConvergence',
     'RowVerdict',
     'StepOutcome',
     'TrialNotEvaluable',
@@ -71,6 +75,7 @@ class ProblemCapabilities:
     #: The problem solves this step itself (a native kernel); ``None`` from it declines.
     native_step: bool = False
     affine_admission: bool = False
+    newton_trial_limit: bool = False
 
     @classmethod
     def resolve(cls, problem: SemiDiscreteProblem) -> ProblemCapabilities:
@@ -84,6 +89,7 @@ class ProblemCapabilities:
             isinstance(problem, AffineConstraintProjectionProblem),
             getattr(problem, 'native_step', None) is not None,
             isinstance(problem, AffineConstraintAdmissionProblem),
+            isinstance(problem, NewtonTrialLimitProblem),
         )
 
 
@@ -290,6 +296,7 @@ def _gmin_continue(
     tol_rel: float | None,
     residual_0: float,
     gmin_stages: tuple[float, ...],
+    convergence: RowConvergence | None = None,
 ) -> tuple[NDArray[np.floating], bool, float, bool]:
     """The gmin continuation for an exhausted step: solve ``(J + gmin I) delta = -R`` for
     each stage, the residual always the TRUE one (the same contract the DC-op's
@@ -302,6 +309,10 @@ def _gmin_continue(
     Returns ``(u, converged, residual, on_floor)``; ``on_floor`` says the verdict was the
     FLOOR's rather than the bar's, so :class:`TransientSolution` can record WHICH one carried
     the step.
+
+    Under a per-row verdict ``convergence`` (a fresh :class:`RowConvergence` for this path) replaces the
+    norm bars and the floor: a solved iterate is accepted by the SAME rule the plain Newton is -- every
+    row within its bar, iterated to round-off -- and the spent continuation by its bar alone.
     """
     t = form.t_eval
     u = np.asarray(guess, dtype=float).copy()
@@ -309,6 +320,7 @@ def _gmin_continue(
     delta = None  # the last damped step, whose own solve error the exhaustion floor admits
     local = LocalIterationCheck(problem, tol_rel)
     capabilities = ProblemCapabilities.resolve(problem)
+    limit_changed = False
     for gmin in gmin_stages:
         for _it in range(max(2, max_newton)):
             u_arg, u_dot, u_ddot = form.u_arg(u), form.u_dot(u), form.u_ddot(u)
@@ -318,7 +330,11 @@ def _gmin_continue(
             stable = local.observe(u, t)
             local_ok = local.accepts(stable, residual, initial=initial)
             local_ok = local_ok and _affine_admitted(problem, form, u, capabilities)
-            if local_ok and (residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0)):
+            if convergence is not None:
+                # Only a SOLVED iterate is admitted (the plain loop's rule): the guess itself never is.
+                if local_ok and delta is not None and convergence.met(u, r, delta):
+                    return u, True, residual, False
+            elif local_ok and (residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0)):
                 return u, True, residual, False
             jac = problem.jacobian(u_arg, u_dot, u_ddot, t, form.weights)
             tangent = jac
@@ -327,15 +343,27 @@ def _gmin_continue(
             else:
                 damped = jac + gmin * np.eye(jac.shape[0])
             delta = np.asarray(solve(damped, -r), dtype=float)
-            u = u + delta.reshape(u.shape)
+            proposed = u + delta.reshape(u.shape)
+            u, limit_changed = project_newton_trial(
+                problem,
+                form,
+                u,
+                proposed,
+                affine_projection=capabilities.affine_projection,
+                newton_limit=capabilities.newton_trial_limit,
+            )
     u_arg, u_dot, u_ddot = form.u_arg(u), form.u_dot(u), form.u_ddot(u)
     r = np.asarray(problem.residual(u_arg, u_dot, u_ddot, t), dtype=float)
     residual = float(np.linalg.norm(r))
     local_ok = local.observe(u, t)
     local_ok = local_ok and _affine_admitted(problem, form, u, capabilities)
+    if convergence is not None:
+        return u, bool(local_ok and convergence.rows.accepts(u, r)), residual, False
     if local_ok and (residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0)):
         return u, True, residual, False
-    if local_ok and _at_roundoff_floor(problem, tangent, u, form, capabilities, r, increment=delta):
+    if local_ok and _at_roundoff_floor(
+        problem, tangent, u, form, capabilities, r, increment=None if limit_changed else delta
+    ):
         return u, True, residual, True
     return u, False, residual, False
 
@@ -370,7 +398,9 @@ class RowVerdict:
 
 
 class RowAcceptance:
-    """The per-row step verdict: every row of the step residual at :data:`ADMISSION_BAR` of its own scale.
+    """The per-row step verdict: every row of the step residual within ``tol`` of its own scale.
+
+    ``tol`` defaults to :data:`ADMISSION_BAR`; :class:`RowConvergence` decides when to stop iterating.
 
     The scale is the admission's: ``|F_u| |u| + |F_u'| |u'| + |F(u, 0)|``, so a step this accepts is a
     state the finite-storage admission at the next law change can admit (ruling 2026-10-14; the NORM
@@ -397,9 +427,11 @@ class RowAcceptance:
     _SCREEN = 10.0
     _NEAR = 1e-3
 
-    def __init__(self, problem, form) -> None:
-        self.problem, self.form = problem, form
-        self.bars = self.judged = self.judged_rate = self.worst = None
+    def __init__(self, problem, form, tol: float = ADMISSION_BAR) -> None:
+        self.problem, self.form, self.tol = problem, form, tol
+        #: ``bars`` is the verdict; ``roundoff`` the same rows at ``FLOOR_SAFETY eps`` of their scale (never
+        #: above ``bars``) -- the floor no Newton step goes below. Both are read at the last judged iterate.
+        self.bars = self.roundoff = self.judged = self.judged_rate = self.worst = None
 
     def accepts(self, u, r) -> bool:
         residual = np.abs(np.asarray(r, dtype=float))
@@ -415,7 +447,9 @@ class RowAcceptance:
         ):
             return False
         zero = np.zeros_like(np.asarray(u_dot, dtype=float))
-        scale = np.abs(np.asarray(problem.residual(u_arg, zero, zero, t), dtype=float))
+        # ``F(u, 0)``, read ONCE: the scale takes its magnitude, the homogeneity screen its sign.
+        source = np.asarray(problem.residual(u_arg, zero, zero, t), dtype=float).ravel()
+        scale = np.abs(source)
         magnitudes = []
         for weights, operand in ((DerivativeWeights(1, 0, 0), u_arg), (DerivativeWeights(0, 1, 0), u_dot)):
             matrix = problem.jacobian(u_arg, u_dot, u_ddot, t, weights)
@@ -430,12 +464,21 @@ class RowAcceptance:
         if declared is not None:
             resolved = np.maximum(resolved, np.abs(np.asarray(declared(u), dtype=float)).reshape(resolved.shape))
         built = abs(form.weights.alpha1.real) * resolved
-        floor = FLOOR_SAFETY * float(np.finfo(float).eps) * np.asarray(magnitudes[1] @ built).ravel()
-        own = ADMISSION_BAR * scale
+        eps = FLOOR_SAFETY * float(np.finfo(float).eps)
+        # An ALGEBRAIC row reads its unknowns through ``|F_u|``: it resolves no finer than their declared resolution
+        # either (an ideal transformer's idle current, placed by ``i0 + i1 - i2 = 0`` with i0, i2 ~ 3.7 A, is known
+        # to ~1e-15 A however small it is; barred at face value, Newton spun to its ceiling every step).
+        floor = eps * np.maximum(
+            np.asarray(magnitudes[1] @ built).ravel(), np.asarray(magnitudes[0] @ resolved).ravel()
+        )
+        relative = self.tol * scale
         # A HOMOGENEOUS row (``u_i = 0`` beside a coupled system) holds only the solve's rounding, and its
-        # own bar ``ADMISSION_BAR |u_i|`` sits below its own residual for every nonzero iterate.
-        own = _noise_judged(problem, form, u, own, scale, system_resolution(scale))
+        # own bar ``tol |u_i|`` sits below its own residual for every nonzero iterate.
+        own = _noise_judged(problem, form, u, relative, scale, system_resolution(scale), source=source)
         self.bars = np.maximum(own, floor)
+        # A noise row's bar IS the system's resolution, a round-off already; every other row rounds at its own scale.
+        rounding = np.where(own != relative, own, FLOOR_SAFETY * float(np.finfo(float).eps) * scale)
+        self.roundoff = np.minimum(np.maximum(rounding, floor), self.bars)
         self.judged, self.judged_rate = u.copy(), rate.copy()
         with np.errstate(divide='ignore', invalid='ignore'):
             ratios = np.where(self.bars > 0, residual / self.bars, np.where(residual > 0, np.inf, 0.0))
@@ -456,6 +499,49 @@ class RowAcceptance:
 def _near(value, judged, relative: float) -> bool:
     """``value`` within ``relative`` of ``judged`` in their own max norm (a zero vector is near only to itself)."""
     return bool(np.max(np.abs(value - judged), initial=0.0) <= relative * np.max(np.abs(value), initial=0.0))
+
+
+#: A correction that no longer HALVES the per-row scaled residual has left Newton's quadratic regime:
+#: the rows are at their rounding (which reshuffles, never halves) or the iteration is only linear.
+#: Either way more iterations buy nothing the bar does not already certify.
+_STAGNATION_RATIO = 0.5
+
+
+class RowConvergence:
+    """Per-row acceptance carried to ROUND-OFF: within the bar, then Newton is allowed to finish.
+
+    A fixed ``ADMISSION_BAR`` of each row's scale is LOOSER than the arithmetic on a well-scaled step:
+    the quadratic last step lands at round-off, and stopping one step early left a varistor's exponent at
+    rel 2.9e-11 where the global-norm march reached 2e-15 (motronics, 2026-11-06). With ``tol=None`` an
+    iterate within :data:`ADMISSION_BAR` is accepted only once (a) every row is at its round-off bar
+    (:attr:`RowAcceptance.roundoff`), or (b) Newton has STAGNATED: the last correction did not halve
+    ``max |r_i| / roundoff_i`` (:data:`_STAGNATION_RATIO`), or it was itself at the state's round-off.
+    A caller's ``tol`` LOOSENS the bar for cost: an iterate within it is accepted at once.
+    """
+
+    def __init__(self, problem, form, tol: float | None = None) -> None:
+        self.rows = RowAcceptance(problem, form, ADMISSION_BAR if tol is None else tol)
+        self.to_roundoff = tol is None
+        self.scaled: float | None = None
+
+    def met(self, u, r, step) -> bool:
+        """Whether the solved iterate ``u`` (residual ``r``, reached by the correction ``step``) is accepted."""
+        if not self.rows.accepts(u, r):
+            return False
+        if not self.to_roundoff:
+            return True
+        residual, roundoff = np.abs(np.asarray(r, dtype=float)), self.rows.roundoff
+        if np.all(residual <= roundoff):
+            return True
+        # Within the bar, so a row whose round-off bar is zero holds a zero residual: it is finished.
+        scaled = float(np.max(np.divide(residual, roundoff, out=np.zeros_like(residual), where=roundoff > 0)))
+        previous, self.scaled = self.scaled, scaled
+        if previous is not None and scaled > _STAGNATION_RATIO * previous:
+            return True
+        if step is None:
+            return False
+        resolved = FLOOR_SAFETY * float(np.finfo(float).eps) * np.abs(np.asarray(u, dtype=float))
+        return bool(np.all(np.abs(np.asarray(step, dtype=float)).reshape(resolved.shape) <= resolved))
 
 
 def _locally_stable(local: LocalIterationCheck, u, t, observed, tangent) -> bool:
@@ -491,6 +577,7 @@ def _solve_step(
     held: HeldFactor | None = None,
     capabilities: ProblemCapabilities | None = None,
     row_acceptance: bool = False,
+    row_tol: float | None = None,
     row_report: list | None = None,
 ) -> NDArray[np.floating]:
     """Advance one step by a Newton loop on ``residual(u_arg, u_dot, u_ddot, t)`` for ``u_{n+1}``.
@@ -535,11 +622,15 @@ def _solve_step(
     rides out to :attr:`TransientSolution.floor_converged_times`.
 
     ``row_acceptance`` replaces every norm verdict (``tol``, ``tol_rel`` and the arithmetic floor) by
-    :class:`RowAcceptance`; it is the one bar there is, so the norm bars and the gmin continuation
-    beside it refuse.
+    :class:`RowConvergence`: every row within its bar, iterated to its own round-off. ``row_tol`` is its
+    one relative bar, ``None`` = round-off; a caller LOOSENS it for cost. The norm bar ``tol_rel`` beside
+    it refuses; the gmin continuation composes with it (a continuation is a path, not a bar).
     """
-    if row_acceptance and (tol_rel is not None or gmin_stages is not None):
-        msg = 'a per-row step acceptance is the only bar: it takes no tol_rel and no gmin continuation'
+    if row_acceptance and tol_rel is not None:
+        msg = 'a per-row step acceptance is the only bar: pass its relative bar as row_tol, not tol_rel'
+        raise ValueError(msg)
+    if row_tol is not None and not (row_acceptance and np.isfinite(row_tol) and row_tol > 0):
+        msg = f'row_tol is the per-row acceptance bar: it needs row_acceptance and a finite positive value, got {row_tol!r}'
         raise ValueError(msg)
     if capabilities is None:
         capabilities = ProblemCapabilities.resolve(problem)
@@ -561,6 +652,7 @@ def _solve_step(
         and jacobian_tangent is None
         and gmin_stages is None
         and held is None
+        and not capabilities.newton_trial_limit
     ):
         # THE PROBLEM'S OWN KERNEL, on the default Newton options only: it is golden-equivalent to
         # this loop on that path and nowhere else, so every other option keeps the loop below.
@@ -592,20 +684,23 @@ def _solve_step(
     )
     tangent_helpful = jacobian_tangent is not None or (alternative is not None and alternative.has_tangent_jacobian)
 
+    # Neither a rejected probe nor a newly discarded solve can supply increment
+    # error evidence for the retained iterate.
+    # An owner-altered trial did NOT execute the full linear solve's correction,
+    # so that discarded correction cannot inflate its generic arithmetic floor.
+    increment_valid = False
+    projected_iterate = False  # provenance of THIS retained, evaluated trial, not a convergence verdict
+    initial_projection_checked = False
+
     def project_trial(value):
-        value = np.asarray(value, dtype=float)
-        if not capabilities.affine_projection:
-            return value
-        alpha = form.weights.alpha0
-        if alpha.imag != 0 or alpha.real == 0:
-            msg = 'affine state constraint projection requires a nonzero real state weight'
-            raise ValueError(msg)
-        argument = form.u_arg(value)
-        projected = np.asarray(problem.project_affine_state(argument.copy(), form.t_eval))
-        if projected.shape != argument.shape or not np.isrealobj(projected) or not np.isfinite(projected).all():
-            msg = 'affine constraint owner must return a same-shape finite real trial state'
-            raise ValueError(msg)
-        return value + (projected - argument) / alpha.real
+        return project_newton_trial(
+            problem,
+            form,
+            u,
+            value,
+            affine_projection=capabilities.affine_projection,
+            newton_limit=capabilities.newton_trial_limit,
+        )
 
     t = form.t_eval
     # THE GUESS IS NOT PROJECTED. A full Newton step lands every affine row exactly, so projecting
@@ -634,14 +729,15 @@ def _solve_step(
     # equal jacobian -- stands in, and a hit still never pays a build.
     tangent = None
     step = None  # the last full Newton step: its solve's backward error is part of the floor
-    local = LocalIterationCheck(problem, ADMISSION_BAR if row_acceptance else tol_rel)
+    local = LocalIterationCheck(problem, (ADMISSION_BAR if row_tol is None else row_tol) if row_acceptance else tol_rel)
     observed = None  # the iterate the local check last observed, for the resolution test
 
-    rows = RowAcceptance(problem, form) if row_acceptance else None
+    convergence = RowConvergence(problem, form, row_tol) if row_acceptance else None
+    rows = None if convergence is None else convergence.rows
 
     def met(residual, r, u):
-        if rows is not None:
-            return rows.accepts(u, r)
+        if convergence is not None:
+            return convergence.met(u, r, step)
         return residual <= tol or (tol_rel is not None and residual <= tol_rel * residual_0)
 
     for _it in range(1, max_newton + 1):
@@ -687,7 +783,11 @@ def _solve_step(
             # monotonically, so no stall ratio can be relied on to see it). It is the same floor
             # verdict the exhaustion branch below gives, reached before the ceiling instead of at
             # it (measured on case_a's chopper: 50 iterations, ~30 s a step, at |r| ~ 4e-9).
-            if rows is None and local_ok and _at_roundoff_floor(problem, tangent, u, form, capabilities, r, step):
+            if (
+                rows is None
+                and local_ok
+                and _at_roundoff_floor(problem, tangent, u, form, capabilities, r, step if increment_valid else None)
+            ):
                 converged = True
                 on_floor = True
                 break
@@ -728,25 +828,52 @@ def _solve_step(
             )
             tangent = factor_cache.matrix
         step = du.reshape(u.shape)
-        if max_newton > 1 and line_search == 'directional':
+        directional = max_newton > 1 and line_search == 'directional'
+        if (
+            directional
+            and capabilities.newton_trial_limit
+            and capabilities.affine_projection
+            and not capabilities.affine_admission
+            and not initial_projection_checked
+        ):
+            initial_projection_checked = True
+            # No no-op evidence leaves the existing evaluated recovery in charge.
+            with suppress(TrialNotEvaluable):
+                projected_iterate = affine_projection_is_noop(problem, form, u)
+        restore_ray = (
+            directional
+            and capabilities.newton_trial_limit
+            and capabilities.affine_projection
+            and not (
+                _affine_admitted(problem, form, u, capabilities) if capabilities.affine_admission else projected_iterate
+            )
+        )
+        if directional and not restore_ray:
+            # Search the bounded ray, not a nonlinear path of individually clipped probes.
+            bounded_endpoint, bounded_was_limited = (
+                project_trial(u + step) if capabilities.newton_trial_limit else (None, False)
+            )
             u = directional_line_search(
                 lambda x: np.asarray(problem.residual(form.u_arg(x), form.u_dot(x), form.u_ddot(x), t), dtype=float),
                 u,
-                step,
+                None if bounded_endpoint is not None else step,
                 r,
+                **({'endpoint': bounded_endpoint} if bounded_endpoint is not None else {}),
             )
-        elif max_newton > 1 and backtrack_cap > 0:
+            increment_valid = not bounded_was_limited
+            projected_iterate = capabilities.affine_projection and bounded_endpoint is not None
+        elif max_newton > 1 and (backtrack_cap > 0 or restore_ray):
             limit = residual if backtrack_band is None else backtrack_band * residual
 
             def trial_at(lam, u=u, step=step):
-                u_try = project_trial(u + lam * step)
                 try:
+                    u_try, limited = project_trial(u + lam * step)
                     r_try = problem.residual(form.u_arg(u_try), form.u_dot(u_try), form.u_ddot(u_try), t)
                 except TrialNotEvaluable:
                     # The problem cannot evaluate this trial (an inner solve without a root): the
                     # trial is REJECTED exactly like one whose residual is too large -- halve.
                     return None
-                return u_try, float(np.linalg.norm(np.asarray(r_try, dtype=float))), r_try
+                return u_try, float(np.linalg.norm(np.asarray(r_try, dtype=float))), r_try, limited
 
             def accepts_trial(_lam, trial):
                 # An already floor-limited row can mask progress on another
@@ -761,17 +888,26 @@ def _solve_step(
                 if rows is not None:
                     return trial[1] < limit or rows.accepts(trial[0], trial[2])
                 return trial[1] < limit or _at_roundoff_floor(
-                    problem, tangent, trial[0], form, capabilities, trial[2], step
+                    problem, tangent, trial[0], form, capabilities, trial[2], None if trial[3] else step
                 )
 
-            search = backtracking(trial_at, accepts_trial, tries=backtrack_cap)
+            # The first unprojected linearization keeps its old semantics. Its
+            # recovery must earn the SAME existing merit before an energy ray
+            # can inherit projector/limiter provenance, never bitwise idempotence.
+            search = backtracking(trial_at, accepts_trial, tries=max(1, backtrack_cap))
             raised = search.accepted and search.trial[1] >= residual
             if search.accepted:
                 u = search.trial[0]
+                increment_valid = not search.trial[3]
+                projected_iterate = capabilities.affine_projection
             else:
                 # Exhausted: take the next, untried step only if the last trial could be evaluated at all.
-                if search.trial is not None:
-                    u = project_trial(u + search.step * step)
+                if search.trial is not None and not restore_ray:
+                    u, limited = project_trial(u + search.step * step)
+                    increment_valid = not limited
+                    projected_iterate = False
+                else:
+                    increment_valid = False
                 capped = True
             if tangent_active and (capped or raised):
                 # THE POLISH IS A TRIAL, NOT A ONE-WAY SWITCH: an alternative operator whose step
@@ -784,7 +920,9 @@ def _solve_step(
                 # t = 4.44 ms step 158 -> 445 over 100 iterations; withheld, it converged in 12.
                 tangent_active, polish_spent, slow = False, True, 0
         else:
-            u = project_trial(u + step)
+            u, limited = project_trial(u + step)
+            increment_valid = not limited
+            projected_iterate = False
     else:
         # The ceiling exhausted: re-evaluate the residual at the FINAL u (the last solve's
         # result). The loop's last check read the PRE-solve guess -- reporting that would
@@ -794,9 +932,14 @@ def _solve_step(
         residual = float(np.linalg.norm(r))
         local_ok = _locally_stable(local, u, t, observed, tangent)
         local_ok = local_ok and _affine_admitted(problem, form, u, capabilities)
-        if local_ok and met(residual, r, u):
+        # At the ceiling the bar alone decides: there is no further iteration to wait for.
+        if local_ok and (rows.accepts(u, r) if rows is not None else met(residual, r, u)):
             converged = True
-        elif rows is None and local_ok and _at_roundoff_floor(problem, tangent, u, form, capabilities, r, step):
+        elif (
+            rows is None
+            and local_ok
+            and _at_roundoff_floor(problem, tangent, u, form, capabilities, r, step if increment_valid else None)
+        ):
             on_floor = True
             # THE ARITHMETIC FLOOR, and the reason an exactly-solved LINEAR step no longer lies.
             # ``tol`` is ABSOLUTE on a residual whose scale is the supply, so the same one-Newton
@@ -833,6 +976,7 @@ def _solve_step(
             tol_rel=tol_rel,
             residual_0=residual_0,
             gmin_stages=gmin_stages,
+            convergence=None if convergence is None else RowConvergence(problem, form, row_tol),
         )
         if conv_g:
             u = u_g

@@ -117,6 +117,7 @@ from numerics_lab.time_integrators.event_checkpoint import EventCheckpointState
 from numerics_lab.time_integrators.factor_reuse import FactorCache
 from numerics_lab.time_integrators.instants import same_instant
 from numerics_lab.time_integrators.periodic import (
+    accepted_jacobian,
     bdf2_boundary_moment,
     canonical_eec_window,
     explicit_error_correction,
@@ -146,6 +147,11 @@ __all__ = [
 #: sample per step, ~200 per nominal cell -- the dense-but-genuine event stream the locator
 #: resolves, not chatter).
 _MAX_EVENTS_PER_CELL = 512
+#: Variable-step BDF2's zero-stability bound on the step ratio ``h_{n+1} / h_n`` (Grigorieff). A
+#: located event whose remainder to a NOMINAL grid point is shorter than ``dt / bound`` (seconds)
+#: would hand the next step a ratio beyond it -- its history term ``dt / (r (dt + r))`` divides the
+#: state's rounding floor by the sliver ``r`` -- so that event ends its cell and re-anchors the grid.
+_MULTISTEP_RATIO_BOUND = 1.0 + 2.0**0.5
 # A temporary performance cache, never a solve/acceptance threshold. Oversized trials are simply
 # recomputed; large field vectors must not make simultaneous event observers exhaust host memory.
 _EVENT_TRIAL_CACHE_BYTES = 64 * 1024**2
@@ -513,6 +519,7 @@ def integrate_transient(
     tol: float = 1e-12,
     tol_rel: float | None = None,
     row_acceptance: bool = False,
+    row_tol: float | None = None,
     time_tol: float | None = None,
     factor_cache: FactorCache | None = None,
     backtrack_band: float | None = 1.5,
@@ -980,6 +987,7 @@ def integrate_transient(
             tol=tol,
             tol_rel=tol_rel,
             row_acceptance=row_acceptance,
+            row_tol=row_tol,
             factor_cache=factor_cache,
             backtrack_band=backtrack_band,
             backtrack_cap=backtrack_cap,
@@ -1141,7 +1149,7 @@ def integrate_transient(
             if eec_nonlinear_first_order:
                 cycle_converged = cycle_converged and converged
                 zero = np.zeros_like(u_new)
-                tangent = problem.jacobian(u_new, zero, zero, t_new, DerivativeWeights(alpha0=1.0)) * step_dt
+                tangent = accepted_jacobian(problem, u_new, zero, zero, t_new, DerivativeWeights(alpha0=1.0)) * step_dt
                 integrated_tangent = tangent if integrated_tangent is None else integrated_tangent + tangent
         steady = (
             steady_period is not None
@@ -1623,6 +1631,17 @@ def integrate_transient(
                     )
                     raise RuntimeError(msg)
                 if pending_dt <= bracket_tol:  # the event consumed the rest of the cell
+                    break
+                if (
+                    plan == 'nominal'
+                    and pending_dt < dt / _MULTISTEP_RATIO_BOUND
+                    and t_target != window.t1
+                    and t_target not in breakpoint_set
+                    and t_target not in observations
+                ):
+                    # A sliver to a NOMINAL grid point only: the event ends its cell and the grid
+                    # re-anchors there. Declared instants are landed; the next cell re-clips to them.
+                    nominal_anchor, k = t_star, 0
                     break
             # end of one cell
         if held is not None:

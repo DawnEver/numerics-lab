@@ -5,7 +5,7 @@ import hashlib
 import itertools
 import json
 import math
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -517,47 +517,17 @@ CHECKPOINT_FILE_SCHEMA_VERSION = 2
 _CHECKPOINT_FILE_PREFIX = 'numerics-lab-transient-checkpoint/v'
 CHECKPOINT_FILE_SCHEMA = f'{_CHECKPOINT_FILE_PREFIX}{CHECKPOINT_FILE_SCHEMA_VERSION}'
 
-#: FORMATS-UPGRADE-ON-READ (user ruling 2026-10-18): a checkpoint is the LIVE state a running march
-#: resumes from, so an older envelope is read once into the current form; none is ever written.
-#: Older foreign envelope -> the version of this lineage its sealed mapping already is.
-#: ``motronics-transient-checkpoint/v1`` is what the predecessor package wrote before the engine moved here.
-_PREDECESSOR_ENVELOPES: dict[str, int] = {'motronics-transient-checkpoint/v1': 1}
-
-
-def _anchored_event_state(mapping: dict) -> dict:
-    """v1 -> v2: the event locator's chained ``next_reanchor`` becomes the re-anchored grid's ``nominal_anchor``.
-
-    v1 marched ``t_k = t_(k-1) + dt``; v2 marches ``anchor + k*dt``. A v1 state with no pending re-anchor is
-    on the grid that started ``nominal_index`` steps before its accepted time, so that start IS the anchor.
-    A pending re-anchor is v2's planned landing (anchor = pending target, index 0); one that is not the
-    pending target has no v2 form and is refused by name, never guessed.
-    """
-    event = mapping.get('event_state')
-    if event is None:
-        return mapping
-    event = dict(event)
-    pending, k = event.pop('next_reanchor'), event['nominal_index']
-    if pending is None:
-        event['nominal_anchor'] = mapping['time'] - k * event['step_dt']
-    elif pending == event['pending_target']:
-        event.update(nominal_anchor=pending, nominal_index=0)
-    else:
-        msg = f'a v1 event re-anchor at {pending!r} that is not its pending target has no v2 nominal grid'
-        raise ValueError(msg)
-    return {**mapping, 'event_state': event}
-
-
-#: Version -> the step taking its sealed ``checkpoint`` mapping one version on.
-_UPGRADES: dict[int, Callable[[dict], dict]] = {1: _anchored_event_state}
-
-
-def _file_version(schema: object) -> int | None:
-    if not isinstance(schema, str):
-        return None
-    if schema in _PREDECESSOR_ENVELOPES:
-        return _PREDECESSOR_ENVELOPES[schema]
-    digits = schema.removeprefix(_CHECKPOINT_FILE_PREFIX)
-    return int(digits) if digits != schema and digits.isdecimal() else None
+#: FORMATS-MIGRATE-ONCE (user ruling D51, 2026-11-11): the reader keeps ONLY the current envelope. An older
+#: envelope of this lineage (or the predecessor package's) is refused by name with its migration instruction:
+#: a checkpoint is regenerable state, so it migrates by re-running its march from the start.
+_OLDER_ENVELOPES: frozenset[str] = frozenset(
+    {'motronics-transient-checkpoint/v1'}
+    | {f'{_CHECKPOINT_FILE_PREFIX}{v}' for v in range(1, CHECKPOINT_FILE_SCHEMA_VERSION)}
+)
+_MIGRATION = (
+    're-run the march from its start with this numerics-lab to write a '
+    f'{CHECKPOINT_FILE_SCHEMA} checkpoint; older envelopes are not read (FORMATS-MIGRATE-ONCE)'
+)
 
 
 def _seal(mapping) -> str:
@@ -585,8 +555,8 @@ def write_checkpoint_file(path, checkpoint: TransientCheckpoint) -> Path:
 def read_checkpoint_file(path) -> TransientCheckpoint:
     """Read a sealed checkpoint; an edited, truncated or unsealed file is REFUSED, never resumed from.
 
-    An OLDER envelope is upgraded on read through :data:`_UPGRADES` after its seal is checked; an
-    envelope this reader does not know (newer, never issued, or foreign) is refused by name.
+    Only :data:`CHECKPOINT_FILE_SCHEMA` is read. An OLDER envelope is refused by name with its migration
+    instruction; one this reader does not know (newer, never issued, or foreign) is refused by name.
     """
     data = json.loads(Path(path).read_text(encoding='utf-8'))
     if not isinstance(data, dict) or set(data) != {'schema', 'sha256', 'checkpoint'}:
@@ -595,13 +565,13 @@ def read_checkpoint_file(path) -> TransientCheckpoint:
     if _seal(data['checkpoint']) != data['sha256']:
         msg = f'{path}: checkpoint content does not match its sha256 seal; the file was edited or corrupted'
         raise ValueError(msg)
-    version, mapping = _file_version(data['schema']), data['checkpoint']
-    while version in _UPGRADES:
-        mapping, version = _UPGRADES[version](mapping), version + 1
-    if version != CHECKPOINT_FILE_SCHEMA_VERSION:
+    if data['schema'] in _OLDER_ENVELOPES:
+        msg = f'{path}: checkpoint schema {data["schema"]!r} is an older envelope; {_MIGRATION}'
+        raise ValueError(msg)
+    if data['schema'] != CHECKPOINT_FILE_SCHEMA:
         msg = f'{path}: checkpoint schema {data["schema"]!r} is unknown to this reader ({CHECKPOINT_FILE_SCHEMA})'
         raise ValueError(msg)
-    return TransientCheckpoint.from_mapping(mapping)
+    return TransientCheckpoint.from_mapping(data['checkpoint'])
 
 
 def validate_history_json(value):

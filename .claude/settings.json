@@ -7,6 +7,10 @@
           {
             "type": "command",
             "command": "e=\"$CLAUDE_PROJECT_DIR/.claude/hooks/deny-commands.js\"; [ -f \"$e\" ] || { echo \"agent-guard: no engine at $e -- refused (fail closed); re-install: node $CLAUDE_PROJECT_DIR/.claude/hooks/py.js -m dev_lab.dev.hook_install --install\" >&2; exit 2; }; node \"$e\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/deny-rules.json\" || { echo \"agent-guard: the engine exited $? -- refused (fail closed)\" >&2; exit 2; }"
+          },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.journaldoor"
           }
         ]
       }
@@ -17,15 +21,23 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.codeplace stray"
-          },
-          {
-            "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.pushwatch"
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.branchprune post-push"
+          },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.hostalarm hook"
+          },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.sessionprs"
+          },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.walls post-tool"
           }
         ]
       }
@@ -46,6 +58,38 @@
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.handback"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.pushstop"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.scratch stop"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.devhost stop"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.walls stop"
+          }
+        ]
       }
     ],
     "SubagentStop": [
@@ -54,6 +98,14 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.handback"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.walls stop"
           }
         ]
       }
@@ -66,7 +118,71 @@
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.reclaimrun --session-start"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.venvfollow --session-start"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.automode session-start"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.scratch snapshot"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.forgeauthnotice --session-start"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.hostalarm hook"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.hpcaccount.session bind"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.walls post-tool"
+          }
+        ]
       }
     ]
+  },
+  "enabledPlugins": {
+    "sharp-review@cc-market": false
   }
 }

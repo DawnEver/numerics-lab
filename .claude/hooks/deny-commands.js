@@ -50,6 +50,7 @@
  *
  *   'command'  (default) the pattern names the command being run, so it must match at the START
  *              of a segment. `echo "uv sync"` runs echo; `grep -rn "git push"` runs grep.
+ *   'line'     the shape spans segments (a value piped into a command): searched in the whole line.
  *   'argument' the pattern names an OPTION and must be found anywhere in the segment, because the
  *              command it qualifies varies: `--force` is forbidden on `git push`, on
  *              `sh with-retry.sh push`, and on anything else that ends up pushing.
@@ -71,6 +72,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
+const crypto = require('crypto');
 
 /** The tools whose `tool_input.command` the shell executes. */
 const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
@@ -394,7 +396,9 @@ const samePath = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toL
 const VENV_TAIL = process.platform === 'win32' ? ['Scripts', 'python.exe'] : ['bin', 'python'];
 const posix = (p) => p.replace(/\\/g, '/');
 
-/** `root`'s own venv interpreter; else its main checkout's (a linked worktree); else its own, spelled absolute. */
+/** `root`'s own venv interpreter; else its main checkout's (a linked worktree); else the SESSION checkout's, which
+ * exists (2026-11-03: a target with no venv was named `<target>/.venv/...python`, a command that cannot run); its
+ * own spelling only when no interpreter exists anywhere. */
 function remedyPython(root) {
   const own = path.join(path.resolve(root), '.venv', ...VENV_TAIL);
   if (fs.existsSync(own)) return posix(own);
@@ -406,8 +410,10 @@ function remedyPython(root) {
       if (fs.existsSync(main)) return posix(main);
     }
   } catch {
-    // a `.git` directory, or none: the checkout's own spelling below
+    // a `.git` directory, or none: the session's interpreter, else the checkout's own spelling below
   }
+  const session = sessionRoot && path.join(sessionRoot, '.venv', ...VENV_TAIL);
+  if (session && fs.existsSync(session)) return posix(session);
   return posix(own);
 }
 
@@ -477,21 +483,111 @@ function liveRunRefusal(target, sessionRoot) {
     `${remedyPython(sessionRoot)} -m dev_lab.dev.liverun --tree ${target} answers.`;
 }
 
-/* A refusal is a line of the toolchain's metrics (P0, dev_lab.dev.metrics): appended by the ONE writer, in a
- * DETACHED interpreter, so the refusal the agent sees waits for nothing. No interpreter, no line. */
-function logRefusal(name, where) {
+/* ================================ A ROW THAT STILL ADMITS A FAMILY SIBLING CLONE ================================
+ *
+ * `admits: 'family-sibling-clone'` (WORKTREES-STAY-INSIDE): every family checkout lives BESIDE its siblings, so
+ * cloning a family repo there is the one placement outside `.claude/worktrees` that is right -- and no regex can
+ * tell it from a misplaced tree. Admitted only when the WHOLE line is `cd`s then ONE clone `<url> <dir>`, and
+ * <dir> does not exist yet, is named for the repo, sits beside the main checkout of the tree the line runs in,
+ * and the url comes from a forge (scheme+host+owner) some sibling checkout's `origin` already comes from. No
+ * repo or owner is named here: the family is whatever already sits beside the checkout.
+ */
+/** `root`'s git dir, following a worktree's `.git` file and its `commondir` to the repository's own. */
+function commonGitDir(root) {
+  let dir = path.join(root, '.git');
+  if (fs.statSync(dir).isFile()) {
+    const said = /^gitdir:\s*(.+?)\s*$/m.exec(fs.readFileSync(dir, 'utf8'));
+    if (!said) return null;
+    dir = path.resolve(root, said[1]);
+    const common = path.join(dir, 'commondir');
+    if (fs.existsSync(common)) dir = path.resolve(dir, fs.readFileSync(common, 'utf8').trim());
+  }
+  return dir;
+}
+
+/** `{forge, name}` of a clone url: everything before the last path word, and that word without `.git`. */
+function forgeOf(url) {
+  const at = /^(.*[/:])([^/:]+?)(?:\.git)?\/?$/.exec(url || '');
+  return at ? { forge: at[1].toLowerCase(), name: at[2] } : null;
+}
+
+/** The `origin` url in the repository whose git dir is `gitDir`, or null. */
+function originOf(gitDir) {
+  let inside = false;
+  for (const line of fs.readFileSync(path.join(gitDir, 'config'), 'utf8').split(/\r?\n/)) {
+    const header = /^\s*\[(.+)\]\s*$/.exec(line);
+    if (header) inside = /^remote\s+"origin"$/.test(header[1].trim());
+    const url = inside && /^\s*url\s*=\s*(.+?)\s*$/.exec(line);
+    if (url) return url[1];
+  }
+  return null;
+}
+
+function familySiblingClone(cmd, cwd) {
+  if (!cwd) return false;
+  const word = String.raw`("[^"\n]*"|'[^'\n]*'|[^\s;&|()]+)`;
+  const cdAt = new RegExp(String.raw`^(?:cd|pushd)\s+${word}\s*$`);
+  const cloneAt = new RegExp(String.raw`^(?:git(?:\.exe)?|(?:sh|bash)\s+\S*retry\S*)\s+clone\s+${word}\s+${word}\s*$`);
+  let dir = path.resolve(cwd);
+  let clone = null;
+  for (const segment of segments(splitHeredocs(cmd).rest)) {
+    const text = segment.replace(ENV_PREFIX, '').trim();
+    if (!text) continue;
+    const cd = clone === null && cdAt.exec(text);
+    if (cd) {
+      dir = path.resolve(dir, hostPath(cd[1]));
+      continue;
+    }
+    const at = clone === null && cloneAt.exec(text);
+    if (!at) return false; // a second verb, of any kind, after or instead of the one clone
+    clone = { url: hostPath(at[1]), target: path.resolve(dir, hostPath(at[2])) };
+  }
+  if (clone === null || fs.existsSync(clone.target)) return false;
+  const repo = forgeOf(clone.url);
+  if (!repo || path.basename(clone.target).toLowerCase() !== repo.name.toLowerCase()) return false;
+  try {
+    const own = repoRoot(cwd);
+    const gitDir = own && commonGitDir(own);
+    if (!gitDir || !samePath(path.dirname(clone.target), path.dirname(path.dirname(gitDir)))) return false;
+    const family = path.dirname(clone.target);
+    return fs.readdirSync(family).some((name) => {
+      const sibling = path.join(family, name);
+      if (!fs.existsSync(path.join(sibling, '.git'))) return false;
+      const theirs = forgeOf(originOf(commonGitDir(sibling)));
+      return theirs !== null && theirs.forge === repo.forge;
+    });
+  } catch {
+    return false; // a tree the engine cannot read admits nothing
+  }
+}
+
+/* A refusal is a WALL (WALLS-ARE-RECORDED, dev_lab.dev.walls): one metrics line and one ledger line, appended by the
+ * ONE writer in a DETACHED interpreter, so the refusal the agent sees waits for nothing. No interpreter, no line. The
+ * command never leaves this process: only a sha256 prefix of it does. A reason names a door when a line beyond its
+ * cause is not only the `details:` pointer or the cross-repo header -- dev_lab.dev.walls.has_remedy, the same test. */
+function hasRemedy(reason) {
+  const lines = String(reason).split('\n').map((line) => line.trim()).filter(Boolean);
+  return lines.filter((line) => !line.startsWith('details: ') && !/^\[targets .*\]$/.test(line)).length >= 2;
+}
+
+function logRefusal(name, where, reason) {
   const python = venvPython(sessionRoot);
   if (!python) return;
   try {
-    const argv = ['-m', 'dev_lab.dev.metrics_report', 'record', 'refusal', '--rule', name, '--reason', 'agent-guard'];
+    const digest = crypto.createHash('sha256').update(cmd, 'utf8').digest('hex').slice(0, 16);
+    const argv = ['-m', 'dev_lab.dev.walls', 'refused', '--rule', name, '--reason', 'agent-guard',
+      '--command-sha256', digest, hasRemedy(reason) ? '--remedy' : '--no-remedy'];
+    if (typeof input.session_id === 'string' && input.session_id) argv.push('--session', input.session_id);
     spawn(python, argv, { cwd: where, detached: true, stdio: 'ignore', windowsHide: true }).unref();
   } catch {
-    // a metrics line never blocks the refusal it describes
+    // a ledger line never blocks the refusal it describes
   }
 }
 
 /** Does `rule` fire on any executed text? */
-function fires(rule, texts) {
+function fires(rule, texts, cmd) {
+  // A 'line' rule names a shape that spans segments (a code piped into a command), so it reads the whole line.
+  if (rule.matches === 'line') return new RegExp(rule.pattern).test(cmd);
   const argument = rule.matches === 'argument';
   // A 'command' rule anchors at the start of a segment, and at the start of a LINE inside
   // interpreter code. An 'argument' rule names an option, so it is searched within the text.
@@ -525,16 +621,19 @@ for (const rule of rules) {
   if (rule.scope === 'subagent' && !subagent) continue;
   let hit;
   try {
-    hit = fires(rule, texts) && !(rule.allow && new RegExp(rule.allow).test(cmd));
+    hit = fires(rule, texts, cmd) && !(rule.allow && new RegExp(rule.allow).test(cmd));
   } catch {
     continue; // one malformed rule never blocks the session
   }
+  if (hit && rule.admits === 'family-sibling-clone' && familySiblingClone(cmd, input.cwd)) continue;
   let liveReason = '';
   if (hit && rule.when === 'live-run') {
     // A PROBE judging which rule owns a shape sets this (run_engine(live_run=False)): its own suite is a
     // run in the checkout it probes. The tool never sends the key, so no agent command can set it.
     if (input.dev_lab_live_run_absent === true) continue;
-    liveReason = liveRunRefusal(input.cwd ? repoRoot(ruleTarget(rule, cmd, input.cwd)) : null, sessionRoot);
+    // The DIRECTORY, never its repoRoot: a worktree the line is about to create does not exist yet, and walking up
+    // from it lands on the checkout holding it -- whose run is not this command's (2026-11-07). liverun resolves it.
+    liveReason = liveRunRefusal(input.cwd ? ruleTarget(rule, cmd, input.cwd) : null, sessionRoot);
     hit = liveReason !== '';
   }
   if (hit && rule.severity === 'hint') {
@@ -543,16 +642,13 @@ for (const rule of rules) {
     // A PROBE (run_engine) names where its refusal is logged, '' for nowhere; the tool never sends the key.
     const probed = typeof input.dev_lab_metrics_root === 'string';
     const where = probed ? input.dev_lab_metrics_root : input.cwd ? repoRoot(ruleTarget(rule, cmd, input.cwd)) || input.cwd : sessionRoot;
-    if (where) logRefusal(rule.name, where);
+    const reason =
+      liveReason ||
+      reasonFor(rule, expand(rule.reason || rule.name, remedyCheckout(rule, cmd, input.cwd)), cmd, input.cwd || '', sessionRoot);
+    if (where) logRefusal(rule.name, where, reason);
     process.stdout.write(
       JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: 'PreToolUse',
-          permissionDecision: 'deny',
-          permissionDecisionReason:
-            liveReason ||
-            reasonFor(rule, expand(rule.reason || rule.name, remedyCheckout(rule, cmd, input.cwd)), cmd, input.cwd || '', sessionRoot),
-        },
+        hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason },
       })
     );
     process.exit(0);

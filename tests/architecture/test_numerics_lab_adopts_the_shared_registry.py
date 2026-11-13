@@ -28,7 +28,8 @@ _HOOKS: Final = TestPath('tests/architecture/test_the_hooks_are_the_family_base.
 _MECHANISMS: Final = {
     'PROJECT-FILES-HAVE-ONE-SOURCE': (TestPath('tests/architecture/test_the_family_config_is_rendered.py'),),
     'RETIRED-NAMES-REGISTERED': (TestPath('tests/architecture/test_retired_names_stay_retired.py'),),
-    'FORMATS-UPGRADE-ON-READ': (TestPath('tests/unit/test_an_older_checkpoint_file_upgrades_on_read.py'),),
+    # Adopted 2026-11-13 (user ruling D51): the checkpoint reader keeps only the current envelope.
+    'FORMATS-MIGRATE-ONCE': (TestPath('tests/unit/test_an_older_checkpoint_file_is_refused_by_name.py'),),
     'NO-LAZY-IMPORT': (LintRule(code='PLC0415'),),
     'ONE-BRANCH-PER-SESSION': (_BRANCHES,),
     'MERGE-OR-DELETE': (_BRANCHES,),
@@ -46,12 +47,27 @@ _MECHANISMS: Final = {
         TestPath('pyproject.toml'),
         TestPath('tests/architecture/test_this_repo_declares_the_one_pr_flow.py'),
     ),
-    'PR-REVIEW-BLOCKS-ON-HIGH-OR-SECURITY': (TestPath('pyproject.toml'),),
+    'PR-REVIEW-IS-ONE-SHOT-ADVICE': (TestPath('pyproject.toml'),),
     # Adopted 2026-10-23 with the move to dev-lab: the PR-flow rows are the forge's own admission and carry
     # steps (dev_lab.dev.pradmit, dev_lab.dev.forgecarry) over the same declared integrator table.
     'ONE-SESSION-ONE-PR': (TestPath('pyproject.toml'),),
     'NO-STACKED-PRS': (TestPath('pyproject.toml'),),
     'DOCS-ONLY-CARRIES': (TestPath('pyproject.toml'),),
+    # Adopted 2026-11-03 with dev-lab integrate/main: three more PR-flow rows of the forge's own admission over
+    # the same declared integrator table (a PR opens as a draft, forge writes go through its doors, no push
+    # lands on a merged PR -- retired 2026-11-08 by dev-lab #320, see LANDED-BRANCH-CONTINUES below).
+    'DRAFT-UNTIL-READY': (TestPath('pyproject.toml'),),
+    'FORGE-DOORS-ARE-CONSENT': (TestPath('pyproject.toml'),),
+    # Adopted 2026-11-08 with dev-lab #320: a push onto a landed branch is carried by a continuation PR, opened by
+    # the rendered `continue.yml` push job (it replaces NO-PUSH-ONTO-A-LANDED-PR).
+    'LANDED-BRANCH-CONTINUES': (TestPath('.github/workflows/continue.yml'),),
+    # Adopted 2026-11-08 with dev-lab #320: the base pre-push row `closed-push` this pyproject's hooks table runs.
+    'NO-PUSH-ONTO-A-CLOSED-PR': (TestPath('pyproject.toml'),),
+    # Adopted 2026-11-07 with dev-lab #304: the base pre-push row `pr-current` this pyproject's hooks table runs.
+    'PR-HEAD-IS-CURRENT': (TestPath('pyproject.toml'),),
+    # Adopted 2026-11-13 (user ruling): the base pre-push row `milestone-base` this pyproject's hooks table runs.
+    'BASE-HOLDS-THE-MILESTONE': (TestPath('pyproject.toml'),),
+    'VERSION-TAG-NEEDS-APPROVAL': (TestPath('pyproject.toml'),),
     # Adopted 2026-10-24 with dev-lab 1d74f38: the October summary is the first month this tree holds.
     'MONTHLY-PLANS-CARRIED': (TestPath('tests/architecture/test_every_month_carries_its_plans.py'),),
     # Adopted 2026-10-26 with dev-lab c9eaa7f: the agent guard ships in every family repo; the rendered
@@ -67,6 +83,11 @@ _MECHANISMS: Final = {
             # wiring (pinned live by the same test) runs `dev_lab.dev.pushwatch` on PostToolUse.
             'RECURSIVE-DELETE',
             'PUSHED-HEAD-IS-WATCHED',
+            'SESSION-HEARS-ITS-PRS',
+            # Adopted 2026-11-07 with dev-lab 8c4ab734: the guard refuses a write outside the checkout.
+            'WRITES-STAY-IN-THE-TREE',
+            # Adopted 2026-11-13 (user ruling): the same live wiring runs `dev_lab.dev.walls` post-tool and stop.
+            'WALLS-ARE-RECORDED',
         ),
         (TestPath('tests/architecture/test_the_agent_guard_is_live.py'),),
     ),
@@ -90,7 +111,6 @@ _ABSENT: Final = frozenset({
     'NO-REFLECTION', 'PUBLIC-SURFACE-DECLARED', 'FIX-THE-CAUSE',
     # Docs and memory: no rules pages, injected docs or dated-memory guard in this repo yet.
     'DOCS-SPLIT', 'MEMORY-SHAPE', 'INJECTED-DOC-WIDTH-CEILING',
-    'NO-CJK-IN-TRACKED-SOURCE',
     # Code placement and scratch: one python/ and one tests/ tree, no scratch.
     'CODE-IN-CODE-ROOTS', 'SCRATCH-IS-NEVER-COMMITTED', 'STRAY-FILE-REFUSED', 'SPLIT-BY-CONCEPT',
     'TRACKED-CITES-NO-EPHEMERAL',
@@ -102,7 +122,8 @@ _ABSENT: Final = frozenset({
 #: The size of the absent set at adoption (2026-10-18: 47; 2026-10-23: 50, the three rules the registry gained
 #: with the dev-lab split, none with a mechanism here yet); lowering it is the only legal edit.
 #: Lowered to 45 on 2026-10-26: the agent guard took AGENT-GUARD and the four rules it refuses.
-_ABSENT_CEILING: Final = 45
+#: Lowered to 44 on 2026-11-07: NO-CJK-IN-TRACKED-SOURCE is always on (dev_lab.dev.famtests.alwayson).
+_ABSENT_CEILING: Final = 44
 
 
 def test_every_rule_is_enforced_or_declared_absent() -> None:

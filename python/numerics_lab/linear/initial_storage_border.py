@@ -540,6 +540,28 @@ def _sparse_joint_border(
     # Reconstruct coordinates proved zero by original Q/constraint rows, not
     # cancellation of driven sparse responses; all original equations remain validators.
     correction[~unanchored] = 0
+    if not component_mode and supported.any():
+        correction = _refined_joint_correction(
+            matrix,
+            rhs,
+            correction,
+            original_rows=original_rows,
+            selected=(selected_rows, selected_columns, kept, solve),
+            remaining=(remaining_rows[supported], remaining_columns, left[supported], schur[supported].toarray()),
+            coupling=coupling,
+            fixed=~unanchored | _absent_state(state_directions, matrix.shape[1], n),
+            bars=lambda trial: (
+                allowance[:original_rows]
+                + _row_bars(
+                    matrix,
+                    np.arange(original_rows),
+                    trial,
+                    rhs,
+                    np.zeros_like(rhs) if row_scale is None else row_scale,
+                    tolerance,
+                )
+            ),
+        )
     full_directions, unresolved = state_image(directions)
     if unresolved:
         # An algebraic index-two coordinate (a body voltage: fixed by its net-current row and the
@@ -571,6 +593,52 @@ def _sparse_joint_border(
     admitted = allowance.copy()
     admitted[remaining_rows] = inherited
     return correction, full_directions[n : 2 * n], admitted
+
+
+def _absent_state(state_directions, width, n):
+    fixed = np.zeros(width, dtype=bool)
+    if state_directions is not None:
+        fixed[:n] = np.asarray(state_directions.getnnz(axis=1)).ravel() == 0
+    return fixed
+
+
+def _refined_joint_correction(matrix, rhs, correction, *, original_rows, selected, remaining, coupling, fixed, bars):
+    """Iterative refinement of the block elimination against the ACTUAL rows, never a looser bar.
+
+    MEASURED 2026-11-07 (motronics ``transformer_3ph_distributed``, a magnetostatic field in an
+    isolated star): a linkage-rate row sums 236 field-rate terms of 4.5e-9 that cancel to the
+    linkage rate, and the border answer and the reconstructed field rates met it 3.2e-17 apart --
+    1.6x its bar. The Schur border is formed in floating point, so its answer carries that
+    formation error; one pass on the actual residual (eliminated rows keep their admitted slack)
+    took the row to 8e-25. A pass is kept only when it lowers the worst residual-to-bar ratio, and
+    coordinates proven zero (exact anchors, absent state) stay exactly zero.
+    """
+    selected_rows, selected_columns, kept, solve = selected
+    remaining_rows, remaining_columns, left, schur = remaining
+    rows = np.arange(original_rows)
+
+    def worst(trial):
+        bar = bars(trial)
+        excess = abs(np.asarray(matrix[rows] @ trial).ravel() - rhs[rows])
+        return np.max(np.where(bar > 0, excess / np.where(bar > 0, bar, 1.0), np.where(excess > 0, np.inf, 0.0)))
+
+    best, best_ratio = correction, worst(correction)
+    for _ in range(3):
+        if best_ratio <= 1:
+            break
+        residual = rhs - np.asarray(matrix @ best).ravel()
+        selected_residual = residual[selected_rows] - kept
+        lifted = solve(selected_residual)
+        delta = np.linalg.lstsq(schur, residual[remaining_rows] - left @ lifted, rcond=None)[0]
+        trial = best.copy()
+        trial[remaining_columns] += delta
+        trial[selected_columns] += solve(selected_residual - coupling @ delta)
+        trial[fixed] = best[fixed]
+        ratio = worst(trial)
+        if not ratio < best_ratio:
+            break
+        best, best_ratio = trial, ratio
+    return best
 
 
 def _row_bars(matrix, rows, trial, rhs, row_scale, tolerance):

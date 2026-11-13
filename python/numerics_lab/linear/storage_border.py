@@ -8,6 +8,8 @@ import scipy.sparse as sp
 from scipy.linalg import qr
 from scipy.sparse.linalg import splu
 
+from numerics_lab.linear.resolution import FLOOR_SAFETY
+
 __all__ = ['StorageRows', 'free_pinned_columns', 'storage_border_columns', 'storage_border_rows']
 
 
@@ -18,7 +20,16 @@ class StorageRows:
 
 
 def _exact_border_dependencies(matrix):
-    """Rank only the declared sparse border, with exact binary-float witnesses."""
+    """Rank only the declared sparse border, with exact binary-float witnesses.
+
+    Elimination is exact (rationals), but the ROWS are assembled floats: a stamped diagonal such as
+    ``fl(Cgd + Cgs)`` sits one rounding off the exact sum its off-diagonals cancel. An entry left by
+    elimination at or below the rounding of the operands summed into it (``FLOOR_SAFETY * eps`` of
+    their absolute sum) is that assembly rounding, not storage, and is eliminated as zero. An entry
+    that is small but not a cancellation keeps its full relative standing, so a tiny real capacitor
+    is never read as noise.
+    """
+    floor = FLOOR_SAFETY * float(np.finfo(float).eps)
     basis, independent, dependencies = {}, [], []
     for row in range(matrix.shape[0]):
         start, end = matrix.indptr[row : row + 2]
@@ -27,6 +38,7 @@ def _exact_border_dependencies(matrix):
             for column, value in zip(matrix.indices[start:end], matrix.data[start:end], strict=True)
             if value
         }
+        operands = {column: abs(float(value)) for column, value in vector.items()}
         witness = {row: Fraction(1)}
         while vector:
             pivot = min(vector)
@@ -35,16 +47,22 @@ def _exact_border_dependencies(matrix):
                 basis[pivot] = (
                     {index: value / divisor for index, value in vector.items()},
                     {index: value / divisor for index, value in witness.items()},
+                    {index: value / abs(float(divisor)) for index, value in operands.items()},
                 )
                 independent.append(row)
                 break
-            previous, provenance = basis[pivot]
+            previous, provenance, magnitude = basis[pivot]
             multiplier = vector[pivot]
-            for target, source in ((vector, previous), (witness, provenance)):
-                for index, value in source.items():
-                    target[index] = target.get(index, Fraction(0)) - multiplier * value
-                    if not target[index]:
-                        del target[index]
+            for index, value in previous.items():
+                vector[index] = vector.get(index, Fraction(0)) - multiplier * value
+                operands[index] = operands.get(index, 0.0) + abs(float(multiplier)) * magnitude[index]
+                if abs(float(vector[index])) <= floor * operands[index]:
+                    del vector[index]
+                    del operands[index]
+            for index, value in provenance.items():
+                witness[index] = witness.get(index, Fraction(0)) - multiplier * value
+                if not witness[index]:
+                    del witness[index]
         if not vector:
             dependencies.append(witness)
     null = np.zeros((len(dependencies), matrix.shape[0]))
