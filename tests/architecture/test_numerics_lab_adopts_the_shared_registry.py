@@ -28,7 +28,8 @@ _HOOKS: Final = TestPath('tests/architecture/test_the_hooks_are_the_family_base.
 _MECHANISMS: Final = {
     'PROJECT-FILES-HAVE-ONE-SOURCE': (TestPath('tests/architecture/test_the_family_config_is_rendered.py'),),
     'RETIRED-NAMES-REGISTERED': (TestPath('tests/architecture/test_retired_names_stay_retired.py'),),
-    'FORMATS-UPGRADE-ON-READ': (TestPath('tests/unit/test_an_older_checkpoint_file_upgrades_on_read.py'),),
+    # Adopted 2026-11-13 (user ruling D51): the checkpoint reader keeps only the current envelope.
+    'FORMATS-MIGRATE-ONCE': (TestPath('tests/unit/test_an_older_checkpoint_file_is_refused_by_name.py'),),
     'NO-LAZY-IMPORT': (LintRule(code='PLC0415'),),
     'ONE-BRANCH-PER-SESSION': (_BRANCHES,),
     'MERGE-OR-DELETE': (_BRANCHES,),
@@ -64,6 +65,9 @@ _MECHANISMS: Final = {
     'NO-PUSH-ONTO-A-CLOSED-PR': (TestPath('pyproject.toml'),),
     # Adopted 2026-11-07 with dev-lab #304: the base pre-push row `pr-current` this pyproject's hooks table runs.
     'PR-HEAD-IS-CURRENT': (TestPath('pyproject.toml'),),
+    # Adopted 2026-11-13 (user ruling): the base pre-push row `milestone-base` this pyproject's hooks table runs.
+    'BASE-HOLDS-THE-MILESTONE': (TestPath('pyproject.toml'),),
+    'VERSION-TAG-NEEDS-APPROVAL': (TestPath('pyproject.toml'),),
     # Adopted 2026-10-24 with dev-lab 1d74f38: the October summary is the first month this tree holds.
     'MONTHLY-PLANS-CARRIED': (TestPath('tests/architecture/test_every_month_carries_its_plans.py'),),
     # Adopted 2026-10-26 with dev-lab c9eaa7f: the agent guard ships in every family repo; the rendered
@@ -82,6 +86,8 @@ _MECHANISMS: Final = {
             'SESSION-HEARS-ITS-PRS',
             # Adopted 2026-11-07 with dev-lab 8c4ab734: the guard refuses a write outside the checkout.
             'WRITES-STAY-IN-THE-TREE',
+            # Adopted 2026-11-13 (user ruling): the same live wiring runs `dev_lab.dev.walls` post-tool and stop.
+            'WALLS-ARE-RECORDED',
         ),
         (TestPath('tests/architecture/test_the_agent_guard_is_live.py'),),
     ),
