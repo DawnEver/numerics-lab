@@ -76,19 +76,19 @@
   },
   {
     "name": "PUSH-FORCE",
-    "pattern": "(?:(?:\"[^\"]*[/\\\\])?\"?\\S*?\\bgit(?:\\.exe)?\"?(?:\\s+-[Cc]\\s+\\S+)*|(?:sh\\s+)?\\S*with-retry\\.sh)\\s+push\\b[^\\n]*\\s(?:--force\\b|--force-with-lease\\b|-f\\b|\\+\\S)",
+    "pattern": "(?:\"?\\S*python[\\w.]*(?:\\.exe)?\"?\\s+-m\\s+dev_lab\\.dev\\.netverb(?:\\s+--)?\\s+)?(?:(?:\"[^\"]*[/\\\\])?\"?\\S*?\\bgit(?:\\.exe)?\"?(?:\\s+-[Cc]\\s+\\S+)*|(?:sh\\s+)?\\S*with-retry\\.sh)\\s+push\\b[^\\n]*\\s(?:--force\\b|--force-with-lease\\b|-f\\b|\\+\\S)",
     "matches": "command",
     "reason": "PUSH-FORCE: rewriting a shared ref invalidates every verdict taken against the old tree; --force-with-lease included.\nLand the change FORWARD: git revert <sha> or a new commit on your own lane, then push without the force flag.\ndetails: docs-src/dev/refusals.md#push-force (lab-commons)"
   },
   {
     "name": "PUSH-REMOTE-DELETE",
-    "pattern": "(?:(?:\"[^\"]*[/\\\\])?\"?\\S*?\\bgit(?:\\.exe)?\"?(?:\\s+-[Cc]\\s+\\S+)*|(?:sh\\s+)?\\S*with-retry\\.sh)\\s+push\\b[^\\n]*\\s(?:--delete\\b|-d\\b|--prune\\b|--mirror\\b|:\\S)",
+    "pattern": "(?:\"?\\S*python[\\w.]*(?:\\.exe)?\"?\\s+-m\\s+dev_lab\\.dev\\.netverb(?:\\s+--)?\\s+)?(?:(?:\"[^\"]*[/\\\\])?\"?\\S*?\\bgit(?:\\.exe)?\"?(?:\\s+-[Cc]\\s+\\S+)*|(?:sh\\s+)?\\S*with-retry\\.sh)\\s+push\\b[^\\n]*\\s(?:--delete\\b|-d\\b|--prune\\b|--mirror\\b|:\\S)",
     "matches": "command",
     "reason": "PUSH-REMOTE-DELETE: a raw remote delete can lose commits held nowhere else.\na branch: `{python} -m dev_lab.dev.branchprune delete <branch>`; a tag: `{python} -m dev_lab.dev.branchprune delete-tag <tag> --approved \"<the user`s words>\"` (LOSSLESS-DELETE).\ndetails: docs-src/dev/refusals.md#push-remote-delete (lab-commons)"
   },
   {
     "name": "PUSH-NO-VERIFY",
-    "pattern": "(?:(?:\"[^\"]*[/\\\\])?\"?\\S*?\\bgit(?:\\.exe)?\"?(?:\\s+-[Cc]\\s+\\S+)*|(?:sh\\s+)?\\S*with-retry\\.sh)\\s+push\\b[^\\n]*--no-verify\\b",
+    "pattern": "(?:\"?\\S*python[\\w.]*(?:\\.exe)?\"?\\s+-m\\s+dev_lab\\.dev\\.netverb(?:\\s+--)?\\s+)?(?:(?:\"[^\"]*[/\\\\])?\"?\\S*?\\bgit(?:\\.exe)?\"?(?:\\s+-[Cc]\\s+\\S+)*|(?:sh\\s+)?\\S*with-retry\\.sh)\\s+push\\b[^\\n]*--no-verify\\b",
     "matches": "command",
     "reason": "PUSH-NO-VERIFY: `--no-verify` skips the pre-push hooks (admission, the trunk proof), so the push publishes what no hook checked.\nPush without the flag (no hook runs a test; the forge produces the part after the push), and to check a change first measure what you touched: ./.venv/Scripts/python.exe -m dev_lab.dev.verify\ndetails: docs-src/dev/refusals.md#push-no-verify (lab-commons)"
   },
