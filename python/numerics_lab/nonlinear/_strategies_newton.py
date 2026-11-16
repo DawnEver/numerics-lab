@@ -107,6 +107,11 @@ class NewtonStrategy:
     #: residual bar and the fixed-point bar cannot be confused (``core.newton_rtol`` against
     #: ``core.fixed_point_rtol``, user ruling 2026-09-26).
     stop_rule = 'residual'
+    #: The declared stopping rules: ``'residual'`` (the default, on ``core.newton_rtol``) or
+    #: ``'energy'`` -- the energy change in percent against ``rtol_energy_pct``, the same first
+    #: half every fixed-point strategy uses. The increment and material halves of
+    #: :func:`_has_converged` hold under both, so neither can call a wandering iterate converged.
+    STOP_RULES = ('residual', 'energy')
 
     def __init__(
         self,
@@ -116,7 +121,12 @@ class NewtonStrategy:
         *,
         refactor_every: int | None = None,
         stall_ratio: float = 0.5,
+        stop: str = 'residual',
     ) -> None:
+        if stop not in self.STOP_RULES:
+            msg = f'stop must be one of {self.STOP_RULES}, got {stop!r}'
+            raise ValueError(msg)
+        self.stop_rule = stop
         self.max_backtracks = int(max_backtracks)
         if self.max_backtracks < 0:
             msg = f'max_backtracks must be nonnegative, got {max_backtracks!r}'
@@ -259,7 +269,7 @@ class NewtonStrategy:
                 x_full,
                 rtol_energy_pct,
                 material_change=state.material_change,
-                residual_ratio=r_norm / reference,
+                residual_ratio=r_norm / reference if self.stop_rule == 'residual' else None,
             ) or watch.observe(err, increment, state.material_change)
             if system.is_linear:
                 converged = True
