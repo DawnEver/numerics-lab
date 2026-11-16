@@ -212,3 +212,9 @@ def test_an_undeclared_newton_stop_raises():
 
     with pytest.raises(ValueError, match='stop must be one of'):
         newton.NewtonStrategy(stop='increment')
+
+
+def test_the_held_factor_newton_carries_the_same_declared_stop():
+    assert newton.HeldFactorNewtonStrategy().stop_rule == 'residual'
+    held = newton.HeldFactorNewtonStrategy(refactor_every=3, stop='energy')
+    assert (held.stop_rule, held.refactor_every) == ('energy', 3)

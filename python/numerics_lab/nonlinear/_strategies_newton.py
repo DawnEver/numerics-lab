@@ -474,8 +474,10 @@ class HeldFactorNewtonStrategy(NewtonStrategy):
 
     name = 'newton-held-factor'
 
-    def __init__(self, refactor_every: int = HELD_FACTOR_REFACTOR_EVERY, stall_ratio: float = 0.5) -> None:
-        super().__init__(refactor_every=refactor_every, stall_ratio=stall_ratio)
+    def __init__(
+        self, refactor_every: int = HELD_FACTOR_REFACTOR_EVERY, stall_ratio: float = 0.5, *, stop: str = 'residual'
+    ) -> None:
+        super().__init__(refactor_every=refactor_every, stall_ratio=stall_ratio, stop=stop)
 
 
 class NewtonKrylovStrategy:
