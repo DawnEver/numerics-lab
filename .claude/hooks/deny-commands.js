@@ -393,6 +393,19 @@ const samePath = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toL
  * `{python}` (or a repo door's `<venv python>`) and the engine writes the TARGET checkout's interpreter by
  * absolute path -- the same answer as dev_lab.dev.venvpath.remedy_interpreter.
  */
+/** The ONE resolver (dev-lab #641): installed beside this engine; in the package, one directory up. Loaded only
+ * when a remedy names an interpreter, so a missing copy never stops a decision: the remedy names its door. */
+const MISSING_RESOLVER = 'venv_resolver.js is missing beside deny-commands.js -- run: python -m dev_lab.dev.agent_guard --install';
+let resolver;
+function currentEnv(root) {
+  if (resolver === undefined) {
+    const file = [__dirname, path.dirname(__dirname)].map((dir) => path.join(dir, 'venv_resolver.js')).find(fs.existsSync);
+    resolver = file ? require(file) : null;
+  }
+  if (!resolver) throw new Error(MISSING_RESOLVER);
+  return resolver.currentEnv(root);
+}
+
 const VENV_TAIL = process.platform === 'win32' ? ['Scripts', 'python.exe'] : ['bin', 'python'];
 const posix = (p) => p.replace(/\\/g, '/');
 
@@ -400,19 +413,19 @@ const posix = (p) => p.replace(/\\/g, '/');
  * exists (2026-11-03: a target with no venv was named `<target>/.venv/...python`, a command that cannot run); its
  * own spelling only when no interpreter exists anywhere. */
 function remedyPython(root) {
-  const own = path.join(path.resolve(root), '.venv', ...VENV_TAIL);
+  const own = path.join(currentEnv(path.resolve(root)), ...VENV_TAIL);
   if (fs.existsSync(own)) return posix(own);
   try {
     const named = /^gitdir:\s*(.+?)\s*$/m.exec(fs.readFileSync(path.join(root, '.git'), 'utf8'));
     const gitdir = named ? path.resolve(root, named[1]) : '';
     if (gitdir && path.basename(path.dirname(gitdir)) === 'worktrees') {
-      const main = path.join(path.dirname(path.dirname(path.dirname(gitdir))), '.venv', ...VENV_TAIL);
+      const main = path.join(currentEnv(path.dirname(path.dirname(path.dirname(gitdir)))), ...VENV_TAIL);
       if (fs.existsSync(main)) return posix(main);
     }
   } catch {
     // a `.git` directory, or none: the session's interpreter, else the checkout's own spelling below
   }
-  const session = sessionRoot && path.join(sessionRoot, '.venv', ...VENV_TAIL);
+  const session = sessionRoot && path.join(currentEnv(sessionRoot), ...VENV_TAIL);
   if (session && fs.existsSync(session)) return posix(session);
   return posix(own);
 }
@@ -421,7 +434,12 @@ function remedyPython(root) {
 function expand(text, checkout) {
   const out = String(text).replaceAll('{root}', root);
   if (!checkout || !/\{python\}|<venv python>/.test(out)) return out;
-  const python = remedyPython(checkout);
+  let python;
+  try {
+    python = remedyPython(checkout);
+  } catch (missing) {
+    python = `<${missing.message}>`; // the refusal still stands, and names the door that restores the resolver
+  }
   return out.replaceAll('{python}', python).replaceAll('<venv python>', python);
 }
 
@@ -436,7 +454,7 @@ function reasonFor(rule, reason, cmd, cwd, sessionRoot) {
   if (!target || !sessionRoot || samePath(target, sessionRoot)) return reason;
   const shown = target.replace(/\\/g, '/');
   const door = doorsOf(target)[rule.name] && expand(doorsOf(target)[rule.name], target);
-  // One header line; the full wording is docs-src/dev/refusals.md#cross-repo-refusals (lab-commons).
+  // One header line; the full wording is docs-src/dev/refusals.md#cross-repo-refusals (dev-lab).
   const details = reason.split('\n').filter((line) => line.startsWith('details: '));
   if (door) {
     return [`${rule.name}: refused; ${shown} declares its own door for it:`, door, ...details].join('\n');
@@ -458,7 +476,7 @@ function reasonFor(rule, reason, cmd, cwd, sessionRoot) {
 /** The session checkout's own interpreter, or null: a checkout without a venv has nobody to ask. */
 function venvPython(sessionRoot) {
   const tail = process.platform === 'win32' ? ['Scripts', 'python.exe'] : ['bin', 'python'];
-  const python = sessionRoot ? path.join(sessionRoot, '.venv', ...tail) : '';
+  const python = sessionRoot ? path.join(currentEnv(sessionRoot), ...tail) : '';
   return python && fs.existsSync(python) ? python : null;
 }
 
@@ -481,6 +499,22 @@ function liveRunRefusal(target, sessionRoot) {
   const why = done.error ? done.error.message : `exit ${done.status}${said ? '' : ', no answer'}`;
   return `TREE-HAS-A-LIVE-RUN: could not confirm that no run executes from ${target} (${why}); re-run when ` +
     `${remedyPython(sessionRoot)} -m dev_lab.dev.liverun --tree ${target} answers.`;
+}
+
+/* `when: 'background'`: `python -m dev_lab.dev.shelllife --admit` judges the line on stdin -- exit 0 admitted, exit 1
+ * prints the refusal. '' admits; null is nobody to ask (no interpreter, no kit, a crash), and the row's pattern decides. */
+function lifetimeRefusal(cmd, sessionRoot) {
+  const python = venvPython(sessionRoot);
+  if (!python) return null;
+  const done = spawnSync(python, ['-m', 'dev_lab.dev.shelllife', '--admit'], {
+    input: cmd,
+    encoding: 'utf8',
+    timeout: 15000,
+    windowsHide: true,
+  });
+  if (done.status === 0) return '';
+  const said = String(done.stdout || '').trim();
+  return done.status === 1 && said ? said : null;
 }
 
 /* ================================ A ROW THAT STILL ADMITS A FAMILY SIBLING CLONE ================================
@@ -561,6 +595,66 @@ function familySiblingClone(cmd, cwd) {
   }
 }
 
+/* ================================ A GREP WHOSE OPERANDS ARE FILES WALKS NOTHING ================================
+ *
+ * `admits: 'file-operands'` (RECURSIVE-GREP): `-r` names a WALK only when an operand is a directory, or when none is
+ * given (grep then walks the cwd). Measured 2026-11-16: `grep -rn x src/a.py` was hinted though it reads one file.
+ * The operands are read off the firing segment's argv, in the directory that segment acts in.
+ */
+const GREP = /^(?:.*[/\\])?[ef]?grep(?:\.exe)?$/i;
+const GREP_VALUED_SHORT = 'efmABCdD';
+const GREP_VALUED_LONG =
+  /^--(?:regexp|file|max-count|after-context|before-context|context|include|exclude|exclude-dir|exclude-from|label|binary-files|devices|directories)$/;
+
+/** The words the segment `rule` fires on would run, quotes dropped; null when it fires on none. */
+function firingWords(rule, cmd) {
+  let at;
+  try {
+    at = new RegExp(`^(?:${rule.pattern})`);
+  } catch {
+    return null;
+  }
+  const firing = segments(splitHeredocs(cmd).rest)
+    .flatMap((segment) => commandPositions(segment))
+    .find((text) => at.test(text));
+  return firing ? (firing.match(/"[^"\n]*"|'[^'\n]*'|\S+/g) || []).map((w) => w.replace(/^["']|["']$/g, '')) : null;
+}
+
+function fileOperands(rule, cmd, cwd) {
+  const words = cwd && firingWords(rule, cmd);
+  if (!words) return false;
+  let patternGiven = false;
+  const positional = [];
+  for (let i = words.findIndex((w) => GREP.test(w)) + 1; i > 0 && i < words.length; i += 1) {
+    const w = words[i];
+    if (w === '--') {
+      positional.push(...words.slice(i + 1));
+      break;
+    }
+    if (/^--(?:regexp|file)=/.test(w)) patternGiven = true;
+    else if (GREP_VALUED_LONG.test(w)) {
+      patternGiven = patternGiven || w === '--regexp' || w === '--file';
+      i += 1;
+    } else if (/^-[^-]/.test(w)) {
+      const valued = [...w.slice(1)].findIndex((c) => GREP_VALUED_SHORT.includes(c));
+      if (valued >= 0 && 'ef'.includes(w[valued + 1])) patternGiven = true;
+      if (valued >= 0 && valued + 2 === w.length) i += 1; // the value is the next word
+    } else if (!w.startsWith('--')) positional.push(w);
+  }
+  const operands = patternGiven ? positional : positional.slice(1);
+  const dir = ruleTarget(rule, cmd, cwd);
+  return (
+    operands.length > 0 &&
+    operands.every((operand) => {
+      try {
+        return fs.statSync(path.resolve(dir, hostPath(operand))).isFile();
+      } catch {
+        return false;
+      }
+    })
+  );
+}
+
 /* A refusal is a WALL (WALLS-ARE-RECORDED, dev_lab.dev.walls): one metrics line and one ledger line, appended by the
  * ONE writer in a DETACHED interpreter, so the refusal the agent sees waits for nothing. No interpreter, no line. The
  * command never leaves this process: only a sha256 prefix of it does. A reason names a door when a line beyond its
@@ -587,7 +681,12 @@ function logRefusal(name, where, reason) {
 /** Does `rule` fire on any executed text? */
 function fires(rule, texts, cmd) {
   // A 'line' rule names a shape that spans segments (a code piped into a command), so it reads the whole line.
-  if (rule.matches === 'line') return new RegExp(rule.pattern).test(cmd);
+  // Never a body a sink consumes (2026-11-16: prose naming a path was refused): the shell text and executed bodies.
+  if (rule.matches === 'line') {
+    const at = new RegExp(rule.pattern);
+    const { rest, executed } = splitHeredocs(cmd);
+    return at.test(rest) || executed.some((body) => at.test(body));
+  }
   const argument = rule.matches === 'argument';
   // A 'command' rule anchors at the start of a segment, and at the start of a LINE inside
   // interpreter code. An 'argument' rule names an option, so it is searched within the text.
@@ -626,7 +725,20 @@ for (const rule of rules) {
     continue; // one malformed rule never blocks the session
   }
   if (hit && rule.admits === 'family-sibling-clone' && familySiblingClone(cmd, input.cwd)) continue;
+  if (hit && rule.admits === 'file-operands' && fileOperands(rule, cmd, input.cwd)) continue;
   let liveReason = '';
+  // A 'background' row binds only on a Bash call the agent runs in the background (BACKGROUND-SHELL-IS-BOUNDED),
+  // and there the session's interpreter judges it (a longer life needs the USER's grant); the pattern only without one.
+  if (rule.when === 'background') {
+    const background = input.tool_name === 'Bash' && input.tool_input.run_in_background === true;
+    const asked = background ? lifetimeRefusal(cmd, sessionRoot) : null;
+    if (asked !== null) {
+      liveReason = asked;
+      hit = asked !== '';
+    } else {
+      hit = hit && background;
+    }
+  }
   if (hit && rule.when === 'live-run') {
     // A PROBE judging which rule owns a shape sets this (run_engine(live_run=False)): its own suite is a
     // run in the checkout it probes. The tool never sends the key, so no agent command can set it.
