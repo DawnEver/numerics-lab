@@ -41,6 +41,7 @@ from numerics_lab.linear.errors import LinearSolveError
 
 __all__ = [
     'REFINEMENT_CRITERIA',
+    'OwnedFactor',
     'condition_estimate',
     'describe_refinement_trajectory',
     'direct_refinement_correction',
@@ -334,7 +335,7 @@ def refinement_residual(matrix, rhs, x) -> np.ndarray | None:
     return out
 
 
-def direct_refinement_correction(matrix, rhs, x) -> float | None:
+def direct_refinement_correction(matrix, rhs, x, *, factor=None) -> float | None:
     """``||d|| / ||x||`` for one step of iterative refinement, or ``None`` when it cannot speak.
 
     ``d = A^-1 (b - A x)`` estimates the error already present in ``x``, so this is the relative
@@ -350,7 +351,8 @@ def direct_refinement_correction(matrix, rhs, x) -> float | None:
     The factorization is taken fresh here rather than reused from the solve, because the caller
     is ``spsolve``, which discards its factor. That costs a second factorization, and is why this
     is reached ONLY after the residual trigger has already fired -- see
-    :func:`reject_unsolved_direct_system`.
+    :func:`reject_unsolved_direct_system`. A caller that OWNS its factor passes it as ``factor``
+    (anything with ``.solve(v)``) and no SuperLU factorization is taken at all.
     """
     shape = np.shape(matrix)
     if len(shape) != 2 or shape[0] != shape[1]:
@@ -367,12 +369,17 @@ def direct_refinement_correction(matrix, rhs, x) -> float | None:
     try:
         with warnings.catch_warnings():
             warnings.simplefilter('error', MatrixRankWarning)
-            correction = splu(sp.csc_matrix(matrix)).solve(residual_vec)
+            lu = factor if factor is not None else splu(sp.csc_matrix(matrix))
+            correction = np.asarray(lu.solve(residual_vec))
     except (RuntimeError, MatrixRankWarning, ValueError):
         return None
     if not np.all(np.isfinite(correction)):
         return None
     d_norm = float(np.linalg.norm(correction))
+    if d_norm == 0.0 and np.any(residual_vec):
+        # A factor that maps a nonzero residual to a zero step has not solved anything: an exact
+        # factor cannot, so this is an owned solve certifying itself. Unjudged, never a pass.
+        return None
     x_norm = float(np.linalg.norm(xv.ravel()))
     if x_norm == 0.0:
         return 0.0 if d_norm == 0.0 else float('inf')
@@ -517,7 +524,7 @@ def condition_estimate(matrix, *, factor=None) -> float | None:
     condition number, and that case is the trajectory's to report, not this one's.
     """
     lu = factor if factor is not None else _factorize(matrix)
-    if lu is None:
+    if lu is None or not getattr(lu, 'has_transpose', True):
         return None
     n = int(np.shape(matrix)[0])
     operator = LinearOperator((n, n), matvec=lu.solve, rmatvec=lambda v: lu.solve(v, 'T'))
@@ -644,7 +651,30 @@ def settle_direct_solution(matrix, rhs, x, backend: str) -> np.ndarray:
     return x
 
 
-def reject_unsolved_direct_system(matrix, rhs, x, backend: str, *, refinement: float | None = None) -> None:
+class OwnedFactor:
+    """A caller's own correction solve seen as a factor: ``solve(v)`` only, no transpose.
+
+    The diagnostics of :func:`reject_unsolved_direct_system` must judge THE CALLER'S numerical
+    solve (row-scaled, mixed-unit minors, a stale factor), not a fresh SuperLU of the unscaled
+    operator -- that would be a different solve, and a second factorization on a path already
+    lost. Without a transpose the 1-norm condition estimate is reported unavailable.
+    """
+
+    has_transpose = False
+
+    def __init__(self, solve) -> None:
+        self._solve = solve
+
+    def solve(self, rhs, trans='N'):
+        if trans != 'N':
+            msg = 'an owned correction solve has no transpose'
+            raise NotImplementedError(msg)
+        return np.asarray(self._solve(np.asarray(rhs, dtype=float)), dtype=float)
+
+
+def reject_unsolved_direct_system(
+    matrix, rhs, x, backend: str, *, refinement: float | None = None, factor=None
+) -> None:
     """Raise :class:`LinearSolveError` when a DIRECT solve did not actually solve its system.
 
     The half of the singular guard that catches FINITE garbage: SuperLU emits a
@@ -668,6 +698,9 @@ def reject_unsolved_direct_system(matrix, rhs, x, backend: str, *, refinement: f
     The message names which of the two was established, both statistics, the ORDER, and what the
     caller can do; a refusal that says "singular" about a solution accurate to 2e-17 sends its
     reader to the wrong place.
+
+    ``factor`` (anything with ``.solve(v)``, e.g. :class:`OwnedFactor`) is the caller's own
+    factorization; when given, every diagnostic uses it and SuperLU is never called.
     """
     residual = direct_relative_residual(matrix, rhs, x)
     if residual is None or residual <= _DIRECT_RESIDUAL_RTOL:
@@ -676,7 +709,7 @@ def reject_unsolved_direct_system(matrix, rhs, x, backend: str, *, refinement: f
     # judging a repaired vector does not pay for a third factorization. It is not a way to supply
     # a friendlier number: the value handed in is the LAST move of the repair, i.e. the one
     # measured on the vector being judged here, and omitting it falls back to measuring it.
-    correction = refinement if refinement is not None else direct_refinement_correction(matrix, rhs, x)
+    correction = refinement if refinement is not None else direct_refinement_correction(matrix, rhs, x, factor=factor)
     if correction is not None and correction <= _DIRECT_REFINEMENT_RTOL:
         return  # ill-CONDITIONED, not unsolved: the residual is cond*eps, the answer is sound.
     n = int(np.shape(matrix)[0])
@@ -706,7 +739,8 @@ def reject_unsolved_direct_system(matrix, rhs, x, backend: str, *, refinement: f
     # the conditioning ceiling -- sized on an n=864 system, which a field solve is
     # under no obligation to stay below. The trajectory separates them and costs one factorization
     # on a solve that is already lost. It changes no verdict: this line is inside the raise.
-    factor = _factorize(matrix)
+    if factor is None:
+        factor = _factorize(matrix)
     msg = (
         f'{msg} '
         f'{describe_refinement_trajectory(refinement_move_trajectory(matrix, rhs, x, factor=factor), condition_estimate(matrix, factor=factor))}'
@@ -777,6 +811,7 @@ def refine_factored_solution(
         ratio[(magnitude == 0) & (defect != 0)] = np.inf
         return defect, float(np.max(ratio, initial=0))
 
+    owned = OwnedFactor(solve_correction)
     if criterion == 'step-size':
         return _refine_by_step_size(matrix, rhs, best, solve_correction, max_steps, step_rtol, residual_rtol)
     defect, score = measured(best)
@@ -807,12 +842,12 @@ def refine_factored_solution(
             raise LinearSolveError(msg)
         # A callback cannot certify itself by returning a small or zero vector.
         # First retain the original equation guard for A*correction = forcing.
-        reject_unsolved_direct_system(matrix, forcing, correction, 'factored_refinement_correction')
+        reject_unsolved_direct_system(matrix, forcing, correction, 'factored_refinement_correction', factor=owned)
         correction_norm, solution_norm = float(np.linalg.norm(correction)), float(np.linalg.norm(best))
         move = (
             correction_norm / solution_norm if solution_norm != 0 else (0.0 if correction_norm == 0 else float('inf'))
         )
-    reject_unsolved_direct_system(matrix, rhs, best, 'factored_refinement', refinement=move)
+    reject_unsolved_direct_system(matrix, rhs, best, 'factored_refinement', refinement=move, factor=owned)
     return best
 
 
