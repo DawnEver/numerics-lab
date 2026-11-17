@@ -422,7 +422,7 @@ Each new `(equation × mesh × iteration)` combo is:
    (e.g. plain-Picard non-convergence → `xfail(strict=False)` until/unless it is fixed), never skip;
 3. a convergence-characterization test (iters-to-tol, final residual) per strategy, tolerances not
    hashes. A method proven worse is KEPT and labelled, so the comparison across methods (the
-   directive's "对比各种迭代方法") is a first-class, permanently-run artifact, not a one-off experiment.
+   directive's "compare the various iteration methods" (user, translated)) is a first-class, permanently-run artifact, not a one-off experiment.
 
 #### 7. First concrete steps (smallest safe increments)
 
@@ -555,7 +555,7 @@ Extend `test_iteration_method_matrix.py` into a **method benchmark**: for every
 residual, and wall-clock; assert convergence-to-reference or `xfail(strict=False)` a known
 non-convergence (e.g. plain Picard on a case where it diverges). Register each method's measured
 convergence character in `maxwell/accuracy.py` (a new `iteration` metric band), so a regression in a
-method's convergence is caught the same way a field regression is. This is the "对比各种迭代方法"
+method's convergence is caught the same way a field regression is. This is the "compare the various iteration methods" (user, translated)
 artifact — run permanently, never a one-off.
 
 #### 5. Suggested order (value × safety)
@@ -569,3 +569,5 @@ artifact — run permanently, never a one-off.
 
 Every step: new strategy/seam, default unchanged (bit-for-bit), verified converge-to-reference,
 registered + matrix-gated. None excluded — a slower/worse method is a labelled datum, not a drop.
+
+> Amended 2026-11-17: translated to English (D26) -- approved: "(user, translated) .claude/memory/ and .claude/tasks/ should also be English only"
