@@ -22,3 +22,5 @@ metadata:
   `git config --unset remote.origin.pushurl`. KEEP `remote.gitea-private.pushurl` disabled: the private history is
   read-only and is never pushed anywhere, nor deleted, nor rewritten.
 - No other toolchain repo carries a disabled pushurl (dev-lab, lab-commons, ai-lab, optimi-lab checked 2026-11-08).
+
+> Amended 2026-11-17: translated to English (D26) -- approved: "(user, translated) .claude/memory/ and .claude/tasks/ should also be English only"

@@ -123,3 +123,5 @@ When the Anser® engine is screening millions of candidates, if it finds that so
 
 > **Summary**
 > Monumo has in effect built a **self-circulating data super-factory**: it uses massive (tens of millions) multiphysics simulation data to feed a **graph neural network / surrogate model** that can adapt to arbitrary geometry and nonlinear materials. Having been tempered by millions of extreme designs, the AI can naturally see at a glance roughly what the electromagnetic field of a new design looks like, and then give a perfect "godlike initial value".
+
+> Amended 2026-11-17: translated to English (D26) -- approved: "(user, translated) .claude/memory/ and .claude/tasks/ should also be English only"

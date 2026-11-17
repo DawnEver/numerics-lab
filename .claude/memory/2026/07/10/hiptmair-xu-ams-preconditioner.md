@@ -218,3 +218,5 @@ the large greenfield piece.
   8's comparison contrasts with the nodal method.
 - Depends on the built `linear_solvers` registry (done) + `pyamg` (new optional dep).
 - Independent of WS-Validate (different physics regime).
+
+> Amended 2026-11-17: translated to English (D26) -- approved: "(user, translated) .claude/memory/ and .claude/tasks/ should also be English only"
