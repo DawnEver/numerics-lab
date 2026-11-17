@@ -54,6 +54,7 @@ output/
 **/.claude/**/__pycache__/
 **/.claude/**/*.py[cod]
 **/.claude/automode.json
+**/.claude/tasks/.bindings/
 
 # --- numerics-lab delta, 3 of 3 allowed ---
 /target/
