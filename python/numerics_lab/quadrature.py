@@ -3,6 +3,7 @@ discretisation.
 
 - :func:`gauss_legendre_1d` -- the Gauss-Legendre rule on one interval;
 - :func:`gauss_legendre_box` -- its composite tensor product on a box, split into equal cells;
+- :func:`ear_clip` -- a simple polygon's triangles, as indices into its own vertices;
 - :func:`simplex_rule` -- a collapsed (Duffy) Gauss-Legendre rule on the ear-clipped triangles of a simple polygon.
 
 Each returns numpy ``(points, weights)``; a caller that trains on them converts to its own tensor type.
@@ -16,7 +17,7 @@ from functools import lru_cache
 import numpy as np
 from numpy.typing import NDArray
 
-__all__ = ['gauss_legendre_1d', 'gauss_legendre_box', 'simplex_rule']
+__all__ = ['ear_clip', 'gauss_legendre_1d', 'gauss_legendre_box', 'simplex_rule']
 
 
 def gauss_legendre_1d(n: int, lo: float, hi: float) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
@@ -63,41 +64,46 @@ def _cross2(a: NDArray[np.float64], b: NDArray[np.float64], c: NDArray[np.float6
     return float((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]))
 
 
-def _ear_clip(v: NDArray[np.float64]) -> NDArray[np.float64]:
-    """The simple polygon ``v (k, 2)`` as ``(k - 2, 3, 2)`` counter-clockwise triangles."""
+def ear_clip(vertices: NDArray[np.float64]) -> NDArray[np.intp]:
+    """The simple polygon ``vertices (k, 2)`` (either winding) as ``(k - 2, 3)`` indices into ``vertices``, each
+    triangle counter-clockwise.
+
+    A flat corner (a vertex on its neighbours' line) is never an ear tip, so every vertex stays a corner of some
+    triangle and a mesh built on the clip stays conforming. Raises ``ValueError`` on fewer than three vertices, no
+    area, or a polygon with no ear to clip (not simple).
+    """
+    v = np.asarray(vertices, dtype=float)
     if v.ndim != 2 or v.shape[1] != 2 or len(v) < 3:
         msg = f'a polygon is (k >= 3, 2) vertices, got shape {v.shape}'
         raise ValueError(msg)
     x, y = v[:, 0], v[:, 1]
     area = 0.5 * float(x @ np.roll(y, -1) - y @ np.roll(x, -1))
     if area == 0.0:
-        msg = f'a polygon to integrate over has area, got {v.tolist()}'
+        msg = f'a polygon to triangulate has area, got {v.tolist()}'
         raise ValueError(msg)
-    pts = v if area > 0 else v[::-1]
-    tol = 1e-12 * float(np.max(np.ptp(pts, axis=0))) ** 2  # a flat corner is not an ear
-    idx = list(range(len(pts)))
-    out: list[NDArray[np.float64]] = []
+    tol = 1e-12 * float(np.max(np.ptp(v, axis=0))) ** 2  # a flat corner is not an ear
+    idx = list(range(len(v))) if area > 0 else list(range(len(v)))[::-1]
+    out: list[tuple[int, int, int]] = []
     while len(idx) > 3:
         for k in range(len(idx)):
             i, j, m = idx[k - 1], idx[k], idx[(k + 1) % len(idx)]
-            a, b, c = pts[i], pts[j], pts[m]
+            a, b, c = v[i], v[j], v[m]
             if _cross2(a, b, c) <= tol:
                 continue  # reflex or flat
-            others = (pts[n] for n in idx if n not in (i, j, m))
+            others = (v[n] for n in idx if n not in (i, j, m))
             if any(_cross2(a, b, p) >= -tol and _cross2(b, c, p) >= -tol and _cross2(c, a, p) >= -tol for p in others):
                 continue  # another vertex inside or on it
-            out.append(np.stack([a, b, c]))
+            out.append((i, j, m))
             del idx[k]
             break
         else:
             msg = f'polygon {v.tolist()} is not simple: no ear to clip'
             raise ValueError(msg)
-    last = pts[idx]
-    if _cross2(*last) <= tol:
+    if _cross2(*v[idx]) <= tol:
         msg = f'polygon {v.tolist()} is not simple: its last triangle is not counter-clockwise'
         raise ValueError(msg)
-    out.append(last)
-    return np.stack(out)
+    out.append(tuple(idx))
+    return np.asarray(out, dtype=np.intp)
 
 
 def simplex_rule(
@@ -114,7 +120,8 @@ def simplex_rule(
     if order < 1 or cells < 1:
         msg = f'a simplex rule takes order >= 1 and cells >= 1, got order={order} cells={cells}'
         raise ValueError(msg)
-    triangles = _ear_clip(np.asarray(vertices, dtype=float))
+    v = np.asarray(vertices, dtype=float)
+    triangles = v[ear_clip(v)]
     gu, wu = _reference_gauss(int(order))
     gv, wv = _reference_gauss(int(order) + 1)
     u, t1 = 0.5 * (gu + 1.0), 0.5 * (gv + 1.0)

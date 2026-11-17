@@ -13,7 +13,7 @@ Planted controls -- each a way the bar could read a constant:
 import numpy as np
 import pytest
 
-from numerics_lab.quadrature import gauss_legendre_box, simplex_rule
+from numerics_lab.quadrature import ear_clip, gauss_legendre_box, simplex_rule
 
 #: A quadrilateral, no two sides parallel (m).
 _SLOPED = ((0.0, 0.0), (0.3, 0.05), (0.22, 0.2), (0.04, 0.12))
@@ -135,3 +135,25 @@ def test_planted_one_degree_past_the_box_rules_claim_it_misses():
 def test_a_bad_box_request_is_refused(lower, upper, order, cells):
     with pytest.raises(ValueError):  # noqa: PT011 -- each case's message differs; the refusal is the claim
         gauss_legendre_box(lower, upper, order, cells=cells)
+
+
+def _signed_area(tri: np.ndarray) -> np.ndarray:
+    a, b, c = tri[:, 0], tri[:, 1], tri[:, 2]
+    return 0.5 * ((b[:, 0] - a[:, 0]) * (c[:, 1] - a[:, 1]) - (b[:, 1] - a[:, 1]) * (c[:, 0] - a[:, 0]))
+
+
+@pytest.mark.parametrize('polygon', [_SLOPED, _L, _L[::-1]], ids=['sloped-quad', 'L', 'L-clockwise'])
+def test_ear_clip_indexes_the_polygons_own_vertices_into_ccw_triangles_tiling_it(polygon):
+    v = np.asarray(polygon, dtype=float)
+    tri = ear_clip(v)
+    assert tri.shape == (len(v) - 2, 3) and tri.dtype.kind == 'i'
+    assert set(tri.ravel().tolist()) == set(range(len(v)))  # every corner is a corner of some triangle
+    area = _signed_area(v[tri])
+    assert (area > 0).all()  # counter-clockwise whatever the polygon's winding
+    assert float(area.sum()) == pytest.approx(abs(_green(polygon, 0, 0)), rel=_EXACT, abs=0.0)
+
+
+def test_planted_a_self_crossing_polygon_with_area_is_refused():
+    crossed = ((0.0, 0.0), (3.0, 0.0), (3.0, 1.0), (1.0, 1.0), (1.0, -1.0), (0.0, -1.0))  # its sides cross at (1, 0)
+    with pytest.raises(ValueError, match='not simple'):
+        ear_clip(np.asarray(crossed))
