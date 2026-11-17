@@ -88,6 +88,10 @@ _MECHANISMS: Final = {
             'WRITES-STAY-IN-THE-TREE',
             # Adopted 2026-11-13 (user ruling): the same live wiring runs `dev_lab.dev.walls` post-tool and stop.
             'WALLS-ARE-RECORDED',
+            # Adopted 2026-11-17 with dev-lab integrate/main (#670): the engine refuses a journal line citing an
+            # ephemeral path, and a subagent's heavy or full selection, each by its own rule.
+            'TRACKED-CITES-NO-EPHEMERAL',
+            'HEAVY-IS-THE-MAIN-SESSIONS',
         ),
         (TestPath('tests/architecture/test_the_agent_guard_is_live.py'),),
     ),
@@ -113,7 +117,6 @@ _ABSENT: Final = frozenset({
     'DOCS-SPLIT', 'MEMORY-SHAPE', 'INJECTED-DOC-WIDTH-CEILING',
     # Code placement and scratch: one python/ and one tests/ tree, no scratch.
     'CODE-IN-CODE-ROOTS', 'SCRATCH-IS-NEVER-COMMITTED', 'STRAY-FILE-REFUSED', 'SPLIT-BY-CONCEPT',
-    'TRACKED-CITES-NO-EPHEMERAL',
     # Meta-rules about guards: carried by the family's shared bodies.
     'DECLARATION-LIES', 'PLANTED-CONTROL', 'FLOOR-ON-EVERY-SCAN', 'ESCAPE-HATCH-CEILING', 'RATCHET-TWO-SIDES',
     'NAMED-SETS-NOT-COUNTS', 'XFAIL-NOT-SKIP', 'MODULE-SIZE-ALARM',
