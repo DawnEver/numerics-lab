@@ -17,10 +17,9 @@ divided through.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-
-import warnings
 
 import numpy as np
 from numpy.typing import NDArray
