@@ -147,8 +147,8 @@ with **edge (Nedelec) elements** to avoid spurious modes. That operator has a LA
 computational electromagnetics. The **Hiptmair-Xu auxiliary-space preconditioner (AMS)** is THE
 standard solver: it maps the curl-curl problem to auxiliary nodal (H1) Poisson problems (one vector, one
 scalar) that AMG solves well, recombining them to precondition the edge system. This is the enabling
-technology for the whole eddy-current / 3D roadmap (`plan-multiphysics-hybrid.md`: "时谐场", "3D",
-"棱边法/edge element", "Krylov 子空间 CG/GMRES", "FEM-DDM"). Without it, iterative solves of the vector
+technology for the whole eddy-current / 3D roadmap (`plan-multiphysics-hybrid.md`: "time-harmonic field" (translated), "3D",
+"edge method/edge element" (translated), "Krylov subspace CG/GMRES" (translated), "FEM-DDM"). Without it, iterative solves of the vector
 problem do not converge.
 
 #### 2. What exists in-repo to build on
@@ -214,7 +214,9 @@ the large greenfield piece.
 
 - **HARD PREREQ: edge (Nedelec) elements** — build the curl-curl formulation FIRST; AMS is meaningless
   without it. This is the single biggest cross-plan dependency on the frontier.
-- Ties to plan 8 (nodal vs loop/edge method characterization) — edge elements are the "棱边法" that plan
+- Ties to plan 8 (nodal vs loop/edge method characterization) — edge elements are the "edge method" (translated) that plan
   8's comparison contrasts with the nodal method.
 - Depends on the built `linear_solvers` registry (done) + `pyamg` (new optional dep).
 - Independent of WS-Validate (different physics regime).
+
+> Amended 2026-11-17: translated to English (D26) -- approved: "(user, translated) .claude/memory/ and .claude/tasks/ should also be English only"
