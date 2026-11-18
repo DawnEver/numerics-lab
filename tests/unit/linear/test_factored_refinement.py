@@ -94,3 +94,80 @@ def test_a_subnormal_defect_ends_refinement_instead_of_asking_for_its_correction
         return forcing.copy()
 
     np.testing.assert_array_equal(refine_factored_solution(matrix, rhs, initial, solve), initial)
+
+
+def _jacobi(matrix):
+    """An INEXACT owned solve: the diagonal alone, so each correction only contracts the error."""
+    diagonal = matrix.diagonal()
+    return lambda forcing: forcing / diagonal
+
+
+_DIAGONALLY_DOMINANT = sp.csr_matrix([[4.0, 1.0, 0.0], [1.0, 4.0, 1.0], [0.0, 1.0, 4.0]])
+# Rank one and inconsistent with rhs = (1, 0): no vector has a small residual, so both criteria must
+# refuse whatever a (pseudo-inverse) owned solve proposes.
+_SINGULAR = sp.csr_matrix([[1.0, 1.0], [1.0, 1.0]])
+
+
+def _pseudo_inverse_solve(forcing):
+    return np.linalg.pinv(_SINGULAR.toarray()) @ forcing
+
+
+def test_step_size_criterion_iterates_an_inexact_solve_to_the_answer():
+    rhs = np.array([1.0, 2.0, 3.0])
+    exact = np.linalg.solve(_DIAGONALLY_DOMINANT.toarray(), rhs)
+    calls = []
+    solve = _jacobi(_DIAGONALLY_DOMINANT)
+
+    def counted(forcing):
+        calls.append(forcing)
+        return solve(forcing)
+
+    answer = refine_factored_solution(
+        _DIAGONALLY_DOMINANT, rhs, np.zeros(3), counted, criterion='step-size', max_steps=60, step_rtol=1e-12
+    )
+    np.testing.assert_allclose(answer, exact, rtol=1e-10, atol=1e-14)
+    assert 3 < len(calls) < 60  # stopped on the step bar, not on the step budget
+
+
+def test_step_size_criterion_refuses_a_residual_above_its_bar_after_the_step_budget():
+    # Planted control for the residual leg: three Jacobi steps leave a residual near 1e-2.
+    with pytest.raises(LinearSolveError, match='residual'):
+        refine_factored_solution(
+            _DIAGONALLY_DOMINANT,
+            np.array([1.0, 2.0, 3.0]),
+            np.zeros(3),
+            _jacobi(_DIAGONALLY_DOMINANT),
+            criterion='step-size',
+            max_steps=3,
+            residual_rtol=1e-8,
+        )
+
+
+@pytest.mark.parametrize('criterion', ['backward-error', 'step-size'])
+def test_a_singular_system_is_refused_by_each_criterion(criterion):
+    with pytest.raises(LinearSolveError):
+        refine_factored_solution(
+            _SINGULAR, np.array([1.0, 0.0]), np.zeros(2), _pseudo_inverse_solve, criterion=criterion
+        )
+
+
+def test_backward_error_criterion_honours_its_step_budget():
+    calls = []
+    solve = _jacobi(_DIAGONALLY_DOMINANT)
+
+    def counted(forcing):
+        calls.append(forcing)
+        return solve(forcing)
+
+    with pytest.raises(LinearSolveError):
+        refine_factored_solution(_DIAGONALLY_DOMINANT, np.array([1.0, 2.0, 3.0]), np.zeros(3), counted, max_steps=1)
+    assert len(calls) == 2  # one refinement step, then the guard's one measuring correction
+
+
+@pytest.mark.parametrize(
+    'options',
+    [{'criterion': 'newest'}, {'max_steps': 0}, {'step_rtol': -1.0}, {'residual_rtol': float('nan')}],
+)
+def test_an_undeclared_refinement_option_is_refused(options):
+    with pytest.raises(ValueError, match=next(iter(options))):
+        refine_factored_solution(sp.eye(1), np.ones(1), np.ones(1), lambda f: f, **options)

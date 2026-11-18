@@ -48,7 +48,9 @@
 //!    0.34 s for LU. Symmetry is VERIFIED — pattern at analysis, VALUES bit-for-bit on every
 //!    refactor — and never declared: a caller's "this is symmetric" is a declaration that can lie,
 //!    an `O(nnz)` comparison cannot. A symmetric operator that is not positive definite is refused
-//!    by faer's LLT and falls to LU, and the refusal is remembered so it is not paid twice.
+//!    by faer's LLT and falls to LU for THAT refactor only: the next exactly-symmetric refactor
+//!    tries LLT again (issue #39 -- one indefinite iterate pinned an SDM march to LU for good).
+//!    Each kind's ordering + symbolic analysis stays cached; only numeric storage is released.
 //!
 //! Threading (`Par::rayon`) was measured to HURT at every size here and is not used.
 
@@ -226,10 +228,11 @@ pub(crate) struct Kernel {
     lu_symbolic: Option<SymbolicLu<usize>>,
     /// The ONE numeric LU, refactorised in place (lever 2).
     lu_numeric: NumericLu<usize, f64>,
-    /// AMD + supernodal Cholesky, analysed on first symmetric refactor.
+    /// Whether `lu_numeric` holds storage (it is reset, not dropped, when released).
+    lu_held: bool,
+    /// AMD + supernodal Cholesky, analysed on first symmetric refactor; its symbolic half is
+    /// kept for the kernel's life, its `l_values` released when LU takes over.
     cholesky: Option<Cholesky>,
-    /// Set once faer's LLT has refused this operator as not positive definite.
-    cholesky_refused: bool,
     /// What the last successful refactor produced; `None` before one / after a failed one.
     current: Option<FactorKind>,
 }
@@ -277,8 +280,8 @@ impl Kernel {
             indices: indices.to_vec(),
             lu_symbolic: None,
             lu_numeric: NumericLu::new(),
+            lu_held: false,
             cholesky: None,
-            cholesky_refused: false,
             current: None,
         })
     }
@@ -320,34 +323,45 @@ impl Kernel {
         // the superseded kind's storage held both at once -- MEASURED 2026-10-20 on an n = 810,000
         // Q4 proxy: Cholesky +1.0 GiB, then LU +1.47 GiB beside it. The kind being left is
         // released BEFORE the other is allocated, so the peak is the larger factor, not the sum; a
-        // flip back re-analyses (an ordering + symbolic pass, cheaper than the numeric factor).
-        if !self.cholesky_refused && self.values_symmetric(values) {
+        // flip back reuses the cached symbolic and re-allocates only the numeric storage.
+        // LLT is re-attempted on EVERY exactly-symmetric refactor: definiteness is a property of
+        // the values, so one indefinite iterate says nothing about the next (issue #39).
+        if self.values_symmetric(values) {
             self.release_lu();
             if self.try_cholesky()? {
                 self.current = Some(FactorKind::Cholesky);
                 return Ok(FactorKind::Cholesky);
             }
-            self.cholesky_refused = true;
         }
-        self.cholesky = None;
+        self.release_cholesky();
         self.factor_lu()?;
         self.current = Some(FactorKind::Lu);
         Ok(FactorKind::Lu)
     }
 
     fn release_lu(&mut self) {
-        self.lu_symbolic = None;
         self.lu_numeric = NumericLu::new();
+        self.lu_held = false;
+    }
+
+    fn release_cholesky(&mut self) {
+        if let Some(chol) = self.cholesky.as_mut() {
+            chol.l_values = Vec::new();
+        }
     }
 
     /// Which factorisations this kernel holds storage for (at most one: see [`Self::refactor`]).
     #[must_use]
     pub fn held(&self) -> Vec<FactorKind> {
         let mut out = Vec::new();
-        if self.lu_symbolic.is_some() {
+        if self.lu_held {
             out.push(FactorKind::Lu);
         }
-        if self.cholesky.is_some() {
+        if self
+            .cholesky
+            .as_ref()
+            .is_some_and(|c| !c.l_values.is_empty())
+        {
             out.push(FactorKind::Cholesky);
         }
         out
@@ -366,16 +380,21 @@ impl Kernel {
                 },
             )
             .map_err(|e| faer_refusal("cholesky symbolic", e))?;
-            let mut l_values = Vec::new();
-            l_values
-                .try_reserve_exact(symbolic.len_val())
-                .map_err(|_| out_of_memory("cholesky values"))?;
-            l_values.resize(symbolic.len_val(), 0.0);
-            self.cholesky = Some(Cholesky { symbolic, l_values });
+            self.cholesky = Some(Cholesky {
+                symbolic,
+                l_values: Vec::new(),
+            });
         }
         let Some(chol) = self.cholesky.as_mut() else {
             return Ok(false);
         };
+        let len = chol.symbolic.len_val();
+        if chol.l_values.len() != len {
+            chol.l_values
+                .try_reserve_exact(len)
+                .map_err(|_| out_of_memory("cholesky values"))?;
+            chol.l_values.resize(len, 0.0);
+        }
         let mat = SparseColMatRef::new(self.pattern.as_ref(), &self.csc_values);
         let mut buf = scratch(
             "cholesky scratch",
@@ -418,6 +437,7 @@ impl Kernel {
             "lu scratch",
             symbolic.factorize_numeric_lu_scratch::<f64>(Par::Seq, Default::default()),
         )?;
+        self.lu_held = true;
         symbolic
             .factorize_numeric_lu(
                 &mut self.lu_numeric,
