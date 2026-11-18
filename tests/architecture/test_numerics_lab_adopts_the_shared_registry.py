@@ -39,6 +39,7 @@ _MECHANISMS: Final = {
     'SESSION-HISTORY-ONLY-GROWS': (_HOOKS,),
     'INTEGRATION-IS-MERGES-ONLY': (_HOOKS,),
     'ORIGIN-HOLDS-ONLY-DECLARED-BRANCHES': (_HOOKS,),  # the same `session-branch` pre-push row (dev-lab ea264f8)
+    'PUSHED-HEAD-CARRIES-ITS-TASK': (_HOOKS,),  # adopted 2026-11-18: the same `session-branch` pre-push row
     'LATEST-DEPENDENCIES': (_HOOKS,),
     # Adopted 2026-10-21 with the lab-commons a04f7ab relock: both are the forge's server-side steps
     # (dev_lab.dev.forgemerge, dev_lab.dev.forgereview) over a repo whose integrator table declares
@@ -92,6 +93,9 @@ _MECHANISMS: Final = {
             # ephemeral path, and a subagent's heavy or full selection, each by its own rule.
             'TRACKED-CITES-NO-EPHEMERAL',
             'HEAVY-IS-THE-MAIN-SESSIONS',
+            # Adopted 2026-11-18 with the {python} relock: the rendered wiring refuses a hook row over the
+            # five-second budget unless detached, and this live-guard test fails when the wiring differs.
+            'HOOK-UNDER-FIVE-SECONDS',
         ),
         (TestPath('tests/architecture/test_the_agent_guard_is_live.py'),),
     ),
