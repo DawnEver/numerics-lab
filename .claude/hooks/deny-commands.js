@@ -8,12 +8,13 @@
  * is a rule in the JSON file passed as argv[2] (`.claude/hooks/deny-rules.json`), so adding or
  * retiring a rule is a data change, never an engine change.
  *
- * A rule is {name, pattern, matches?, allow?, scope?, severity?, reason}. `scope: 'subagent'` judges the rule only
+ * A rule is {name, pattern, matches?, allow?, scope?, severity?, asks?, reason}. `scope: 'subagent'` judges the rule only
  * when the payload carries a non-empty `agent_id`. `severity: 'hint'` never denies: the call runs and the
  * reason reaches the agent as `additionalContext` -- unless a refusing rule also fires, which wins. `pattern` (JS regex source) denies a
  * command it matches, unless `allow` (regex source) also matches -- the sanctioned spelling.
  * `reason` is the rewrite hint shown to the agent; `{root}` in it expands to the tool call's cwd, and `{python}`
- * (or a door's `<venv python>`) to the target checkout's interpreter by ABSOLUTE path.
+ * (or a door's `<venv python>`) to the target checkout's interpreter by ABSOLUTE path. `asks` names the Python
+ * module that judges a call the pattern only prefilters (A ROW WHOSE JUDGE IS A MODULE, below).
  *
  * ================================ WHAT IS MATCHED, AND WHY ================================
  *
@@ -319,9 +320,17 @@ function namedDir(words) {
 
 /** The directory the command acts in -- the ONE answer to "which tree" every judge reads. A segment acts in the
  * call's cwd as moved by the `cd X` segments before it, or in the dir its git/uv/dep call names. The answer is
- * the dir of the first segment `acts` selects (the one a rule fired on), else of the first segment that is not
- * a `cd`, else the cwd the `cd`s leave. */
+ * the dir of the first segment `acts` selects at any command position (the one a rule fired on, behind a
+ * `timeout 50m` too), else of the first segment that is not a `cd`, else the cwd the `cd`s leave. A shell's
+ * `-c` script is a command line of its own starting in its segment's dir, so its `cd`s move it (2026-11-17:
+ * `timeout 50m bash -c 'cd B && ...'` from A, and a bounded `dep --bootstrap C`, were both judged against A). */
 function targetDir(cmd, cwd, acts = () => true) {
+  const found = targetIn(cmd, cwd, acts);
+  return found.hit ?? found.first ?? found.dir;
+}
+
+/** `targetDir`'s walk: {hit} the dir of the first acting segment, else {first, dir}. */
+function targetIn(cmd, cwd, acts) {
   let dir = cwd;
   let first = null;
   const word = String.raw`("[^"\n]*"|'[^'\n]*'|[^\s;&|()]+)`;
@@ -332,12 +341,20 @@ function targetDir(cmd, cwd, acts = () => true) {
       dir = path.resolve(dir, hostPath(cd[1]));
       continue;
     }
-    const named = namedDir(text.match(new RegExp(word, 'g')) || []);
+    const positions = commandPositions(text);
+    const acting = positions.find((position) => acts(position));
+    const named = namedDir((acting ?? positions[positions.length - 1] ?? text).match(new RegExp(word, 'g')) || []);
     const here = named ? path.resolve(dir, hostPath(named)) : dir;
-    if (acts(text)) return here;
+    if (acting !== undefined) return { hit: here };
+    if (positions.some((position) => SHELLS.test(commandWord(position)))) {
+      for (const script of inlineScripts(text)) {
+        const inner = targetIn(script, here, acts);
+        if (inner.hit) return inner;
+      }
+    }
     if (first === null && text) first = here;
   }
-  return first === null ? dir : first;
+  return { hit: null, first, dir };
 }
 
 /** The directory the segment `rule` fires on acts in (`targetDir`). */
@@ -351,13 +368,20 @@ function ruleTarget(rule, cmd, cwd) {
   return targetDir(cmd, cwd, (text) => at.test(text));
 }
 
-/** The nearest directory at or above `dir` holding a `.git` (a worktree's `.git` is a file). */
+/** `dir` spelled for comparison: case-folded where the filesystem is (Windows), as Python's `os.path.normcase`. */
+const normcase = (dir) => (process.platform === 'win32' ? path.resolve(dir).toLowerCase() : path.resolve(dir));
+
+/** Directories git's discovery never climbs into: GIT_CEILING_DIRECTORIES, git's own contract. */
+const CEILINGS = new Set((process.env.GIT_CEILING_DIRECTORIES || '').split(path.delimiter).filter(Boolean).map(normcase));
+
+/** The nearest directory at or above `dir` holding a `.git` (a worktree's `.git` is a file), stopping where git
+ * does -- the walk dev_lab.dev.gitdirs.ancestors also takes. */
 function repoRoot(dir) {
   let at = path.resolve(dir);
   for (;;) {
     if (fs.existsSync(path.join(at, '.git'))) return at;
     const up = path.dirname(at);
-    if (up === at) return null;
+    if (up === at || CEILINGS.has(normcase(up))) return null;
     at = up;
   }
 }
@@ -413,6 +437,16 @@ const posix = (p) => p.replace(/\\/g, '/');
  * exists (2026-11-03: a target with no venv was named `<target>/.venv/...python`, a command that cannot run); its
  * own spelling only when no interpreter exists anywhere. */
 function remedyPython(root) {
+  const checkout = checkoutPython(root);
+  if (checkout) return checkout;
+  const own = path.join(currentEnv(path.resolve(root)), ...VENV_TAIL);
+  const session = sessionRoot && path.join(currentEnv(sessionRoot), ...VENV_TAIL);
+  if (session && fs.existsSync(session)) return posix(session);
+  return posix(own);
+}
+
+/** `root`'s own venv interpreter, else its main checkout's (a linked worktree), else null: never another repo's. */
+function checkoutPython(root) {
   const own = path.join(currentEnv(path.resolve(root)), ...VENV_TAIL);
   if (fs.existsSync(own)) return posix(own);
   try {
@@ -423,11 +457,35 @@ function remedyPython(root) {
       if (fs.existsSync(main)) return posix(main);
     }
   } catch {
-    // a `.git` directory, or none: the session's interpreter, else the checkout's own spelling below
+    // a `.git` directory, or none: no checkout interpreter
   }
-  const session = sessionRoot && path.join(currentEnv(sessionRoot), ...VENV_TAIL);
-  if (session && fs.existsSync(session)) return posix(session);
-  return posix(own);
+  return null;
+}
+
+const listDir = (dir) => {
+  try {
+    return fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+};
+
+/** Whether `python`'s venv has dev_lab installed: a `dev_lab-*.dist-info` in its site-packages. */
+function carriesDevLab(python) {
+  const lib = path.join(path.dirname(path.dirname(python)), process.platform === 'win32' ? 'Lib' : 'lib');
+  const sites = process.platform === 'win32' ? [lib] : listDir(lib).map((version) => path.join(lib, version));
+  return sites.some((site) => listDir(path.join(site, 'site-packages')).some((name) => /^dev_lab-.*\.dist-info$/.test(name)));
+}
+
+/** The exit of a per-repo-door rule when `target` declares none (2026-11-17: a pytest in one repo was sent to the
+ * session repo's `scripts/gate/runner.py`, absent there): the family verify door when the target's OWN
+ * interpreter carries dev_lab, else the declaration to add -- never another repo's path. */
+function undeclaredDoor(rule, target, shown) {
+  const python = rule.needs === 'verdict-entry-point' ? checkoutPython(target) : null;
+  if (python && carriesDevLab(python)) {
+    return `${shown} declares no door for it; its own interpreter carries dev_lab: ${python} -m dev_lab.dev.verify -- <paths>`;
+  }
+  return `${shown} declares no door for it: declare one in its pyproject.toml as [tool.dev_lab.doors] ${rule.name} = "<the command that runs it there>"`;
 }
 
 /** `text` with `{root}` as the cwd and the interpreter tokens as `checkout`'s absolute interpreter. */
@@ -459,6 +517,7 @@ function reasonFor(rule, reason, cmd, cwd, sessionRoot) {
   if (door) {
     return [`${rule.name}: refused; ${shown} declares its own door for it:`, door, ...details].join('\n');
   }
+  if (rule.needs) return [reason.split('\n')[0], undeclaredDoor(rule, target, shown), ...details].join('\n');
   const session = sessionRoot.replace(/\\/g, '/');
   return `[targets ${shown}, which declares no door; repo files named below are ${session}'s]\n${reason}`;
 }
@@ -515,6 +574,32 @@ function lifetimeRefusal(cmd, sessionRoot) {
   if (done.status === 0) return '';
   const said = String(done.stdout || '').trim();
   return done.status === 1 && said ? said : null;
+}
+
+/* ================================ A ROW WHOSE JUDGE IS A MODULE ================================
+ *
+ * `asks: '<module>'`: the decision needs repo state no regex reads (TRACKED-CITES-NO-EPHEMERAL: is a path the
+ * journal line cites ignored HERE?), so the pattern is only a cheap PREFILTER. After it matched -- never before, so
+ * the common call starts no interpreter -- the session checkout's Python runs `-m <module> --admit` with the hook
+ * payload on stdin. Exit 1 with text refuses with that text, verbatim; anything else admits: no interpreter, no kit,
+ * a crash or a timeout is nobody's refusal, as the hook this replaced was (the commit-time check stands behind it).
+ */
+function askedRefusal(module, sessionRoot) {
+  let python;
+  try {
+    python = venvPython(sessionRoot);
+  } catch {
+    return ''; // no resolver: nobody to ask
+  }
+  if (!python) return '';
+  const done = spawnSync(python, ['-m', module, '--admit'], {
+    input: JSON.stringify(input),
+    encoding: 'utf8',
+    timeout: 15000,
+    windowsHide: true,
+  });
+  const said = String(done.stdout || '').trim();
+  return done.status === 1 ? said : '';
 }
 
 /* ================================ A ROW THAT STILL ADMITS A FAMILY SIBLING CLONE ================================
@@ -727,6 +812,10 @@ for (const rule of rules) {
   if (hit && rule.admits === 'family-sibling-clone' && familySiblingClone(cmd, input.cwd)) continue;
   if (hit && rule.admits === 'file-operands' && fileOperands(rule, cmd, input.cwd)) continue;
   let liveReason = '';
+  if (hit && rule.asks) {
+    liveReason = askedRefusal(rule.asks, sessionRoot);
+    hit = liveReason !== '';
+  }
   // A 'background' row binds only on a Bash call the agent runs in the background (BACKGROUND-SHELL-IS-BOUNDED),
   // and there the session's interpreter judges it (a longer life needs the USER's grant); the pattern only without one.
   if (rule.when === 'background') {
