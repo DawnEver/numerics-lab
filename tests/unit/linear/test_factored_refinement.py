@@ -161,7 +161,9 @@ def test_backward_error_criterion_honours_its_step_budget():
 
     with pytest.raises(LinearSolveError):
         refine_factored_solution(_DIAGONALLY_DOMINANT, np.array([1.0, 2.0, 3.0]), np.zeros(3), counted, max_steps=1)
-    assert len(calls) == 2  # one refinement step, then the guard's one measuring correction
+    # one refinement step, the guard's measuring correction and its verdict step, then the refusal's
+    # diagnostic trajectory -- all through the SAME owned solve, never a SuperLU refactor.
+    assert len(calls) == 2 + 1 + module._DIRECT_REFINEMENT_MAX_STEPS
 
 
 @pytest.mark.parametrize(
@@ -171,3 +173,33 @@ def test_backward_error_criterion_honours_its_step_budget():
 def test_an_undeclared_refinement_option_is_refused(options):
     with pytest.raises(ValueError, match=next(iter(options))):
         refine_factored_solution(sp.eye(1), np.ones(1), np.ones(1), lambda f: f, **options)
+
+
+def _forbid_superlu(monkeypatch):
+    def refuse(*_args, **_kwargs):
+        msg = 'SuperLU must not be called: the diagnostics own the caller factor'
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(module, 'splu', refuse)
+
+
+def test_a_refusal_words_its_diagnostics_with_the_owned_factor_never_superlu(monkeypatch):
+    matrix = sp.diags([1.0, 2.0, 4.0], format='csr')
+    calls = []
+
+    def garbage(rhs):
+        calls.append(rhs.copy())
+        return np.full_like(rhs, 7.0)
+
+    _forbid_superlu(monkeypatch)
+    with pytest.raises(LinearSolveError, match='diagnostic refinement trajectory') as raised:
+        refine_factored_solution(matrix, np.ones(3), np.zeros(3), garbage)
+    assert 'SuperLU' not in str(raised.value)
+    assert len(calls) > 1  # the trajectory was measured through the owned solve
+
+
+def test_planted_control_the_unowned_guard_does_reach_superlu(monkeypatch):
+    # Without this, the test above could pass because the patch never bit.
+    _forbid_superlu(monkeypatch)
+    with pytest.raises(AssertionError, match='SuperLU must not be called'):
+        module.reject_unsolved_direct_system(sp.diags([1.0, 2.0], format='csr'), np.ones(2), np.full(2, 7.0), 'plant')
