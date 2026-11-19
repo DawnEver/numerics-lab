@@ -35,6 +35,7 @@ pub mod condense;
 pub mod constrained;
 pub mod direct;
 pub mod krylov;
+pub mod nnls;
 pub mod precond;
 
 #[cfg(test)]
