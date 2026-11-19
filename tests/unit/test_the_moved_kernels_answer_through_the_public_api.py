@@ -58,3 +58,25 @@ def test_the_condensed_step_solves_the_block() -> None:
     assert np.asarray(kernels.block_matvec(j.ravel().copy(), np.array([k + nb], dtype=np.int64), u)) == pytest.approx(
         j @ u, abs=1e-12
     )
+
+
+def test_an_armed_guard_scan_arrives_at_its_threshold() -> None:
+    grid = np.linspace(0.0, 2.0, 17)
+    time, crossings, sides, histories = kernels.guard_scan(
+        np.array([[0.0, 1.0], [0.0, 0.0]]), np.array([1.0, -1.0]), np.array([[1.0, 0.0]]), 0.0, grid,
+        [(1.0, 1, False, 0)], [1e-6], [None], 1e-9, 1,
+    )  # fmt: skip
+    assert (crossings, sides) == ([0], [-1])
+    assert time == pytest.approx(1.0 + 1e-6, abs=1e-9)  # s
+    assert histories[0][1:3] == (0, True)
+
+
+def test_a_falling_row_first_crosses_at_its_zero_and_an_early_end_finds_none() -> None:
+    system = np.array([[0.0, -1.0], [0.0, 0.0]])
+    rows = np.array([[1.0, 0.0]])
+    _grid, found = kernels.first_crossing(system, ([0.0, 0.0], [0.0, 0.0]), rows, [0.0], [1e-9], [1.0, 1.0], 2.0)
+    assert found is not None
+    assert found[1] == [0]
+    assert found[0] == pytest.approx(1.0, abs=1e-12)  # s
+    assert kernels.first_crossing(system, ([0.0, 0.0], [0.0, 0.0]), rows, [0.0], [1e-9], [1.0, 1.0], 0.9)[1] is None
+    assert kernels.span_key(1e-3 * (1.0 + 1e-14)) == 1e-3
