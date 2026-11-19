@@ -10,8 +10,10 @@
 
 #![forbid(unsafe_code)]
 
+pub mod dense;
 pub mod integrators;
 pub mod linear;
+pub mod lti;
 pub mod marching;
 pub mod nonlinear;
 pub mod sparse;

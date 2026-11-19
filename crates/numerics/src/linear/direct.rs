@@ -72,6 +72,7 @@ use faer::sparse::{SparseColMat, SparseColMatRef, SymbolicSparseColMat, Triplet}
 use faer::{Conj, MatMut, Par, Side};
 
 mod border;
+pub mod fill;
 use border::{dense_indices, Border};
 
 /// Why the direct factorisation refused.
