@@ -284,5 +284,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_requires_symmetric, m)?)?;
     m.add_class::<PyDirectFactorization>()?;
     kernels::register(m)?;
+    kernels::register_lti(m)?;
     Ok(())
 }

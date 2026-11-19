@@ -195,3 +195,111 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("COND_MAX_N", dense::COND_MAX_N)?;
     Ok(())
 }
+
+use numerics::lti::first_crossing as cross;
+use numerics::lti::guard_scan::{self as scan_mod, AffineGuards, AffineScanError, History};
+
+fn scan_error(e: AffineScanError) -> PyErr {
+    PyValueError::new_err(e.to_string())
+}
+
+/// A guard's `(amplitude, sign, after_hit, inherited)`.
+type HistoryRow = (f64, i8, bool, i8);
+
+/// `guard_scan(system, state, guards, start, grid, histories, thresholds, evidence, tie, stride)
+/// -> (time, crossings, sides, histories)`: the first tied arrivals of `G expm(M (t - start)) y0` on `grid`.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(name = "guard_scan", signature = (system, state, guards, start, grid, histories, thresholds, evidence, tie, stride))]
+pub fn py_guard_scan<'py>(
+    system: PyReadonlyArray2<'py, f64>,
+    state: PyReadonlyArray1<'py, f64>,
+    guards: PyReadonlyArray2<'py, f64>,
+    start: f64,
+    grid: PyReadonlyArray1<'py, f64>,
+    histories: Vec<HistoryRow>,
+    thresholds: Vec<f64>,
+    evidence: Vec<Option<f64>>,
+    tie: f64,
+    stride: usize,
+) -> PyResult<(f64, Vec<usize>, Vec<i8>, Vec<HistoryRow>)> {
+    let system: Vec<f64> = system.as_array().iter().copied().collect();
+    let guards: Vec<f64> = guards.as_array().iter().copied().collect();
+    let mut read = AffineGuards::new(system, state.as_array().to_vec(), guards, evidence, start)
+        .map_err(scan_error)?;
+    let histories: Vec<History> = histories
+        .into_iter()
+        .map(|(a, s, h, i)| History::checked(a, s, h, i))
+        .collect::<Result<_, _>>()
+        .map_err(scan_error)?;
+    let grid = grid.as_array().to_vec();
+    let found = scan_mod::scan_crossings(
+        &mut read,
+        &scan_mod::Scan {
+            grid: &grid,
+            histories: &histories,
+            thresholds: &thresholds,
+            tie,
+            stride,
+        },
+    )
+    .map_err(scan_error)?;
+    let rows = found
+        .histories
+        .iter()
+        .map(|h| (h.amplitude, h.sign, h.after_hit, h.inherited))
+        .collect();
+    Ok((found.time, found.crossings, found.sides, rows))
+}
+
+/// `first_crossing(system, spectrum, rows, offsets, band, za, span) -> (grid, found)`: the earliest downward zero of
+/// `rows @ z + offsets` (past `-band`) on `z(s) = expm(system s) za`, `s` in `[0, span]`; `spectrum` is
+/// `(|lambda|, Re lambda)` of `system`; `found` is `(s, rows)` or `None`.
+#[pyfunction]
+#[allow(clippy::type_complexity)]
+#[pyo3(name = "first_crossing")]
+pub fn py_first_crossing<'py>(
+    system: PyReadonlyArray2<'py, f64>,
+    spectrum: (Vec<f64>, Vec<f64>),
+    rows: PyReadonlyArray2<'py, f64>,
+    offsets: Vec<f64>,
+    band: Vec<f64>,
+    za: Vec<f64>,
+    span: f64,
+) -> PyResult<(Vec<f64>, Option<(f64, Vec<usize>)>)> {
+    let as_dense = |a: &PyReadonlyArray2<'py, f64>| {
+        let v = a.as_array();
+        cross::Dense::new(v.nrows(), v.ncols(), v.iter().copied().collect())
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    };
+    let (system, rows) = (as_dense(&system)?, as_dense(&rows)?);
+    let grid = cross::lattice(&spectrum.0, &spectrum.1, span);
+    let found = cross::first_crossing(&cross::Segment {
+        system: &system,
+        grid: &grid,
+        za: &za,
+        span,
+        rows: &rows,
+        offsets: &offsets,
+        band: &band,
+        propagators: &cross::Propagators::default(),
+    })
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok((grid, found))
+}
+
+/// `span_key(span)`: `span` to `SPAN_KEY_DIGITS` significant digits, the propagator cache's key.
+#[pyfunction]
+#[pyo3(name = "span_key")]
+pub fn py_span_key(span: f64) -> f64 {
+    cross::span_key(span)
+}
+
+/// Register the exact-trajectory event kernels on `_native`.
+pub fn register_lti(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(py_guard_scan, m)?)?;
+    m.add_function(wrap_pyfunction!(py_first_crossing, m)?)?;
+    m.add_function(wrap_pyfunction!(py_span_key, m)?)?;
+    m.add("SPAN_KEY_DIGITS", cross::SPAN_KEY_DIGITS)?;
+    Ok(())
+}

@@ -41,11 +41,39 @@ metadata:
    (`sdm_mod.rs`), the expm binding (`affine_scan_mod.rs`). `core_num` drops its `faer` dependency.
    The Python test that WRITES the expm fixture (`tests/unit/laplace/control/test_the_native_expm_is_scipys_bit_for_bit.py`)
    re-points at `numerics_lab.kernels.expm`; numerics' Rust fixture is then the copy it re-checks.
-5. OPEN DECISION (user's): motronics' RUST also calls these kernels -- `laplace_net` (`control/affine_scan.rs`,
-   `first_crossing.rs`, `thermal_step.rs`: `expm`; `signal_pass.rs`: `dense::{solve, cond}`) and
-   `pybind/euclid/src/signal_read_mod.rs`. A Python door cannot serve a Rust caller. Options:
-   (a) a cargo git dependency on numerics-lab's `numerics` crate pinned to the relocked sha, admitted ONLY in one
-   motronics door crate (e.g. a `gauss` crate re-exporting it) and in `crates/contracts/tests/crate_dag.rs`;
-   (b) move the march kernels that need `expm` into numerics too. (a) is the smaller step and keeps the one-door
-   rule at the crate level; (b) is where "all numerics to Rust in the engine" ends. Until decided, step 4 deletes
-   only `fill` and the condensation; `expm`/`dense` stay in `core_num`, a declared second copy.
+5. DECIDED (user, 2026-11-19): (a) first, then (b).
+
+## (a) the door crate -- DONE locally in motronics, OWED RELOCK
+
+- motronics `lane/numerics-door-crate/multiphysics-alignment` 5ccd02710f (off a74923ef38, worktree
+  `.claude/worktrees/numerics-door`, unpushed): `rust/crates/gauss_door` is the ONLY crate naming `numerics`
+  (`crate_dag.rs::only_the_door_crate_names_the_numerics_engine` + planted second holder). hamilton_fem, hamilton_pen,
+  hamilton_sdm, laplace_net and pybind reach the engine through it; core_num's expm/dense/fill and hamilton_sdm's
+  condensation are DELETED.
+- OWED RELOCK: the cargo rev is PR #58's head 268c3b3f5e74, not its merge sha; uv.lock still resolves the older
+  numerics-lab. Relock BOTH to #58's merge sha when it lands; until then the Python native build (motronics_native
+  over the old numerics-lab wheel) and the sibling-address test are not expected to agree.
+
+## (b) the march kernels -- numerics side DONE on `lane/march-kernels-from-motronics` (local, off 268c3b3)
+
+| motronics file | decision | why |
+|---|---|---|
+| `laplace_net/control/affine_scan.rs` | GENERIC, moved whole -> `numerics::lti::guard_scan` | threshold arrivals of `G expm(M t) y0` + brentq: no domain name |
+| `laplace_net/control/first_crossing.rs` | SPLIT: lattice, interpolants, `first_crossing`, `Dense`, `exponential`, `span_key`, `Propagators` -> `numerics::lti::first_crossing`; `augmented`, `DeviceGuard`, `ReadingRows`, `guard_rows`, `guard_band` STAY | the stayers build rows from a circuit's devices / topology / exosystem |
+| `laplace_net/control/thermal_step.rs` | STAYS, calls `gauss_door::dense::expm` | a junction/package thermal network; its only numerics is the expm call |
+| `laplace_net/control/signal_pass.rs` | STAYS, calls `gauss_door::dense::lapack::{solve, cond}` | the control signal pass (tasks, plant, signal laws); numerics only via those calls |
+| `pybind/euclid/src/signal_read_mod.rs` (cond) | STAYS (FFI glue), through the door | a binding, not a kernel |
+
+After the next relock (to the sha that carries `lti`), in motronics:
+- `gauss_door/src/lib.rs` re-exports `lti` too.
+- DELETE `laplace_net/src/control/affine_scan.rs` and the generic half of `first_crossing.rs` (no second copy, no
+  Python fallback). Callers move to `gauss_door::lti::{guard_scan, first_crossing}`: `candidate_step.rs`,
+  `control_event.rs`, `crossing_start.rs`, `crossing_trial.rs` (incl. its test), `graph_read.rs`, `loss_ledger.rs`,
+  `storage_transition.rs`, the device half of `first_crossing.rs`, and pybind `affine_scan_mod.rs`,
+  `signal_read_mod.rs`.
+- Tests that move with the kernels (already carried into numerics): affine_scan's 6 inline tests, first_crossing's
+  inline tests less `the_band_sums_each_guards_weights` (stays with `guard_band`). Python goldens stay in motronics
+  and keep checking the native path through the door: `test_an_affine_segment_scan_is_its_golden.py`,
+  `test_a_native_device_crossing_is_its_golden.py`, `test_a_native_candidate_segment_is_its_golden.py`,
+  `test_a_native_control_event_is_its_golden.py`, `test_the_native_expm_is_scipys_bit_for_bit.py`,
+  `test_a_wide_algebraic_loop_solves_natively_as_python.py`.
