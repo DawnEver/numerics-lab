@@ -8,7 +8,7 @@
 //! arms each guard on an observed departure past its threshold, and returns the FIRST tied arrivals -- each located
 //! by Brent's method to the march's own instant `tie` and then proven by an actually nonpositive arrival residual.
 //! The algorithm is the Python's line for line (the same reads at the same instants, the same history transitions,
-//! the same tie decisions); [`brentq`] is scipy's `brentq.c` transcribed.
+//! the same tie decisions); [`brentq`] is scipy's `brentq.c` transcribed (`crate::nonlinear::roots`).
 //!
 //! # Equivalence
 //!
@@ -25,11 +25,12 @@
 //! `start`, `grid`, `tie` [s]; `system` [1/s]; each guard's values, threshold and certificate in its own coordinate.
 
 use crate::dense::expm::{expm, ExpmError};
+use crate::nonlinear::roots::{brentq, BrentError};
 use std::collections::HashMap;
 
 /// Why a scan could not run. Each is a refusal the Python raises too, by the same condition.
 #[derive(Debug, Clone, PartialEq)]
-pub enum AffineScanError {
+pub enum GuardScanError {
     /// Inconsistent shapes, or a grid that is not at least two strictly increasing finite instants.
     Malformed(String),
     /// A read returned an infinite value (a NaN is a false relation; an infinity is a broken read).
@@ -44,7 +45,7 @@ pub enum AffineScanError {
     Read(String),
 }
 
-impl std::fmt::Display for AffineScanError {
+impl std::fmt::Display for GuardScanError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Malformed(why) => write!(f, "affine scan: {why}"),
@@ -64,7 +65,16 @@ impl std::fmt::Display for AffineScanError {
     }
 }
 
-impl std::error::Error for AffineScanError {}
+impl std::error::Error for GuardScanError {}
+
+impl From<BrentError<GuardScanError>> for GuardScanError {
+    fn from(e: BrentError<GuardScanError>) -> Self {
+        match e {
+            BrentError::Bracket { left, right } => Self::Bracket { left, right },
+            BrentError::Function(inner) => inner,
+        }
+    }
+}
 
 /// A guard's checkpointable magnitude and arming (`CrossingHistory`).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -82,24 +92,24 @@ impl History {
         sign: i8,
         after_hit: bool,
         inherited: i8,
-    ) -> Result<Self, AffineScanError> {
+    ) -> Result<Self, GuardScanError> {
         if !amplitude.is_finite() || amplitude < 0.0 {
-            return Err(AffineScanError::Transition(
+            return Err(GuardScanError::Transition(
                 "a crossing amplitude is a finite nonnegative float",
             ));
         }
         if !(-1..=1).contains(&sign) {
-            return Err(AffineScanError::Transition(
+            return Err(GuardScanError::Transition(
                 "crossing sign must be the integer -1, 0 or 1",
             ));
         }
         if !(-1..=1).contains(&inherited) || (inherited != 0 && sign != 0) {
-            return Err(AffineScanError::Transition(
+            return Err(GuardScanError::Transition(
                 "an inherited side is the integer -1, 0 or 1, held only while the guard is unarmed",
             ));
         }
         if after_hit && sign != 0 {
-            return Err(AffineScanError::Transition(
+            return Err(GuardScanError::Transition(
                 "a consumed crossing must remain unarmed until a real later departure",
             ));
         }
@@ -131,24 +141,24 @@ impl Currency {
         }
     }
 
-    fn arrival(self, value: f64) -> Result<f64, AffineScanError> {
+    fn arrival(self, value: f64) -> Result<f64, GuardScanError> {
         if self.history.sign == 0 {
-            return Err(AffineScanError::Transition(
+            return Err(GuardScanError::Transition(
                 "an unarmed crossing has no physical arrival event",
             ));
         }
         Ok(f64::from(self.history.sign) * value + self.threshold)
     }
 
-    fn arm(self, value: f64, side: i8) -> Result<History, AffineScanError> {
+    fn arm(self, value: f64, side: i8) -> Result<History, GuardScanError> {
         if self.history.sign != 0 {
-            return Err(AffineScanError::Transition(
+            return Err(GuardScanError::Transition(
                 "departure requires an unarmed crossing and an actual side",
             ));
         }
         let distance = f64::from(side) * value - self.threshold;
         if f64::from(side) * value <= 0.0 || distance < 0.0 {
-            return Err(AffineScanError::Transition(
+            return Err(GuardScanError::Transition(
                 "arming requires an actual departure to the selected side",
             ));
         }
@@ -160,9 +170,9 @@ impl Currency {
         })
     }
 
-    fn consume(self, value: f64) -> Result<History, AffineScanError> {
+    fn consume(self, value: f64) -> Result<History, GuardScanError> {
         if self.arrival(value)? > 0.0 {
-            return Err(AffineScanError::Transition(
+            return Err(GuardScanError::Transition(
                 "a nearby value is not an arrival at the crossing threshold",
             ));
         }
@@ -198,8 +208,8 @@ pub trait GuardRead {
     /// Every guard's value at `time` and its certificate (`None`: none), added to its threshold at that read.
     ///
     /// # Errors
-    /// [`AffineScanError::Read`]: a read the instant refuses.
-    fn sample(&mut self, time: f64) -> Result<Sample, AffineScanError>;
+    /// [`GuardScanError::Read`]: a read the instant refuses.
+    fn sample(&mut self, time: f64) -> Result<Sample, GuardScanError>;
 }
 
 /// `time -> G expm(M (time - start)) y0`, each instant read once (`_ReadOnce`); every read carries the start's
@@ -224,14 +234,14 @@ impl AffineGuards {
         guards: Vec<f64>,
         evidence: Vec<Option<f64>>,
         start: f64,
-    ) -> Result<Self, AffineScanError> {
+    ) -> Result<Self, GuardScanError> {
         let n = state.len();
         if n == 0
             || system.len() != n * n
             || guards.len() % n != 0
             || evidence.len() * n != guards.len()
         {
-            return Err(AffineScanError::Malformed(format!(
+            return Err(GuardScanError::Malformed(format!(
                 "system {} entries, state {n}, guards {} entries",
                 system.len(),
                 guards.len()
@@ -251,14 +261,14 @@ impl AffineGuards {
     }
 
     /// The guards' values at `time`.
-    pub fn read(&mut self, time: f64) -> Result<Vec<f64>, AffineScanError> {
+    pub fn read(&mut self, time: f64) -> Result<Vec<f64>, GuardScanError> {
         if let Some(values) = self.reads.get(&time.to_bits()) {
             return Ok(values.clone());
         }
         let n = self.n;
         let dt = time - self.start;
         let scaled: Vec<f64> = self.system.iter().map(|m| m * dt).collect();
-        let e = expm(&scaled, n).map_err(AffineScanError::Expm)?;
+        let e = expm(&scaled, n).map_err(GuardScanError::Expm)?;
         let y: Vec<f64> = (0..n)
             .map(|i| (0..n).map(|k| e[i * n + k] * self.state[k]).sum())
             .collect();
@@ -266,7 +276,7 @@ impl AffineGuards {
             .map(|g| (0..n).map(|k| self.guards[g * n + k] * y[k]).sum())
             .collect();
         if values.iter().any(|v| v.is_infinite()) {
-            return Err(AffineScanError::Infinite { time });
+            return Err(GuardScanError::Infinite { time });
         }
         self.reads.insert(time.to_bits(), values.clone());
         Ok(values)
@@ -278,7 +288,7 @@ impl GuardRead for AffineGuards {
         self.count
     }
 
-    fn sample(&mut self, time: f64) -> Result<Sample, AffineScanError> {
+    fn sample(&mut self, time: f64) -> Result<Sample, GuardScanError> {
         Ok((self.read(time)?, self.evidence.clone()))
     }
 }
@@ -301,94 +311,15 @@ pub struct Crossings {
     pub sides: Vec<i8>,
 }
 
-/// `scipy.optimize.brentq` (scipy's C `brentq`) with its `maxiter`: `(root, converged)`.
-pub fn brentq<F>(
-    mut f: F,
-    xa: f64,
-    xb: f64,
-    xtol: f64,
-    rtol: f64,
-    maxiter: usize,
-) -> Result<(f64, bool), AffineScanError>
-where
-    F: FnMut(f64) -> Result<f64, AffineScanError>,
-{
-    let (mut xpre, mut xcur) = (xa, xb);
-    let (mut xblk, mut fblk, mut spre, mut scur) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
-    let mut fpre = f(xpre)?;
-    let mut fcur = f(xcur)?;
-    if fpre == 0.0 {
-        return Ok((xpre, true));
-    }
-    if fcur == 0.0 {
-        return Ok((xcur, true));
-    }
-    if fpre.is_sign_negative() == fcur.is_sign_negative() {
-        return Err(AffineScanError::Bracket {
-            left: xa,
-            right: xb,
-        });
-    }
-    for _ in 0..maxiter {
-        if fpre != 0.0 && fcur != 0.0 && fpre.is_sign_negative() != fcur.is_sign_negative() {
-            xblk = xpre;
-            fblk = fpre;
-            spre = xcur - xpre;
-            scur = spre;
-        }
-        if fblk.abs() < fcur.abs() {
-            xpre = xcur;
-            xcur = xblk;
-            xblk = xpre;
-            fpre = fcur;
-            fcur = fblk;
-            fblk = fpre;
-        }
-        let delta = (xtol + rtol * xcur.abs()) / 2.0;
-        let sbis = (xblk - xcur) / 2.0;
-        if fcur == 0.0 || sbis.abs() < delta {
-            return Ok((xcur, true));
-        }
-        if spre.abs() > delta && fcur.abs() < fpre.abs() {
-            let stry = if xpre == xblk {
-                -fcur * (xcur - xpre) / (fcur - fpre)
-            } else {
-                let dpre = (fpre - fcur) / (xpre - xcur);
-                let dblk = (fblk - fcur) / (xblk - xcur);
-                -fcur * (fblk * dblk - fpre * dpre) / (dblk * dpre * (fblk - fpre))
-            };
-            if 2.0 * stry.abs() < spre.abs().min(3.0 * sbis.abs() - delta) {
-                spre = scur;
-                scur = stry;
-            } else {
-                spre = sbis;
-                scur = sbis;
-            }
-        } else {
-            spre = sbis;
-            scur = sbis;
-        }
-        xpre = xcur;
-        fpre = fcur;
-        if scur.abs() > delta {
-            xcur += scur;
-        } else {
-            xcur += if sbis > 0.0 { delta } else { -delta };
-        }
-        fcur = f(xcur)?;
-    }
-    Ok((xcur, false))
-}
-
 /// `_arrival_root`: an actually nonpositive bound within `tie` [s] of the arrival, never Brent's bare iterate.
 fn arrival_root<F>(
     mut function: F,
     mut left: f64,
     mut right: f64,
     tie: f64,
-) -> Result<f64, AffineScanError>
+) -> Result<f64, GuardScanError>
 where
-    F: FnMut(f64) -> Result<f64, AffineScanError>,
+    F: FnMut(f64) -> Result<f64, GuardScanError>,
 {
     let half = 0.5 * tie;
     let xtol = if half > 0.0 { half } else { f64::from_bits(1) };
@@ -426,15 +357,15 @@ struct Scanner<'a> {
 
 impl Scanner<'_> {
     /// `_sample`: one read of every guard, `count` of them, none infinite (a NaN is a false relation, D45).
-    fn sample(&mut self, time: f64, count: usize) -> Result<Sample, AffineScanError> {
+    fn sample(&mut self, time: f64, count: usize) -> Result<Sample, GuardScanError> {
         let (values, certificates) = self.read.sample(time)?;
         if values.len() != count || certificates.len() != count {
-            return Err(AffineScanError::Malformed(
+            return Err(GuardScanError::Malformed(
                 "a read must retain one scalar per actual guard".into(),
             ));
         }
         if values.iter().any(|v| v.is_infinite()) {
-            return Err(AffineScanError::Infinite { time });
+            return Err(GuardScanError::Infinite { time });
         }
         Ok((values, certificates))
     }
@@ -445,7 +376,7 @@ impl Scanner<'_> {
         time: f64,
         currencies: &[Currency],
         guard: usize,
-    ) -> Result<f64, AffineScanError> {
+    ) -> Result<f64, GuardScanError> {
         let (values, certificates) = self.sample(time, currencies.len())?;
         let value = values[guard];
         if value.is_nan() {
@@ -459,7 +390,7 @@ impl Scanner<'_> {
         time: f64,
         currencies: &[Currency],
         guards: &[usize],
-    ) -> Result<Vec<f64>, AffineScanError> {
+    ) -> Result<Vec<f64>, GuardScanError> {
         guards
             .iter()
             .map(|&j| self.arrival(time, currencies, j))
@@ -472,7 +403,7 @@ impl Scanner<'_> {
         guard: usize,
         start: f64,
         end: f64,
-    ) -> Result<f64, AffineScanError> {
+    ) -> Result<f64, GuardScanError> {
         let tie = self.tie;
         arrival_root(|t| self.arrival(t, currencies, guard), start, end, tie)
     }
@@ -483,7 +414,7 @@ impl Scanner<'_> {
         guard: usize,
         end: f64,
         left: f64,
-    ) -> Result<f64, AffineScanError> {
+    ) -> Result<f64, GuardScanError> {
         if self.tie <= 0.0 {
             return Ok(left);
         }
@@ -504,7 +435,7 @@ impl Scanner<'_> {
         arrived: &[usize],
         left: f64,
         right: f64,
-    ) -> Result<Vec<(f64, usize)>, AffineScanError> {
+    ) -> Result<Vec<(f64, usize)>, GuardScanError> {
         if arrived.is_empty() {
             return Ok(Vec::new());
         }
@@ -575,7 +506,7 @@ impl Scanner<'_> {
     fn margins(
         currencies: &[Currency],
         (values, certificates): &Sample,
-    ) -> Result<Vec<f64>, AffineScanError> {
+    ) -> Result<Vec<f64>, GuardScanError> {
         currencies
             .iter()
             .zip(values)
@@ -615,24 +546,24 @@ fn clear(behind: (f64, &[f64]), here: (f64, &[f64]), reach: f64, ahead: &[f64]) 
 pub fn scan_crossings(
     read: &mut dyn GuardRead,
     scan: &Scan<'_>,
-) -> Result<Crossings, AffineScanError> {
+) -> Result<Crossings, GuardScanError> {
     let grid = scan.grid;
     if grid.len() < 2
         || grid.iter().any(|t| !t.is_finite())
         || grid.windows(2).any(|w| w[1] - w[0] <= 0.0)
     {
-        return Err(AffineScanError::Malformed(
+        return Err(GuardScanError::Malformed(
             "crossing scan needs at least two strictly increasing actual instants".into(),
         ));
     }
     let count = read.count();
     if scan.histories.len() != count || scan.thresholds.len() != count {
-        return Err(AffineScanError::Malformed(
+        return Err(GuardScanError::Malformed(
             "crossing histories must match actual flattened guard identities".into(),
         ));
     }
     if scan.stride < 1 {
-        return Err(AffineScanError::Malformed(format!(
+        return Err(GuardScanError::Malformed(format!(
             "a crossing stride must be a positive integer, got {}",
             scan.stride
         )));
@@ -643,7 +574,7 @@ pub fn scan_crossings(
         .zip(scan.thresholds)
         .map(|(&history, &threshold)| {
             if !threshold.is_finite() || threshold < 0.0 {
-                return Err(AffineScanError::Transition(
+                return Err(GuardScanError::Transition(
                     "a crossing threshold is a finite nonnegative float",
                 ));
             }
@@ -844,30 +775,6 @@ mod tests {
     }
 
     #[test]
-    fn brentq_matches_scipy_on_a_cubic() {
-        // scipy.optimize.brentq(lambda x: x**3 - 2, 0, 2, xtol=1e-12): 1.2599210498948732
-        let (root, converged) = brentq(
-            |x| Ok(x * x * x - 2.0),
-            0.0,
-            2.0,
-            1e-12,
-            4.0 * f64::EPSILON,
-            100,
-        )
-        .unwrap();
-        assert!(converged);
-        assert!((root - 2f64.cbrt()).abs() <= 1e-12, "{root}");
-    }
-
-    #[test]
-    fn a_bracket_without_a_sign_change_is_refused() {
-        assert!(matches!(
-            brentq(|x| Ok(x * x + 1.0), -1.0, 1.0, 1e-12, 1e-15, 100),
-            Err(AffineScanError::Bracket { .. })
-        ));
-    }
-
-    #[test]
     fn a_grid_that_does_not_increase_is_refused() {
         let scan = Scan {
             grid: &[0.0, 0.0],
@@ -878,7 +785,7 @@ mod tests {
         };
         assert!(matches!(
             scan_crossings(&mut ramp(), &scan),
-            Err(AffineScanError::Malformed(_))
+            Err(GuardScanError::Malformed(_))
         ));
     }
 }

@@ -8,6 +8,7 @@
 
 pub mod expm;
 pub mod lapack;
+pub mod matrix;
 
 pub use expm::{expm, ExpmError, MAX_N as EXPM_BIT_IDENTICAL_MAX_N};
 pub use lapack::{cond, solve, CondError, COND_MAX_N};

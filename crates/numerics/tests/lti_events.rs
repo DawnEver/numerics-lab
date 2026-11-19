@@ -2,7 +2,8 @@
 //! (a74923ef38) on 2026-11-19, reached through the public API: an armed guard scan and a first crossing
 //! each find the zero of `1 - t` on the exponential trajectory, and a segment that ends early finds none.
 
-use numerics::lti::first_crossing::{first_crossing, lattice, Dense, Propagators, Segment};
+use numerics::dense::matrix::Dense;
+use numerics::lti::first_crossing::{first_crossing, lattice, Propagators, Segment};
 use numerics::lti::guard_scan::{scan_crossings, AffineGuards, History, Scan};
 
 #[test]

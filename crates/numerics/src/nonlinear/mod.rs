@@ -30,6 +30,7 @@ mod local;
 mod newton;
 mod picard;
 mod quasi;
+pub mod roots;
 
 pub use budget::{with_time_budget, TimeBudgetedSystem, BUDGETED_CALLS};
 pub use convergence::{
