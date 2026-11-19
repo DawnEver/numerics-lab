@@ -80,6 +80,7 @@ from numerics_lab.linear.refinement import _REPAIRABLE_CONDITION_FACTOR as _REPA
 #: The PUBLIC half: the same names, signatures and semantics, so every ``from
 #: numerics_lab.linear import ...`` in the tree is unaffected.
 from numerics_lab.linear.refinement import (
+    OwnedFactor,
     condition_estimate,
     describe_refinement_trajectory,
     direct_refinement_correction,
@@ -99,6 +100,7 @@ __all__ = [
     'IC0Operator',
     'LinearSolveError',
     'LinearSolver',
+    'OwnedFactor',
     'apply_dirichlet_csr',
     'apply_dirichlet_triplets',
     'condition_estimate',
