@@ -197,9 +197,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 use numerics::lti::first_crossing as cross;
-use numerics::lti::guard_scan::{self as scan_mod, AffineGuards, AffineScanError, History};
+use numerics::lti::guard_scan::{self as scan_mod, AffineGuards, GuardScanError, History};
 
-fn scan_error(e: AffineScanError) -> PyErr {
+fn scan_error(e: GuardScanError) -> PyErr {
     PyValueError::new_err(e.to_string())
 }
 
@@ -269,7 +269,7 @@ pub fn py_first_crossing<'py>(
 ) -> PyResult<(Vec<f64>, Option<(f64, Vec<usize>)>)> {
     let as_dense = |a: &PyReadonlyArray2<'py, f64>| {
         let v = a.as_array();
-        cross::Dense::new(v.nrows(), v.ncols(), v.iter().copied().collect())
+        numerics::dense::matrix::Dense::new(v.nrows(), v.ncols(), v.iter().copied().collect())
             .map_err(|e| PyValueError::new_err(e.to_string()))
     };
     let (system, rows) = (as_dense(&system)?, as_dense(&rows)?);

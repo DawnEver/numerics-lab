@@ -27,10 +27,12 @@
 // The kernels index as the Python they transcribe does, so one reads against the other line by line.
 #![allow(clippy::needless_range_loop)]
 
-use super::guard_scan::{brentq, AffineScanError};
 use crate::dense::expm::expm;
+use crate::dense::matrix::{dot, vecmat, Dense, ShapeError};
+use crate::nonlinear::roots::{brentq, BrentError};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::convert::Infallible;
 
 /// One sample's `(guard values, guard slopes)`, one entry per guard row.
 type Sample = (Vec<f64>, Vec<f64>);
@@ -56,7 +58,7 @@ pub enum CrossingError {
     /// Inconsistent shapes.
     Malformed(String),
     /// A Brent bracket without a sign change.
-    Bracket(AffineScanError),
+    Bracket { left: f64, right: f64 },
     /// Brent's method did not converge within its `maxiter`.
     Unconverged { left: f64, right: f64 },
     /// The exponential refused its argument.
@@ -67,7 +69,10 @@ impl std::fmt::Display for CrossingError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Malformed(why) => write!(f, "first crossing: {why}"),
-            Self::Bracket(e) => write!(f, "{e}"),
+            Self::Bracket { left, right } => write!(
+                f,
+                "f(a) and f(b) must have different signs (a = {left:e}, b = {right:e})"
+            ),
             Self::Unconverged { left, right } => {
                 write!(f, "Failed to converge in [{left:e}, {right:e}]")
             }
@@ -78,82 +83,10 @@ impl std::fmt::Display for CrossingError {
 
 impl std::error::Error for CrossingError {}
 
-/// A dense row-major matrix of any shape (an empty one keeps its column count).
-#[derive(Debug, Clone, PartialEq)]
-pub struct Dense {
-    pub rows: usize,
-    pub cols: usize,
-    pub data: Vec<f64>,
-}
-
-impl Dense {
-    pub fn new(rows: usize, cols: usize, data: Vec<f64>) -> Result<Self, CrossingError> {
-        if data.len() != rows * cols {
-            return Err(CrossingError::Malformed(format!(
-                "{rows} x {cols} block with {} entries",
-                data.len()
-            )));
-        }
-        Ok(Self { rows, cols, data })
+impl From<ShapeError> for CrossingError {
+    fn from(e: ShapeError) -> Self {
+        Self::Malformed(e.0)
     }
-
-    #[must_use]
-    pub fn zeros(rows: usize, cols: usize) -> Self {
-        Self {
-            rows,
-            cols,
-            data: vec![0.0; rows * cols],
-        }
-    }
-
-    #[must_use]
-    pub fn row(&self, i: usize) -> &[f64] {
-        &self.data[i * self.cols..(i + 1) * self.cols]
-    }
-
-    /// `self @ rhs`, accumulating in `i, k, j` order.
-    /// # Errors
-    /// The shapes do not compose.
-    pub fn mul(&self, rhs: &Dense) -> Result<Dense, CrossingError> {
-        if self.cols != rhs.rows {
-            return Err(CrossingError::Malformed(format!(
-                "{} x {} @ {} x {}",
-                self.rows, self.cols, rhs.rows, rhs.cols
-            )));
-        }
-        let mut out = Dense::zeros(self.rows, rhs.cols);
-        for i in 0..self.rows {
-            for k in 0..self.cols {
-                let a = self.data[i * self.cols + k];
-                for j in 0..rhs.cols {
-                    out.data[i * rhs.cols + j] += a * rhs.data[k * rhs.cols + j];
-                }
-            }
-        }
-        Ok(out)
-    }
-
-    /// `self @ x`.
-    #[must_use]
-    pub fn apply(&self, x: &[f64]) -> Vec<f64> {
-        (0..self.rows).map(|i| dot(self.row(i), x)).collect()
-    }
-}
-
-fn dot(a: &[f64], b: &[f64]) -> f64 {
-    a.iter().zip(b).map(|(x, y)| x * y).sum()
-}
-
-/// `v @ m` of a row vector.
-#[must_use]
-pub fn vecmat(v: &[f64], m: &Dense) -> Vec<f64> {
-    let mut out = vec![0.0; m.cols];
-    for (k, &a) in v.iter().enumerate() {
-        for (j, o) in out.iter_mut().enumerate() {
-            *o += a * m.data[k * m.cols + j];
-        }
-    }
-    out
 }
 
 /// The sample lattice over `[0, span]` from the spectrum of the segment's system: `size` `|lambda|`, `rate` `Re lambda`.
@@ -261,8 +194,13 @@ fn located(
     xtol: f64,
     maxiter: usize,
 ) -> Result<f64, CrossingError> {
-    let (root, converged) = brentq(|x| Ok(f(x)), left, right, xtol, BRENT_RTOL, maxiter)
-        .map_err(CrossingError::Bracket)?;
+    let (root, converged) =
+        brentq::<_, Infallible>(|x| Ok(f(x)), left, right, xtol, BRENT_RTOL, maxiter).map_err(
+            |e| match e {
+                BrentError::Bracket { left, right } => CrossingError::Bracket { left, right },
+                BrentError::Function(never) => match never {},
+            },
+        )?;
     if converged {
         Ok(root)
     } else {
@@ -305,7 +243,7 @@ fn crossing(
 pub fn exponential(system: &Dense, span: f64) -> Result<Dense, CrossingError> {
     let scaled: Vec<f64> = system.data.iter().map(|m| m * span).collect();
     let e = expm(&scaled, system.rows).map_err(|e| CrossingError::Expm(e.to_string()))?;
-    Dense::new(system.rows, system.rows, e)
+    Ok(Dense::new(system.rows, system.rows, e)?)
 }
 
 /// Significant digits of a propagator's span key: a Python march that keys its own cache through [`span_key`]
@@ -534,7 +472,7 @@ mod tests {
     }
 
     #[test]
-    fn a_falling_current_crosses_at_its_zero() {
+    fn a_falling_row_crosses_at_its_zero() {
         let (time, causes) = ramp(2.0, 1e-9).unwrap();
         assert_eq!(causes, vec![0]);
         assert!((time - 1.0).abs() <= 1e-12, "{time}");
