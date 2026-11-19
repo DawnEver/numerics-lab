@@ -61,6 +61,11 @@ needs = ['cargo', 'cc']  # the native build compiles the Rust extension
 native = { inputs = ['crates', 'Cargo.toml', 'Cargo.lock'], build = 'uv pip install --no-deps --refresh-package numerics-lab --target "$LAB_CI_NATIVE" .' }
 collect = 'tests'
 
+# The extras every environment of this repo installs (dev_lab.dev.dep reads it): dev_lab and the test kit live
+# only in `dev`, so a relock without it drops them and the family renderer cannot run.
+[tool.dev_lab.dep]
+extras = ["dev"]
+
 [tool.dev_lab.parts]
 output = "output/logs"
 
