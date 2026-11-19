@@ -8,6 +8,9 @@ never ``_native``.
 * :func:`dense_solve` / :func:`dense_cond` -- ``np.linalg.solve`` / ``np.linalg.cond`` (``n <= COND_MAX_N``) bit for bit.
 * :func:`cholesky_factor_len` -- ``nnz(L)`` of the AMD Cholesky factor from the symbolic analysis alone.
 * :func:`condense` / :class:`CondensedCells` / :func:`block_matvec` -- block static condensation.
+* :func:`pchip_slopes` / :class:`PiecewisePoly` -- scipy ``PchipInterpolator`` slopes and ``PPoly`` (evaluation,
+  derivatives, exact antiderivative) to ``1e-12`` (``crates/numerics/src/interp/``).
+* :func:`nnls` -- ``scipy.optimize.nnls`` (Lawson-Hanson) to round-off (``crates/numerics/src/linear/nnls.rs``).
 * :func:`guard_scan` / :func:`first_crossing` / :func:`span_key` -- events on the exact trajectory ``expm(M s) z0``
   (``crates/numerics/src/lti/``).
 """
@@ -19,6 +22,7 @@ from numerics_lab._native import (
     EXPM_BIT_IDENTICAL_MAX_N,
     SPAN_KEY_DIGITS,
     CondensedCells,
+    PiecewisePoly,
     block_matvec,
     cholesky_factor_len,
     condense,
@@ -27,6 +31,8 @@ from numerics_lab._native import (
     expm,
     first_crossing,
     guard_scan,
+    nnls,
+    pchip_slopes,
     span_key,
 )
 
@@ -35,6 +41,7 @@ __all__ = [
     'EXPM_BIT_IDENTICAL_MAX_N',
     'SPAN_KEY_DIGITS',
     'CondensedCells',
+    'PiecewisePoly',
     'block_matvec',
     'cholesky_factor_len',
     'condense',
@@ -43,5 +50,7 @@ __all__ = [
     'expm',
     'first_crossing',
     'guard_scan',
+    'nnls',
+    'pchip_slopes',
     'span_key',
 ]

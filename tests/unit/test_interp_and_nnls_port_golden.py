@@ -11,6 +11,7 @@ Regenerate deliberately: ``python -c "from tests.unit.test_interp_and_nnls_port_
 
 from __future__ import annotations
 
+import itertools
 import json
 
 import numpy as np
@@ -47,7 +48,7 @@ def _queries(x: list[float]) -> list[float]:
     lo, hi = x[0], x[-1]
     span = hi - lo
     q = list(x)
-    for a, b in zip(x[:-1], x[1:], strict=True):
+    for a, b in itertools.pairwise(x):
         q += [a + 0.25 * (b - a), 0.5 * (a + b), a + 0.8 * (b - a)]
     q += [lo - 0.3 * span, hi + 0.3 * span]
     return sorted(q)
@@ -127,7 +128,7 @@ register(_NNLS, _build_nnls)
 def write() -> None:
     """Rewrite both goldens from the live SciPy (a deliberate act; commit the result)."""
     for path, build in ((_INTERP, _build_interp), (_NNLS, _build_nnls)):
-        path.write_text(json.dumps(build(), indent=1) + '\n', encoding='utf-8')
+        path.write_text(json.dumps(build(), indent=1) + '\n', encoding='utf-8', newline='\n')
 
 
 def _same(got: object, want: object, where: str) -> None:

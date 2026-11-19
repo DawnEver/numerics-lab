@@ -1,10 +1,13 @@
 //! The generic kernels moved from motronics-studio (2026-11-19): dense `expm` / `solve` / `cond`, the
-//! symbolic fill of a direct factor, and block static condensation. Thin glue over [`numerics`].
+//! symbolic fill of a direct factor, block static condensation, PCHIP / piecewise polynomials and NNLS.
+//! Thin glue over [`numerics`].
 
 use numerics::dense;
+use numerics::interp;
 use numerics::linear::condense::{block_matvec, CondensedCells};
+use numerics::linear::nnls::NnlsError;
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 
 type Arr<'py> = Bound<'py, PyArray1<f64>>;
@@ -182,6 +185,122 @@ pub fn py_block_matvec<'py>(
     Ok(out.into_pyarray(py))
 }
 
+/// Strictly ascending finite breakpoints `x` (at least two) with one finite `y` each.
+fn table(
+    x: &PyReadonlyArray1<'_, f64>,
+    y: &PyReadonlyArray1<'_, f64>,
+) -> PyResult<(Vec<f64>, Vec<f64>)> {
+    let (x, y) = (x.as_array().to_vec(), y.as_array().to_vec());
+    if x.len() < 2 || x.len() != y.len() {
+        return Err(PyValueError::new_err(format!(
+            "x and y need equal lengths of at least 2, got {} and {}",
+            x.len(),
+            y.len()
+        )));
+    }
+    if !x.windows(2).all(|w| w[0] < w[1]) || !x.iter().chain(&y).all(|v| v.is_finite()) {
+        return Err(PyValueError::new_err(
+            "x must be finite and strictly ascending, y finite",
+        ));
+    }
+    Ok((x, y))
+}
+
+/// `pchip_slopes(x, y)` -> scipy `PchipInterpolator`'s knot slopes.
+#[pyfunction]
+#[pyo3(name = "pchip_slopes")]
+pub fn py_pchip_slopes<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    y: PyReadonlyArray1<'py, f64>,
+) -> PyResult<Arr<'py>> {
+    let (x, y) = table(&x, &y)?;
+    Ok(interp::pchip_slopes(&x, &y).into_pyarray(py))
+}
+
+/// scipy `PPoly` over strictly ascending breakpoints: evaluation, derivatives, exact antiderivative.
+#[pyclass(name = "PiecewisePoly", frozen)]
+pub struct PyPiecewisePoly {
+    inner: interp::PiecewisePoly,
+}
+
+#[pymethods]
+impl PyPiecewisePoly {
+    /// The monotone PCHIP through `(x, y)` (scipy `PchipInterpolator`).
+    #[staticmethod]
+    fn pchip(x: PyReadonlyArray1<'_, f64>, y: PyReadonlyArray1<'_, f64>) -> PyResult<Self> {
+        let (x, y) = table(&x, &y)?;
+        Ok(Self {
+            inner: interp::PiecewisePoly::pchip(&x, &y),
+        })
+    }
+
+    /// Straight segments through `(x, y)`.
+    #[staticmethod]
+    fn linear(x: PyReadonlyArray1<'_, f64>, y: PyReadonlyArray1<'_, f64>) -> PyResult<Self> {
+        let (x, y) = table(&x, &y)?;
+        Ok(Self {
+            inner: interp::PiecewisePoly::linear(&x, &y),
+        })
+    }
+
+    /// The `nu`-th derivative at each query (the end polynomials extrapolate, as scipy's do).
+    #[pyo3(signature = (xq, nu = 0))]
+    fn __call__<'py>(
+        &self,
+        py: Python<'py>,
+        xq: PyReadonlyArray1<'py, f64>,
+        nu: usize,
+    ) -> Arr<'py> {
+        let out: Vec<f64> = xq
+            .as_array()
+            .iter()
+            .map(|&q| self.inner.eval(q, nu))
+            .collect();
+        out.into_pyarray(py)
+    }
+
+    /// The exact antiderivative, zero at the first breakpoint.
+    fn antiderivative(&self) -> Self {
+        Self {
+            inner: self.inner.antiderivative(),
+        }
+    }
+
+    /// The breakpoints.
+    #[getter]
+    fn breakpoints<'py>(&self, py: Python<'py>) -> Arr<'py> {
+        self.inner.breakpoints().to_vec().into_pyarray(py)
+    }
+
+    /// Per-interval coefficients, highest power first (scipy's `PPoly.c.T`).
+    #[getter]
+    fn coefficients(&self) -> Vec<Vec<f64>> {
+        self.inner.coefficients().to_vec()
+    }
+}
+
+/// `nnls(a, b, maxiter=None)` -> `(x, rnorm)` as `scipy.optimize.nnls`: `ValueError` on a shape or a
+/// non-finite entry, `RuntimeError` at the iteration cap (default `3 n`).
+#[pyfunction]
+#[pyo3(name = "nnls", signature = (a, b, maxiter = None))]
+pub fn py_nnls<'py>(
+    py: Python<'py>,
+    a: PyReadonlyArray2<'py, f64>,
+    b: PyReadonlyArray1<'py, f64>,
+    maxiter: Option<usize>,
+) -> PyResult<(Arr<'py>, f64)> {
+    let v = a.as_array();
+    let (m, n) = v.dim();
+    let data: Vec<f64> = v.iter().copied().collect();
+    let b = b.as_array().to_vec();
+    match py.detach(|| numerics::linear::nnls::nnls(&data, m, n, &b, maxiter)) {
+        Ok(s) => Ok((s.x.into_pyarray(py), s.rnorm)),
+        Err(e @ NnlsError::MaxIterations { .. }) => Err(PyRuntimeError::new_err(e.to_string())),
+        Err(e) => Err(PyValueError::new_err(e.to_string())),
+    }
+}
+
 /// Register this file's functions and class on `_native`.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_expm, m)?)?;
@@ -191,6 +310,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_condense, m)?)?;
     m.add_function(wrap_pyfunction!(py_block_matvec, m)?)?;
     m.add_class::<PyCondensedCells>()?;
+    m.add_function(wrap_pyfunction!(py_pchip_slopes, m)?)?;
+    m.add_class::<PyPiecewisePoly>()?;
+    m.add_function(wrap_pyfunction!(py_nnls, m)?)?;
     m.add("EXPM_BIT_IDENTICAL_MAX_N", dense::EXPM_BIT_IDENTICAL_MAX_N)?;
     m.add("COND_MAX_N", dense::COND_MAX_N)?;
     Ok(())

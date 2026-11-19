@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+import scipy.interpolate
 import scipy.linalg
+import scipy.optimize
 
 from numerics_lab import kernels
 
@@ -80,3 +82,35 @@ def test_a_falling_row_first_crosses_at_its_zero_and_an_early_end_finds_none() -
     assert found[0] == pytest.approx(1.0, abs=1e-12)  # s
     assert kernels.first_crossing(system, ([0.0, 0.0], [0.0, 0.0]), rows, [0.0], [1e-9], [1.0, 1.0], 0.9)[1] is None
     assert kernels.span_key(1e-3 * (1.0 + 1e-14)) == 1e-3
+
+
+def test_the_pchip_and_its_antiderivative_are_scipys() -> None:
+    x, y = np.array([0.0, 0.2, 0.5, 0.9, 1.4]), np.array([0.0, 40.0, 120.0, 300.0, 1200.0])
+    want = scipy.interpolate.PchipInterpolator(x, y)
+    q = np.array([-0.1, 0.0, 0.1, 0.45, 0.9, 1.3, 1.6])
+    assert np.asarray(kernels.pchip_slopes(x, y)) == pytest.approx(want(x, 1), rel=1e-12, abs=1e-9)  # y per x
+    p = kernels.PiecewisePoly.pchip(x, y)
+    for nu in range(3):
+        assert np.asarray(p(q, nu)) == pytest.approx(want(q, nu), rel=1e-12, abs=1e-9)  # y per x**nu
+    assert np.asarray(p.antiderivative()(q)) == pytest.approx(want.antiderivative()(q), rel=1e-12, abs=1e-12)
+    assert np.asarray(p.breakpoints) == pytest.approx(x, abs=0.0)
+    assert np.asarray(p.coefficients) == pytest.approx(want.c.T, rel=1e-12, abs=1e-9)
+    moved = scipy.interpolate.PchipInterpolator(x, y + np.array([0.0, 0.0, 1e-6, 0.0, 0.0]))
+    assert np.asarray(p(q)) != pytest.approx(moved(q), rel=1e-12, abs=1e-12)
+    assert np.asarray(kernels.PiecewisePoly.linear(x, y)(np.array([0.1]))) == pytest.approx([20.0], abs=1e-12)
+    with pytest.raises(ValueError, match='ascending'):
+        kernels.PiecewisePoly.pchip(x[::-1].copy(), y)
+
+
+def test_nnls_is_scipys_and_refuses_as_scipy_does() -> None:
+    a = np.array([[1.0, 2.0, 0.5], [0.0, 1.0, -1.0], [3.0, -1.0, 2.0], [1.0, 1.0, 1.0]])
+    b = np.array([1.0, -2.0, 3.0, 0.5])
+    x, rnorm = kernels.nnls(a, b)
+    want_x, want_r = scipy.optimize.nnls(a, b)
+    assert np.asarray(x) == pytest.approx(want_x, rel=1e-10, abs=1e-12)  # dimensionless weights
+    assert rnorm == pytest.approx(want_r, rel=1e-10, abs=1e-12)  # b's unit
+    assert np.asarray(x) != pytest.approx(want_x + 1e-6, rel=1e-10, abs=1e-12)
+    with pytest.raises(ValueError, match='entries'):
+        kernels.nnls(a, b[:3])
+    with pytest.raises(RuntimeError, match='maximum'):
+        kernels.nnls(np.eye(2), np.ones(2), maxiter=1)
