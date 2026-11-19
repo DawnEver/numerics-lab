@@ -31,6 +31,7 @@
 //! vector that passes every finiteness check. Both apply to `faer`'s LU exactly as they applied
 //! to SuperLU's.
 
+pub mod condense;
 pub mod constrained;
 pub mod direct;
 pub mod krylov;
