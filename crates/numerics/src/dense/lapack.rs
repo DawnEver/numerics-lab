@@ -199,7 +199,11 @@ fn singular_values_2(a: [f64; 4]) -> [f64; 2] {
         let column_nonzero = a12 != 0.0 || (lastv == 2 && a22 != 0.0);
         if column_nonzero {
             // the two-row tail `y += a0 x0 + a1 x1` as GCC contracts it: `fma(a0, x0, a1 x1)`, then the add
-            let w = if lastv == 2 { 0.0 + a12.mul_add(1.0, a22 * v2) } else { 1.0f64.mul_add(a12, 0.0) };
+            let w = if lastv == 2 {
+                0.0 + a12.mul_add(1.0, a22 * v2)
+            } else {
+                1.0f64.mul_add(a12, 0.0)
+            };
             let da = -tau * w;
             e1 = da.mul_add(1.0, a12);
             if lastv == 2 {
@@ -224,7 +228,11 @@ pub fn cond(a: &[f64], n: usize) -> Result<f64, CondError> {
         return Err(CondError::NotConverged);
     }
     if n == 1 {
-        return Ok(if a[0] == 0.0 || a[0].is_infinite() { f64::INFINITY } else { 1.0 });
+        return Ok(if a[0] == 0.0 || a[0].is_infinite() {
+            f64::INFINITY
+        } else {
+            1.0
+        });
     }
     // an infinite entry: dgesdd scales by `bignum / inf = 0`, so the scaled matrix holds a NaN and its quotient is NaN
     if a.iter().any(|v| v.is_infinite()) {
@@ -232,7 +240,9 @@ pub fn cond(a: &[f64], n: usize) -> Result<f64, CondError> {
     }
     let mut col = [a[0], a[2], a[1], a[3]];
     // dgesdd's scaling into [smlnum, bignum]
-    let anrm = col.iter().fold(0.0f64, |m, v| if m < v.abs() { v.abs() } else { m });
+    let anrm = col
+        .iter()
+        .fold(0.0f64, |m, v| if m < v.abs() { v.abs() } else { m });
     let smlnum = SFMIN.sqrt() / f64::EPSILON;
     let bignum = 1.0 / smlnum;
     let scale = if anrm > 0.0 && anrm < smlnum {
@@ -261,14 +271,20 @@ mod tests {
     fn a_diagonal_matrix_conditions_by_its_ratio() {
         assert_eq!(cond(&[4.0, 0.0, 0.0, 2.0], 2), Ok(2.0));
         assert_eq!(cond(&[0.0, 0.0, 0.0, 2.0], 2), Ok(f64::INFINITY));
-        assert_eq!(cond(&[f64::NAN, 0.0, 0.0, 2.0], 2), Err(CondError::NotConverged));
+        assert_eq!(
+            cond(&[f64::NAN, 0.0, 0.0, 2.0], 2),
+            Err(CondError::NotConverged)
+        );
         assert_eq!(cond(&[1.0; 9], 3), Err(CondError::Untranscribed { n: 3 }));
     }
 
     #[test]
     fn a_two_by_two_system_solves() {
         let x = solve(&[2.0, 1.0, 1.0, 3.0], 2, &[3.0, 5.0]).unwrap();
-        assert!((x[0] - 0.8).abs() < 1e-15 && (x[1] - 1.4).abs() < 1e-15, "{x:?}");
+        assert!(
+            (x[0] - 0.8).abs() < 1e-15 && (x[1] - 1.4).abs() < 1e-15,
+            "{x:?}"
+        );
         assert!(solve(&[1.0, 2.0, 2.0, 4.0], 2, &[1.0, 1.0]).is_none());
     }
 }

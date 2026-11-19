@@ -50,17 +50,35 @@ fn misses(moved: bool) -> Vec<String> {
             // every entry within `PAST_MAX_N_REL` of the matrix's largest (dimensionless, as the exponential is).
             let got = expm(&a, c.n).expect("an exponential past MAX_N");
             let scale = c.e.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
-            let worst = got.iter().zip(&c.e).fold(0.0_f64, |m, (x, y)| m.max((x - y).abs()));
+            let worst = got
+                .iter()
+                .zip(&c.e)
+                .fold(0.0_f64, |m, (x, y)| m.max((x - y).abs()));
             if !(worst <= PAST_MAX_N_REL * scale) {
-                out.push(format!("{}: past MAX_N off by {worst:e} of {scale:e}", c.name));
+                out.push(format!(
+                    "{}: past MAX_N off by {worst:e} of {scale:e}",
+                    c.name
+                ));
             }
             continue;
         }
         let got = expm(&a, c.n).expect("an exponential");
-        let worst = got.iter().zip(&c.e).map(|(x, y)| x.to_bits().abs_diff(y.to_bits())).max().unwrap_or(0);
+        let worst = got
+            .iter()
+            .zip(&c.e)
+            .map(|(x, y)| x.to_bits().abs_diff(y.to_bits()))
+            .max()
+            .unwrap_or(0);
         if worst != 0 {
-            let k = got.iter().zip(&c.e).position(|(x, y)| x.to_bits() != y.to_bits()).unwrap_or(0);
-            out.push(format!("{}: {worst} ulp (first at {k}: {:e} vs {:e})", c.name, got[k], c.e[k]));
+            let k = got
+                .iter()
+                .zip(&c.e)
+                .position(|(x, y)| x.to_bits() != y.to_bits())
+                .unwrap_or(0);
+            out.push(format!(
+                "{}: {worst} ulp (first at {k}: {:e} vs {:e})",
+                c.name, got[k], c.e[k]
+            ));
         }
     }
     out
@@ -79,15 +97,25 @@ fn planted_past_max_n_a_relative_move_of_1e_10_is_seen() {
     for c in past {
         let got = expm(&c.a, c.n).expect("an exponential past MAX_N");
         let scale = c.e.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
-        let worst = got.iter().zip(&c.e).fold(0.0_f64, |m, (x, y)| m.max((x - y * (1.0 + 1e-10)).abs()));
-        assert!(worst > PAST_MAX_N_REL * scale, "{}: a 1e-10 move passes", c.name);
+        let worst = got
+            .iter()
+            .zip(&c.e)
+            .fold(0.0_f64, |m, (x, y)| m.max((x - y * (1.0 + 1e-10)).abs()));
+        assert!(
+            worst > PAST_MAX_N_REL * scale,
+            "{}: a 1e-10 move passes",
+            c.name
+        );
     }
 }
 
 #[test]
 fn planted_a_one_ulp_input_move_is_seen() {
     let moved = misses(true);
-    let dense = moved.iter().filter(|m| m.starts_with("dense") && !m.contains("past MAX_N")).count();
+    let dense = moved
+        .iter()
+        .filter(|m| m.starts_with("dense") && !m.contains("past MAX_N"))
+        .count();
     // 8 sizes x 10 scales of dense matrices are transcribed; a one-ulp entry moves half of them (40 measured)
     assert!(dense >= 30, "{dense}: {}", moved.join("; "));
 }

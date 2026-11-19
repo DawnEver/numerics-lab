@@ -39,7 +39,9 @@ pub enum ExpmError {
 impl std::fmt::Display for ExpmError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Shape { len, n } => write!(f, "expm needs an n x n matrix: {len} entries for n = {n}"),
+            Self::Shape { len, n } => {
+                write!(f, "expm needs an n x n matrix: {len} entries for n = {n}")
+            }
             Self::NonFinite => write!(f, "expm needs finite entries"),
             Self::Singular => write!(f, "expm: the Pade denominator is singular"),
         }
@@ -49,11 +51,21 @@ impl std::fmt::Display for ExpmError {
 impl std::error::Error for ExpmError {}
 
 /// `THETA` of `pick_pade_structure_d`.
-const THETA: [f64; 5] =
-    [1.495585217958292e-002, 2.539398330063230e-001, 9.504178996162932e-001, 2.097847961257068e+000, 4.25];
+const THETA: [f64; 5] = [
+    1.495585217958292e-002,
+    2.539398330063230e-001,
+    9.504178996162932e-001,
+    2.097847961257068e+000,
+    4.25,
+];
 /// `coeff` of `pick_pade_structure_d` (the `ell` bounds of Al-Mohy & Higham).
-const COEFF: [f64; 5] =
-    [1.1191048088221578e-11, 1.1167770708198077e-06, 4.9826124310493469e-01, 6.5662862500000000e+05, 1.2573361865339437e+19];
+const COEFF: [f64; 5] = [
+    1.1191048088221578e-11,
+    1.1167770708198077e-06,
+    4.9826124310493469e-01,
+    6.5662862500000000e+05,
+    1.2573361865339437e+19,
+];
 
 /// OpenBLAS SKYLAKEX `DGEMM_DEFAULT_UNROLL_M`: the `trsm` kernels' row blocking.
 const UNROLL_M: usize = 16;
@@ -76,7 +88,11 @@ fn gemm(a: &[f64], b: &[f64], beta: f64, c: &mut [f64], n: usize) {
             for k in 0..n {
                 acc = a[i + k * n].mul_add(b[k + j * n], acc);
             }
-            c[i + j * n] = if beta == 0.0 { acc } else { beta.mul_add(c[i + j * n], acc) };
+            c[i + j * n] = if beta == 0.0 {
+                acc
+            } else {
+                beta.mul_add(c[i + j * n], acc)
+            };
         }
     }
 }
@@ -141,7 +157,12 @@ impl Work {
         let base = 6 * n * n;
         let abs = self.am[self.slot(5)].to_vec();
         let x = self.am[base + from * n..base + (from + 1) * n].to_vec();
-        gemv_t(&abs, &x, &mut self.am[base + to * n..base + (to + 1) * n], n);
+        gemv_t(
+            &abs,
+            &x,
+            &mut self.am[base + to * n..base + (to + 1) * n],
+            n,
+        );
     }
 
     fn spins(&mut self, pairs: usize) -> f64 {
@@ -265,7 +286,9 @@ fn pade_uv(w: &mut Work, m: usize) {
             }
         }
         7 => {
-            let b = [17297280.0, 8648640.0, 1995840.0, 277200.0, 25200.0, 1512.0, 56.0];
+            let b = [
+                17297280.0, 8648640.0, 1995840.0, 277200.0, 25200.0, 1512.0, 56.0,
+            ];
             for i in 0..n {
                 for j in 0..n {
                     let k = n * i + j;
@@ -303,7 +326,8 @@ fn pade_uv(w: &mut Work, m: usize) {
                     let k = n * i + j;
                     let (t1, t2) = (am[4 * n2 + k], am[n2 + k]);
                     am[4 * n2 + k] = t1 + b[7] * am[3 * n2 + k] + b[5] * am[2 * n2 + k] + b[3] * t2;
-                    am[n2 + k] = b[8] * t1 + b[6] * am[3 * n2 + k] + b[4] * am[2 * n2 + k] + b[2] * t2;
+                    am[n2 + k] =
+                        b[8] * t1 + b[6] * am[3 * n2 + k] + b[4] * am[2 * n2 + k] + b[2] * t2;
                     if i == j {
                         am[4 * n2 + k] += b[1];
                         am[n2 + k] += b[0];
@@ -371,7 +395,15 @@ fn dot_strided(x: &[f64], inc_x: usize, y: &[f64], len: usize) -> f64 {
 /// `y[r] -= (A x)[r]`. The leading `rows & !3` rows go through `dgemv_n_4.c`'s 4-row kernels -- column blocks of 4
 /// (`dgemv_n_microk_skylakex-4.c`: `a0 x0 + a1 x1 + a2 x2 + a3 x3` as GCC contracts it), then 2 (`a0 x0 + a1 x1`),
 /// then 1 (the asm `a (alpha x)`) -- the last `rows & 3` through the scalar remainder (one FMA chain).
-fn gemv_n_minus(a: &[f64], n: usize, row0: usize, rows: usize, cols: usize, x: &[f64], y: &mut [f64]) {
+fn gemv_n_minus(
+    a: &[f64],
+    n: usize,
+    row0: usize,
+    rows: usize,
+    cols: usize,
+    x: &[f64],
+    y: &mut [f64],
+) {
     if rows == 0 || cols == 0 {
         return;
     }
@@ -385,7 +417,10 @@ fn gemv_n_minus(a: &[f64], n: usize, row0: usize, rows: usize, cols: usize, x: &
             let t = match width {
                 1 => at(0) * x[c],
                 2 => at(0).mul_add(x[c], at(1) * x[c + 1]),
-                _ => at(3).mul_add(x[c + 3], at(2).mul_add(x[c + 2], at(0).mul_add(x[c], at(1) * x[c + 1]))),
+                _ => at(3).mul_add(
+                    x[c + 3],
+                    at(2).mul_add(x[c + 2], at(0).mul_add(x[c], at(1) * x[c + 1])),
+                ),
             };
             y[r] = (-1.0f64).mul_add(t, y[r]);
             c += width;
@@ -459,7 +494,14 @@ const UNROLL_N: usize = 2;
 /// absolute. Up to `2 * UNROLL_N` blocking it is [`getf2`]; past it, a recursive panel LU, the row interchanges on
 /// the trailing columns, a unit-lower `trsm` (LT kernel blocking) and a `GEMM_KERNEL` update (one FMA chain, then
 /// `C - acc`), and last the later interchanges on the earlier columns.
-pub(crate) fn getrf(a: &mut [f64], lda: usize, off: usize, m: usize, nc: usize, ipiv: &mut [usize]) -> Result<(), ExpmError> {
+pub(crate) fn getrf(
+    a: &mut [f64],
+    lda: usize,
+    off: usize,
+    m: usize,
+    nc: usize,
+    ipiv: &mut [usize],
+) -> Result<(), ExpmError> {
     let mn = m.min(nc);
     let blocking = mn / 2 + UNROLL_N - 1;
     let blocking = blocking / UNROLL_N * UNROLL_N;
@@ -498,7 +540,9 @@ pub(crate) fn getrf(a: &mut [f64], lda: usize, off: usize, m: usize, nc: usize, 
                 for (start, size) in trsm_blocks(jb, true) {
                     for r in start..start + size {
                         if start > 0 {
-                            let acc = (0..start).fold(0.0f64, |s, k| a[at(o + r, o + k)].mul_add(a[at(o + k, c)], s));
+                            let acc = (0..start).fold(0.0f64, |s, k| {
+                                a[at(o + r, o + k)].mul_add(a[at(o + k, c)], s)
+                            });
                             a[at(o + r, c)] = (-1.0f64).mul_add(acc, a[at(o + r, c)]);
                         }
                     }
@@ -674,7 +718,10 @@ pub fn expm(a: &[f64], n: usize) -> Result<Vec<f64>, ExpmError> {
         }
         return Ok(out);
     }
-    let mut w = Work { n, am: vec![0.0; 6 * n2 + 2 * n] };
+    let mut w = Work {
+        n,
+        am: vec![0.0; 6 * n2 + 2 * n],
+    };
     swap_cf(a, &mut w.am[..n2], n);
     let is_lower = uband == 0;
     let triangular = lband == 0 || uband == 0;
@@ -727,7 +774,11 @@ pub fn expm(a: &[f64], n: usize) -> Result<Vec<f64>, ExpmError> {
                 for i in 0..n - 1 {
                     let (di, dj) = (diag[i] * scale, diag[i + 1] * scale);
                     let diff = dj - di;
-                    let sinch = if diff == 0.0 { di.exp() } else { (dj.exp() - di.exp()) / diff };
+                    let sinch = if diff == 0.0 {
+                        di.exp()
+                    } else {
+                        (dj.exp() - di.exp()) / diff
+                    };
                     r[i * n + i] = di.exp();
                     r[i * n + i + 1] = sinch * sd[i] * scale;
                 }
@@ -737,7 +788,11 @@ pub fn expm(a: &[f64], n: usize) -> Result<Vec<f64>, ExpmError> {
                 for i in 0..n - 1 {
                     let (di, dj) = (diag[i] * scale, diag[i + 1] * scale);
                     let diff = dj - di;
-                    let sinch = if diff == 0.0 { di.exp() } else { (dj.exp() - di.exp()) / diff };
+                    let sinch = if diff == 0.0 {
+                        di.exp()
+                    } else {
+                        (dj.exp() - di.exp()) / diff
+                    };
                     r[(i + 1) * n + i] = sinch * sd[i] * scale;
                     r[(i + 1) * n + i + 1] = dj.exp();
                 }
@@ -771,7 +826,10 @@ mod tests {
         for w in [0.001, 0.1, 0.6, 1.5, 3.0, 30.0] {
             let e = expm(&[0.0, -w, w, 0.0], 2).unwrap();
             // squaring compounds round-off: 1e-12 of the unit entries covers w = 30 (s = 3)
-            assert!(close(&e, &[w.cos(), -w.sin(), w.sin(), w.cos()], 1e-12), "{w}: {e:?}");
+            assert!(
+                close(&e, &[w.cos(), -w.sin(), w.sin(), w.cos()], 1e-12),
+                "{w}: {e:?}"
+            );
         }
     }
 
@@ -790,8 +848,16 @@ mod tests {
 
     #[test]
     fn a_nilpotent_block_exponentiates_to_its_finite_series() {
-        assert!(close(&expm(&[0.0, 7.0, 0.0, 0.0], 2).unwrap(), &[1.0, 7.0, 0.0, 1.0], 1e-15));
-        assert!(close(&expm(&[0.0, 0.0, 7.0, 0.0], 2).unwrap(), &[1.0, 0.0, 7.0, 1.0], 1e-15));
+        assert!(close(
+            &expm(&[0.0, 7.0, 0.0, 0.0], 2).unwrap(),
+            &[1.0, 7.0, 0.0, 1.0],
+            1e-15
+        ));
+        assert!(close(
+            &expm(&[0.0, 0.0, 7.0, 0.0], 2).unwrap(),
+            &[1.0, 0.0, 7.0, 1.0],
+            1e-15
+        ));
     }
 
     #[test]
@@ -810,7 +876,9 @@ mod tests {
             }
         }
         let b = [1.0, 2.0, 3.0];
-        let atx: Vec<f64> = (0..3).map(|j| (0..3).map(|i| a[i][j] * x[i]).sum()).collect();
+        let atx: Vec<f64> = (0..3)
+            .map(|j| (0..3).map(|i| a[i][j] * x[i]).sum())
+            .collect();
         assert!(close(&atx, &b, 1e-14), "{atx:?}");
         assert!(!close(&atx, &[1.0, 2.0, 3.5], 1e-3));
     }
@@ -819,7 +887,10 @@ mod tests {
     fn the_trsm_blocks_cover_every_row_once() {
         for m in 1..40 {
             for forward in [true, false] {
-                let mut rows: Vec<usize> = trsm_blocks(m, forward).iter().flat_map(|&(s, k)| s..s + k).collect();
+                let mut rows: Vec<usize> = trsm_blocks(m, forward)
+                    .iter()
+                    .flat_map(|&(s, k)| s..s + k)
+                    .collect();
                 rows.sort_unstable();
                 assert_eq!(rows, (0..m).collect::<Vec<_>>(), "{m} {forward}");
             }
@@ -837,6 +908,11 @@ mod tests {
         }
         // exp of the nilpotent shift: entry (0, k) is 1/k!
         let e = expm(&shift, n).expect("a 64-state exponential");
-        assert!((e[0] - 1.0).abs() < 1e-15 && (e[3] - 1.0 / 6.0).abs() < 1e-15, "{} {}", e[0], e[3]);
+        assert!(
+            (e[0] - 1.0).abs() < 1e-15 && (e[3] - 1.0 / 6.0).abs() < 1e-15,
+            "{} {}",
+            e[0],
+            e[3]
+        );
     }
 }
