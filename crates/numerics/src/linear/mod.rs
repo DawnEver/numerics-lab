@@ -44,6 +44,7 @@ use crate::sparse::{Csr, SparseError};
 pub use constrained::fixed_values::{apply_dirichlet_triplets, DirichletGroup};
 pub use constrained::master_slave::{resolve_constraint_chains, Constraint, ConstraintError};
 pub use constrained::pin_rows::pin_rows;
+pub use direct::fill::cholesky_factor_len;
 pub use krylov::{
     KrylovFailure, KrylovOutcome, Method, GMRES_RESTART, KRYLOV_ATOL, KRYLOV_MAXITER_FACTOR,
     KRYLOV_RTOL,
