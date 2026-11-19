@@ -420,6 +420,14 @@ def repair_direct_solution(matrix, rhs, x) -> tuple[np.ndarray, tuple[float, ...
     an exactly singular factorization, or a non-finite step returns ``x`` as it came: unjudged is
     not a pass, and the guard is what refuses.
     """
+    columns = np.asarray(rhs.todense() if sp.issparse(rhs) else rhs)
+    if columns.ndim == 2 and columns.shape[1] > 1:
+        return _repair_each_column(matrix, columns, x)
+    return _repair_one_column(matrix, rhs, x)
+
+
+def _repair_one_column(matrix, rhs, x) -> tuple[np.ndarray, tuple[float, ...]]:
+    """:func:`repair_direct_solution` of ONE right-hand side."""
     residual = direct_relative_residual(matrix, rhs, x)
     if residual is None or residual <= _DIRECT_RESIDUAL_RTOL:
         return np.asarray(x), ()
@@ -483,6 +491,19 @@ def repair_direct_solution(matrix, rhs, x) -> tuple[np.ndarray, tuple[float, ...
         moves.append(move)
         current = current + step
     return current, tuple(moves)
+
+
+def _repair_each_column(matrix, columns: np.ndarray, x) -> tuple[np.ndarray, tuple[float, ...]]:
+    """An ``(n, k)`` solve repaired COLUMN BY COLUMN, its shape kept (#32: the repair used to flatten it).
+
+    Each column is its own right-hand side, so each is judged and repaired alone; a column the
+    trigger never fires on comes back bit-identical. The moves returned are the WORST column's (the
+    largest last move), so the guard judges the column furthest from an answer.
+    """
+    xs = np.asarray(x.todense() if sp.issparse(x) else x).reshape(columns.shape)
+    repaired = [_repair_one_column(matrix, columns[:, j], xs[:, j]) for j in range(columns.shape[1])]
+    worst = max((moves for _, moves in repaired), key=lambda moves: moves[-1] if moves else -np.inf)
+    return np.stack([vector for vector, _ in repaired], axis=1), worst
 
 
 def _factorize(matrix):
