@@ -1,6 +1,7 @@
 //! The linear seam's own tests, mirroring `tests/unit/test_linear_solvers.py`,
 //! `test_dirichlet_triplets.py`, and the claim `ssor.py` makes for itself in its docstring.
 
+mod complex;
 mod direct;
 mod fixed_values;
 mod iccg;

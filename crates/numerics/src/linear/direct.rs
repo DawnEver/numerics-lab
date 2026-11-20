@@ -53,8 +53,16 @@
 //!    Each kind's ordering + symbolic analysis stays cached; only numeric storage is released.
 //!
 //! Threading (`Par::rayon`) was measured to HURT at every size here and is not used.
+//!
+//! # One factorisation, two scalar types
+//!
+//! Everything here is generic over [`Scalar`] (`f64` or `c64`) and is ONE implementation: the same
+//! pattern analysis, refinement step and dense border serve both. The one scalar-specific fact is
+//! lever 3: over `c64` a symmetric matrix (`A = A^T`) is not Hermitian, and faer's `L L^H` would
+//! factorise a different matrix, so a complex operator always takes the LU
+//! ([`Scalar::TRANSPOSE_IS_ADJOINT`]).
 
-use crate::sparse::{Csr, SparseError};
+use crate::sparse::{Csr, Scalar, SparseError};
 use faer::dyn_stack::{MemBuffer, MemStack, StackReq};
 use faer::linalg::cholesky::llt::factor::LltRegularization;
 use faer::sparse::linalg::LuError;
@@ -141,7 +149,7 @@ impl FactorKind {
 /// [`DirectFailure::Singular`] when the factorisation refuses, [`DirectFailure::Shape`] when the
 /// matrix is not square or `b` is the wrong length. The residual half of the guard is applied by
 /// the caller, [`super::solve_linear_system`].
-pub fn solve(a: &Csr, b: &[f64]) -> Result<Vec<f64>, DirectFailure> {
+pub fn solve<T: Scalar>(a: &Csr<T>, b: &[T]) -> Result<Vec<T>, DirectFailure> {
     DirectFactorization::new(a)?.solve(a, b)
 }
 
@@ -184,10 +192,10 @@ fn scratch(stage: &str, req: StackReq) -> Result<MemBuffer, DirectFailure> {
 }
 
 /// The symmetric half: analysed lazily, on the first refactor whose values are symmetric.
-struct Cholesky {
+struct Cholesky<T> {
     symbolic: SymbolicCholesky<usize>,
     /// The `L` values, REUSED across refactors (lever 2).
-    l_values: Vec<f64>,
+    l_values: Vec<T>,
 }
 
 /// A sparse direct factorisation whose SYMBOLIC half is computed once and whose NUMERIC storage
@@ -211,7 +219,7 @@ struct Cholesky {
 /// pattern it was built from and returns [`DirectFailure::PatternChanged`] on any difference.
 /// The comparison is two slice equalities over `nnz` -- `O(nnz)` against an `O(nnz^1.5)`
 /// factorisation.
-pub(crate) struct Kernel {
+pub(crate) struct Kernel<T: Scalar = f64> {
     /// The CSC pattern the symbolic halves are computed from.
     pattern: SymbolicSparseColMat<usize>,
     /// `csc_slot -> csr_value_index`, so a refactorisation is a scatter rather than a re-sort.
@@ -224,27 +232,27 @@ pub(crate) struct Kernel {
     /// The CSR column indices, kept for the same refusal.
     indices: Vec<u32>,
     /// The CSC values of the operator last refactorised (reused buffer).
-    csc_values: Vec<f64>,
+    csc_values: Vec<T>,
     /// COLAMD + supernodal LU symbolic, analysed on first LU refactor.
     lu_symbolic: Option<SymbolicLu<usize>>,
     /// The ONE numeric LU, refactorised in place (lever 2).
-    lu_numeric: NumericLu<usize, f64>,
+    lu_numeric: NumericLu<usize, T>,
     /// Whether `lu_numeric` holds storage (it is reset, not dropped, when released).
     lu_held: bool,
     /// AMD + supernodal Cholesky, analysed on first symmetric refactor; its symbolic half is
     /// kept for the kernel's life, its `l_values` released when LU takes over.
-    cholesky: Option<Cholesky>,
+    cholesky: Option<Cholesky<T>>,
     /// What the last successful refactor produced; `None` before one / after a failed one.
     current: Option<FactorKind>,
 }
 
-impl Kernel {
+impl<T: Scalar> Kernel<T> {
     /// Analyse `a`'s pattern once: value permutation and transpose map.
     ///
     /// # Errors
     /// [`DirectFailure::Shape`] when `a` is not square, [`DirectFailure::Singular`] when `faer`
     /// refuses the pattern.
-    pub fn new(a: &Csr) -> Result<Self, DirectFailure> {
+    pub fn new(a: &Csr<T>) -> Result<Self, DirectFailure> {
         let (n_rows, n_cols) = a.shape();
         if n_rows != n_cols {
             return Err(DirectFailure::Shape(SparseError::NotSquare {
@@ -275,7 +283,7 @@ impl Kernel {
         Ok(Self {
             pattern,
             transpose_of: transpose_map(n_rows, indptr, indices),
-            csc_values: vec![0.0; csr_of_csc.len()],
+            csc_values: vec![T::ZERO; csr_of_csc.len()],
             csr_of_csc,
             indptr: indptr.to_vec(),
             indices: indices.to_vec(),
@@ -294,14 +302,15 @@ impl Kernel {
     }
 
     /// Whether `values` (in the analysed CSR slot order) are EXACTLY symmetric — bitwise equal to
-    /// their transposes. A NaN is unequal to itself and so is never symmetric, which routes it to
-    /// the LU whose refusal names it.
-    fn values_symmetric(&self, values: &[f64]) -> bool {
-        self.transpose_of.as_ref().is_some_and(|t| {
-            t.iter()
-                .enumerate()
-                .all(|(k, &kt)| values[k].to_bits() == values[kt].to_bits())
-        })
+    /// their transposes — over a scalar type where that makes the operator self-adjoint. Never over
+    /// `c64`: see the module docs.
+    fn values_symmetric(&self, values: &[T]) -> bool {
+        T::TRANSPOSE_IS_ADJOINT
+            && self.transpose_of.as_ref().is_some_and(|t| {
+                t.iter()
+                    .enumerate()
+                    .all(|(k, &kt)| values[k].same_bits(values[kt]))
+            })
     }
 
     /// Numerically factorise `a` (which must carry the analysed pattern) into the held storage.
@@ -310,7 +319,7 @@ impl Kernel {
     /// [`DirectFailure::PatternChanged`] when `a`'s pattern differs from the analysed one,
     /// [`DirectFailure::Singular`] when the LU refuses. After an error no factor is held and
     /// [`Self::solve_in_place`] answers [`DirectFailure::NotFactored`].
-    pub fn refactor(&mut self, a: &Csr) -> Result<FactorKind, DirectFailure> {
+    pub fn refactor(&mut self, a: &Csr<T>) -> Result<FactorKind, DirectFailure> {
         if a.indptr() != self.indptr.as_slice() || a.indices() != self.indices.as_slice() {
             return Err(DirectFailure::PatternChanged);
         }
@@ -394,17 +403,17 @@ impl Kernel {
             chol.l_values
                 .try_reserve_exact(len)
                 .map_err(|_| out_of_memory("cholesky values"))?;
-            chol.l_values.resize(len, 0.0);
+            chol.l_values.resize(len, T::ZERO);
         }
         let mat = SparseColMatRef::new(self.pattern.as_ref(), &self.csc_values);
         let mut buf = scratch(
             "cholesky scratch",
             chol.symbolic
-                .factorize_numeric_llt_scratch::<f64>(Par::Seq, Default::default()),
+                .factorize_numeric_llt_scratch::<T>(Par::Seq, Default::default()),
         )?;
         Ok(chol
             .symbolic
-            .factorize_numeric_llt::<f64>(
+            .factorize_numeric_llt::<T>(
                 &mut chol.l_values,
                 mat,
                 Side::Lower,
@@ -436,7 +445,7 @@ impl Kernel {
         let mat = SparseColMatRef::new(self.pattern.as_ref(), &self.csc_values);
         let mut buf = scratch(
             "lu scratch",
-            symbolic.factorize_numeric_lu_scratch::<f64>(Par::Seq, Default::default()),
+            symbolic.factorize_numeric_lu_scratch::<T>(Par::Seq, Default::default()),
         )?;
         self.lu_held = true;
         symbolic
@@ -457,7 +466,7 @@ impl Kernel {
     /// # Errors
     /// [`DirectFailure::NotFactored`] when no factor is held, [`DirectFailure::Shape`] when
     /// `b.len() != n * nrhs`.
-    pub fn solve_in_place(&self, b: &mut [f64], nrhs: usize) -> Result<(), DirectFailure> {
+    pub fn solve_in_place(&self, b: &mut [T], nrhs: usize) -> Result<(), DirectFailure> {
         let n = self.n();
         if b.len() != n * nrhs {
             return Err(DirectFailure::Shape(SparseError::ShapeMismatch {
@@ -478,13 +487,13 @@ impl Kernel {
         let mut r = self.residual(&b0, b, nrhs);
         self.back_substitute(&mut r, nrhs)?;
         for (x, d) in b.iter_mut().zip(&r) {
-            *x += d;
+            *x += *d;
         }
         Ok(())
     }
 
     /// `b - A x` for `nrhs` column-major columns, against the values last refactorised.
-    fn residual(&self, b: &[f64], x: &[f64], nrhs: usize) -> Vec<f64> {
+    fn residual(&self, b: &[T], x: &[T], nrhs: usize) -> Vec<T> {
         let n = self.n();
         let (col_ptr, row_idx) = (self.pattern.col_ptr(), self.pattern.row_idx());
         let mut r = b.to_vec();
@@ -500,7 +509,7 @@ impl Kernel {
         r
     }
 
-    fn back_substitute(&self, b: &mut [f64], nrhs: usize) -> Result<(), DirectFailure> {
+    fn back_substitute(&self, b: &mut [T], nrhs: usize) -> Result<(), DirectFailure> {
         let n = self.n();
         let rhs = MatMut::from_column_major_slice_mut(b, n, nrhs);
         match self.current {
@@ -509,7 +518,7 @@ impl Kernel {
                     return Err(DirectFailure::NotFactored);
                 };
                 let mut buf =
-                    MemBuffer::new(chol.symbolic.solve_in_place_scratch::<f64>(nrhs, Par::Seq));
+                    MemBuffer::new(chol.symbolic.solve_in_place_scratch::<T>(nrhs, Par::Seq));
                 LltRef::new(&chol.symbolic, &chol.l_values).solve_in_place_with_conj(
                     Conj::No,
                     rhs,
@@ -521,8 +530,7 @@ impl Kernel {
                 let Some(symbolic) = self.lu_symbolic.as_ref() else {
                     return Err(DirectFailure::NotFactored);
                 };
-                let mut buf =
-                    MemBuffer::new(symbolic.solve_in_place_scratch::<f64>(nrhs, Par::Seq));
+                let mut buf = MemBuffer::new(symbolic.solve_in_place_scratch::<T>(nrhs, Par::Seq));
                 LuRef::new_unchecked(symbolic, &self.lu_numeric).solve_in_place_with_conj(
                     Conj::No,
                     rhs,
@@ -565,22 +573,22 @@ fn transpose_map(n: usize, indptr: &[u32], indices: &[u32]) -> Option<Vec<usize>
 ///
 /// Every public method keeps the [`Kernel`] contract: the pattern is checked on refactor, a
 /// solve before a factor is refused, and a solve is refined once against the FULL operator.
-pub struct DirectFactorization {
+pub struct DirectFactorization<T: Scalar = f64> {
     /// The full operator, values updated per refactor (the outer refinement's residual).
-    full: Csr,
-    border: Option<Border>,
+    full: Csr<T>,
+    border: Option<Border<T>>,
     /// The un-bordered kernel: always when there is no border, else built on a border refusal.
-    plain: Option<Kernel>,
+    plain: Option<Kernel<T>>,
     current: Option<FactorKind>,
 }
 
-impl DirectFactorization {
+impl<T: Scalar> DirectFactorization<T> {
     /// Analyse `a`'s pattern once.
     ///
     /// # Errors
     /// [`DirectFailure::Shape`] when `a` is not square, [`DirectFailure::Singular`] when `faer`
     /// refuses the pattern.
-    pub fn new(a: &Csr) -> Result<Self, DirectFailure> {
+    pub fn new(a: &Csr<T>) -> Result<Self, DirectFailure> {
         let (n_rows, n_cols) = a.shape();
         if n_rows != n_cols {
             return Err(DirectFailure::Shape(SparseError::NotSquare {
@@ -640,7 +648,7 @@ impl DirectFactorization {
     /// # Errors
     /// [`DirectFailure::PatternChanged`] when `a`'s pattern differs from the analysed one,
     /// [`DirectFailure::Singular`] when the factorisation refuses.
-    pub fn refactor(&mut self, a: &Csr) -> Result<FactorKind, DirectFailure> {
+    pub fn refactor(&mut self, a: &Csr<T>) -> Result<FactorKind, DirectFailure> {
         if a.indptr() != self.full.indptr() || a.indices() != self.full.indices() {
             return Err(DirectFailure::PatternChanged);
         }
@@ -674,7 +682,7 @@ impl DirectFactorization {
     /// # Errors
     /// [`DirectFailure::NotFactored`] when no factor is held, [`DirectFailure::Shape`] when
     /// `b.len() != n * nrhs`.
-    pub fn solve_in_place(&self, b: &mut [f64], nrhs: usize) -> Result<(), DirectFailure> {
+    pub fn solve_in_place(&self, b: &mut [T], nrhs: usize) -> Result<(), DirectFailure> {
         let n = self.n();
         if b.len() != n * nrhs {
             return Err(DirectFailure::Shape(SparseError::ShapeMismatch {
@@ -700,7 +708,7 @@ impl DirectFactorization {
                 }
                 border.solve(&mut r, nrhs)?;
                 for (x, d) in b.iter_mut().zip(&r) {
-                    *x += d;
+                    *x += *d;
                 }
                 Ok(())
             }
@@ -714,7 +722,7 @@ impl DirectFactorization {
     /// # Errors
     /// As [`Self::refactor`], plus [`DirectFailure::Shape`] when `b` is the wrong length (checked
     /// BEFORE the factorisation is paid for).
-    pub fn solve(&mut self, a: &Csr, b: &[f64]) -> Result<Vec<f64>, DirectFailure> {
+    pub fn solve(&mut self, a: &Csr<T>, b: &[T]) -> Result<Vec<T>, DirectFailure> {
         if b.len() != self.n() {
             return Err(DirectFailure::Shape(SparseError::ShapeMismatch {
                 expected: self.n(),
