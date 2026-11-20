@@ -8,9 +8,9 @@
 //! [`StagnationWatch`], `on_iteration` — is shared.
 
 use super::{
-    energy_error_pct, has_converged, increment_ratio, norm, IncrementTrend, IterationResult,
-    IterationStrategy, NonlinearError, NonlinearSystem, RawState, ResultOf, SolveOptions,
-    StagnationWatch, StateOf, ALPHA_CALM_STEPS, ALPHA_GROW, ALPHA_MIN,
+    energy_error_pct, has_converged, increment_ratio, norm, state_settled, IncrementTrend,
+    IterationResult, IterationStrategy, NonlinearError, NonlinearSystem, RawState, ResultOf,
+    SolveOptions, StagnationWatch, StateOf, ALPHA_CALM_STEPS, ALPHA_GROW, ALPHA_MIN,
 };
 
 /// What the loop under-relaxes.
@@ -177,7 +177,7 @@ fn picard_loop<S: NonlinearSystem>(
         let increment = increment_ratio(&x, &x_solve);
         // The mixed coefficients must settle with the iterate: under a small alpha the iterate
         // creeps while they are still far from their fixed point.
-        let settled = coefficient_lag < rtol / 100.0;
+        let settled = coefficient_lag < rtol / 100.0 && state_settled(st.state_change, rtol);
         if !settled {
             watch.clear();
         }
@@ -263,7 +263,13 @@ impl<S: NonlinearSystem> IterationStrategy<S> for CoefficientDampedPicardStrateg
     }
 
     fn solve(&self, system: &mut S, opts: &SolveOptions) -> Result<ResultOf<S>, NonlinearError> {
-        picard_loop(system, opts, "coefficient-damped", Relax::Coefficients, true)
+        picard_loop(
+            system,
+            opts,
+            "coefficient-damped",
+            Relax::Coefficients,
+            true,
+        )
     }
 }
 

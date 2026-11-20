@@ -141,10 +141,10 @@ class _PicardLoop:
             alpha = schedule.step(err, delta, rtol_energy_pct, trend)
             x_solve = system.solve_linear(state)
             increment = increment_ratio(x, x_solve)
-            # State the iterate does not carry must settle with it: the irreversible material
-            # history, and -- relaxing coefficients -- the mixed coefficients themselves.
-            unsettled = max(float(state.material_change), coefficient_lag[0])
-            converged = _has_converged(err, x, x_solve, rtol_energy_pct, material_change=unsettled) or watch.observe(
+            # State the iterate does not carry must settle with it: the reported `state_change`
+            # and -- relaxing coefficients -- the mixed coefficients themselves.
+            unsettled = max(float(state.state_change), coefficient_lag[0])
+            converged = _has_converged(err, x, x_solve, rtol_energy_pct, state_change=unsettled) or watch.observe(
                 err, increment, unsettled
             )
             last_energy = state.total_energy

@@ -3,8 +3,9 @@
 
 use super::newton::{axpy, dot, neg, sub};
 use super::{
-    energy_error_pct, has_converged, increment_ratio, IterationResult, IterationStrategy,
-    NonlinearError, NonlinearSystem, ResultOf, SolveOptions, StagnationWatch, StateOf, ALPHA_MIN,
+    energy_error_pct, has_converged, increment_ratio, state_settled, IterationResult,
+    IterationStrategy, NonlinearError, NonlinearSystem, ResultOf, SolveOptions, StagnationWatch,
+    StateOf, ALPHA_MIN,
 };
 
 /// Anderson acceleration of the Picard fixed-point map.
@@ -132,7 +133,12 @@ impl<S: NonlinearSystem> IterationStrategy<S> for AndersonStrategy {
             }
             // Judged on the fixed-point residual g(x_k) - x_k, not on the mixed step.
             let increment = increment_ratio(&x_prev, &gx);
-            converged = has_converged(err, &x_prev, &gx, rtol) || watch.observe(err, increment);
+            let settled = state_settled(st.state_change, rtol);
+            if !settled {
+                watch.clear();
+            }
+            converged = settled
+                && (has_converged(err, &x_prev, &gx, rtol) || watch.observe(err, increment));
             if system.is_linear() {
                 converged = true;
             }
@@ -289,7 +295,12 @@ impl<S: NonlinearSystem> IterationStrategy<S> for BroydenStrategy {
             x = axpy(&x, 1.0, &dx);
             prev = Some((r, dx));
             let increment = increment_ratio(&x_prev, &x);
-            converged = has_converged(err, &x_prev, &x, rtol) || watch.observe(err, increment);
+            let settled = state_settled(st.state_change, rtol);
+            if !settled {
+                watch.clear();
+            }
+            converged =
+                settled && (has_converged(err, &x_prev, &x, rtol) || watch.observe(err, increment));
             if system.is_linear() {
                 converged = true;
             }
@@ -377,7 +388,12 @@ fn run_bfgs<S: NonlinearSystem>(
         x = axpy(&x, 1.0, &dx);
         prev = Some((r, dx));
         let increment = increment_ratio(&x_prev, &x);
-        converged = has_converged(err, &x_prev, &x, rtol) || watch.observe(err, increment);
+        let settled = state_settled(st.state_change, rtol);
+        if !settled {
+            watch.clear();
+        }
+        converged =
+            settled && (has_converged(err, &x_prev, &x, rtol) || watch.observe(err, increment));
         if system.is_linear() {
             converged = true;
         }

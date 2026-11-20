@@ -144,8 +144,8 @@ class AndersonStrategy:
             # field error, two Picard images apart).
             increment = increment_ratio(x_prev, gx)
             converged = _has_converged(
-                err, x_prev, gx, rtol_energy_pct, material_change=state.material_change
-            ) or watch.observe(err, increment, state.material_change)
+                err, x_prev, gx, rtol_energy_pct, state_change=state.state_change
+            ) or watch.observe(err, increment, state.state_change)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, beta, increment)
@@ -211,8 +211,8 @@ class BroydenStrategy:
             prev_r, prev_dx = r, dx
             increment = increment_ratio(x_prev, x)
             converged = _has_converged(
-                err, x_prev, x, rtol_energy_pct, material_change=state.material_change
-            ) or watch.observe(err, increment, state.material_change)
+                err, x_prev, x, rtol_energy_pct, state_change=state.state_change
+            ) or watch.observe(err, increment, state.state_change)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0, increment)
@@ -276,8 +276,8 @@ class BFGSStrategy:
             prev_r, prev_dx = r, dx
             increment = increment_ratio(x_prev, x)
             converged = _has_converged(
-                err, x_prev, x, rtol_energy_pct, material_change=state.material_change
-            ) or watch.observe(err, increment, state.material_change)
+                err, x_prev, x, rtol_energy_pct, state_change=state.state_change
+            ) or watch.observe(err, increment, state.state_change)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0, increment)

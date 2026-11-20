@@ -12,7 +12,7 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import LinearOperator, aslinearoperator, gmres, splu
 
-from numerics_lab.line_search import backtracking, sufficient_decrease
+from numerics_lab.line_search import TrialNotEvaluable, backtracking, sufficient_decrease
 from numerics_lab.linear import make_preconditioner, reject_nonfinite_solution
 from numerics_lab.linear.native_direct import native_factor
 from numerics_lab.nonlinear._seam import (
@@ -109,7 +109,7 @@ class NewtonStrategy:
     stop_rule = 'residual'
     #: The declared stopping rules: ``'residual'`` (the default, on ``core.newton_rtol``) or
     #: ``'energy'`` -- the energy change in percent against ``rtol_energy_pct``, the same first
-    #: half every fixed-point strategy uses. The increment and material halves of
+    #: half every fixed-point strategy uses. The increment and state halves of
     #: :func:`_has_converged` hold under both, so neither can call a wandering iterate converged.
     STOP_RULES = ('residual', 'energy')
 
@@ -182,12 +182,11 @@ class NewtonStrategy:
             return trial, trial_state, _free_residual_norm(system, trial, trial_state)
 
         decreases = sufficient_decrease(r_norm, -r_norm, c1=self.armijo)
-        search = backtracking(
+        step, accepted, found = _search_evaluable(
             trial_at, lambda lam, t: decreases(lam, t[2]), tries=self.max_backtracks + 1, shrink=self.shrink
         )
-        assert search.trial is not None and search.first is not None  # every Newton trial evaluates
-        trial, trial_state, trial_norm = search.trial
-        return search.step, search.accepted, trial, trial_state, trial_norm, search.first
+        trial, trial_state, trial_norm = found
+        return step, accepted, trial, trial_state, trial_norm, found
 
     def solve(
         self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
@@ -268,9 +267,9 @@ class NewtonStrategy:
                 x_prev,
                 x_full,
                 rtol_energy_pct,
-                material_change=state.material_change,
+                state_change=state.state_change,
                 residual_ratio=r_norm / reference if self.stop_rule == 'residual' else None,
-            ) or watch.observe(err, increment, state.material_change)
+            ) or watch.observe(err, increment, state.state_change)
             if system.is_linear:
                 converged = True
             if not system.is_linear and (previous_local or state.local_values):
@@ -291,6 +290,34 @@ class NewtonStrategy:
             state.total_energy,
         )
         return IterationResult(x=x, state=state, iterations=ran, converged=converged)
+
+
+def _search_evaluable(trial_at, accept, *, tries: int, shrink: float):
+    """Armijo backtracking that SHRINKS PAST a trial the system cannot evaluate: ``(step, accepted, trial)``.
+
+    ``trial`` is the accepted one, else the LONGEST evaluable one -- the full step a Newton falls
+    back to, which is the full step itself whenever it evaluates. A search none of whose trials
+    evaluates re-raises :class:`TrialNotEvaluable`. The Rust `newton.rs` searches, rule for rule.
+    """
+    longest: list = []
+    refused: list[TrialNotEvaluable] = []
+
+    def evaluable(lam: float):
+        try:
+            value = trial_at(lam)
+        except TrialNotEvaluable as exc:
+            refused.append(exc)
+            return None
+        if not longest:
+            longest.append(value)
+        return value
+
+    search = backtracking(evaluable, accept, tries=tries, shrink=shrink)
+    if search.accepted:
+        return search.step, True, search.trial
+    if not longest:
+        raise refused[-1]
+    return search.step, False, longest[0]
 
 
 def _lu_factorize(matrix):
@@ -362,8 +389,11 @@ class ModifiedNewtonStrategy:
             jac = system.tangent(x, state)
             if jac is None:
                 return None, None
-            lu = _lu_factorize(jac)
-            held = lu.solve if lu is not None else (lambda rhs, jac=jac: system.solve_system(jac, rhs))
+            if isinstance(system, FactorizableSystem):
+                held = system.factorize(jac)
+            else:
+                lu = _lu_factorize(jac)
+                held = lu.solve if lu is not None else (lambda rhs, jac=jac: system.solve_system(jac, rhs))
         return held(-r), held
 
     def _search(self, system, x, dx, r0):
@@ -378,16 +408,13 @@ class ModifiedNewtonStrategy:
             return trial, float(np.linalg.norm(np.asarray(system.residual(trial, system.assemble(trial)), dtype=float)))
 
         decreases = sufficient_decrease(r0, -r0, c1=self.armijo)
-        search = backtracking(
+        step, accepted, found = _search_evaluable(
             trial_at,
             lambda lam, t: bool(np.isfinite(t[1])) and decreases(lam, t[1]),
             tries=self.max_backtracks + 1,
             shrink=self.shrink,
         )
-        assert search.trial is not None and search.first is not None
-        if search.accepted:
-            return True, search.step, search.trial[0]
-        return False, 1.0, search.first[0]
+        return (True, step, found[0]) if accepted else (False, 1.0, found[0])
 
     def solve(
         self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
@@ -429,8 +456,8 @@ class ModifiedNewtonStrategy:
                 x = trial
             increment = increment_ratio(x_prev, x)
             converged = _has_converged(
-                err, x_prev, x, rtol_energy_pct, material_change=state.material_change
-            ) or watch.observe(err, increment, state.material_change)
+                err, x_prev, x, rtol_energy_pct, state_change=state.state_change
+            ) or watch.observe(err, increment, state.state_change)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, lam, increment)
@@ -553,8 +580,8 @@ class NewtonKrylovStrategy:
             x = x + dx
             increment = increment_ratio(x_prev, x)
             converged = _has_converged(
-                err, x_prev, x, rtol_energy_pct, material_change=state.material_change
-            ) or watch.observe(err, increment, state.material_change)
+                err, x_prev, x, rtol_energy_pct, state_change=state.state_change
+            ) or watch.observe(err, increment, state.state_change)
             if system.is_linear:
                 converged = True
             system.on_iteration(i, state, err, 1.0, increment)
