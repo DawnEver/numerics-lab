@@ -2,7 +2,7 @@
 
 use super::{
     energy_error_pct, has_converged, has_converged_residual, increment_ratio, local_change,
-    newton_linear_tolerance, norm, state_settled, DampedPicardStrategy, IterationResult,
+    newton_linear_tolerance, norm, state_settled, DampedPicardStrategy, Factor, IterationResult,
     IterationStrategy, NonlinearError, NonlinearSystem, ResultOf, SolveOptions, StagnationWatch,
     StateOf, StopRule,
 };
@@ -94,10 +94,10 @@ fn evaluable<T>(
     }
 }
 
-/// A tangent a held-tangent Newton reuses, and whether the system holds its factor.
+/// A tangent a held-tangent Newton reuses, and its factor when the system supplies one.
 struct HeldTangent<M> {
     matrix: M,
-    factored: bool,
+    factor: Option<Factor>,
 }
 
 impl<M> HeldTangent<M> {
@@ -107,17 +107,21 @@ impl<M> HeldTangent<M> {
         matrix: M,
         factorize: bool,
     ) -> Result<Self, NonlinearError> {
-        let factored = factorize && system.hold_factor(&matrix)?;
-        Ok(Self { matrix, factored })
+        let factor = if factorize {
+            system.factorize(&matrix)?
+        } else {
+            None
+        };
+        Ok(Self { matrix, factor })
     }
 
     fn solve<S: NonlinearSystem<Matrix = M>>(
-        &self,
+        &mut self,
         system: &mut S,
         rhs: &[f64],
     ) -> Result<Vec<f64>, NonlinearError> {
-        if self.factored {
-            system.solve_with_held_factor(rhs)
+        if let Some(factor) = self.factor.as_mut() {
+            factor(rhs)
         } else {
             system.solve_system(&self.matrix, rhs)
         }
@@ -247,7 +251,7 @@ impl NewtonStrategy {
             let r = system.residual(&x, &state)?;
             let rhs = neg(&r);
             let dx = held
-                .as_ref()
+                .as_mut()
                 .expect("refreshed above")
                 .solve(system, &rhs)?;
             let x_prev = x.clone();
@@ -260,7 +264,7 @@ impl NewtonStrategy {
                 held = Some(HeldTangent::hold(system, jac, factorize)?);
                 age = 0;
                 let dx = held
-                    .as_ref()
+                    .as_mut()
                     .expect("refreshed above")
                     .solve(system, &rhs)?;
                 (lam, accepted, full_trial, full_norm) = self.search(system, &x, &dx, r_norm)?;
@@ -354,8 +358,8 @@ impl<S: NonlinearSystem> IterationStrategy<S> for NewtonStrategy {
 /// a near-constant ~1.0 throughout). The raw norm has no such blind spot. `on_iteration` reports
 /// the accepted `lam` as its alpha.
 ///
-/// THE HELD FACTOR: each refreshed tangent is offered to [`NonlinearSystem::hold_factor`]; a system
-/// that holds its factor serves every held step through `solve_with_held_factor`, one that does not
+/// THE HELD FACTOR: each refreshed tangent is offered to [`NonlinearSystem::factorize`]; a system
+/// that returns a factor serves every held step through it, one that does not
 /// is solved through `solve_system` each step. Same iterate either way -- the factor buys TIME, not
 /// accuracy (the Python caches an `splu` factor for the same reason).
 #[derive(Debug, Clone, Copy)]
@@ -453,7 +457,7 @@ impl<S: NonlinearSystem> IterationStrategy<S> for ModifiedNewtonStrategy {
                 };
             }
             let mut lam = 1.0;
-            match &held {
+            match held.as_mut() {
                 // No Jacobian -> Picard substitution.
                 None => x = system.solve_linear(&st)?,
                 Some(jac) => {
@@ -467,7 +471,7 @@ impl<S: NonlinearSystem> IterationStrategy<S> for ModifiedNewtonStrategy {
                             Some(jac) => Some(HeldTangent::hold(system, jac, true)?),
                             None => None,
                         };
-                        match &held {
+                        match held.as_mut() {
                             None => {
                                 trial = system.solve_linear(&st)?;
                                 accepted = true;
@@ -533,7 +537,7 @@ impl<S: NonlinearSystem> IterationStrategy<S> for NewtonLineSearchStrategy {
 /// The registry name `newton-held-factor`: [`NewtonStrategy`] holding its tangent for 4
 /// iterations (the modified Newton, user ruling 2026-09-26). Mirrors the Python
 /// `HeldFactorNewtonStrategy`, including its factor-once: a refreshed tangent is offered to
-/// [`NonlinearSystem::hold_factor`] and its held steps solve against that factor; a system without
+/// [`NonlinearSystem::factorize`] and its held steps solve against that factor; a system without
 /// one re-solves through `solve_system` -- exactly what the Python does on the golden's plain-array
 /// tangent, so the trajectories are the same.
 #[derive(Debug, Clone, Copy)]

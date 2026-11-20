@@ -232,9 +232,10 @@ pub struct AssembledState<M, P> {
     /// The scalar the convergence test tracks.
     pub total_energy: f64,
     /// The change, as a FRACTION, of state the iterate does not carry (an internal state the
-    /// equation updates between trials). `Some(c)` makes every strategy's convergence also
-    /// require `c < rtol_energy_pct / 100` ([`state_settled`]); `None` reports nothing.
-    pub state_change: Option<f64>,
+    /// equation updates between trials); `0.0` when it has none. Every strategy's convergence also
+    /// requires it below `rtol_energy_pct / 100` ([`state_settled`]). The Python field of the same
+    /// name.
+    pub state_change: f64,
     /// Equation-specific extras the CALLER reads off the final state (e.g. the per-branch
     /// energy/flux/B for MEC); the strategy never inspects it.
     pub payload: Option<P>,
@@ -264,6 +265,9 @@ pub struct IterationResult<M, P> {
     pub iterations: usize,
     pub converged: bool,
 }
+
+/// A held factorization: `rhs -> matrix^{-1} rhs` ([`NonlinearSystem::factorize`]).
+pub type Factor = Box<dyn FnMut(&[f64]) -> Result<Vec<f64>, NonlinearError>>;
 
 /// Shorthand for the state type a given system produces.
 pub type StateOf<S> =
@@ -376,27 +380,17 @@ pub trait NonlinearSystem: Sized {
         rhs: &[f64],
     ) -> Result<Vec<f64>, NonlinearError>;
 
-    /// Factorize `matrix` and HOLD the factor for [`Self::solve_with_held_factor`].
+    /// Factorize `matrix` once and return its solver `rhs -> matrix^{-1} rhs` -- the Python
+    /// `FactorizableSystem.factorize`, same name and shape.
     ///
-    /// `Ok(false)` (the default) offers no held factor, and a strategy that reuses a tangent
-    /// solves through [`Self::solve_system`] instead. Only the held-tangent (modified) Newton
+    /// `Ok(None)` (the default) offers no factor, and a strategy that reuses a tangent solves
+    /// through [`Self::solve_system`] each step instead. Only the held-tangent (modified) Newton
     /// strategies call this, once per tangent they refresh.
     ///
     /// # Errors
     /// As [`Self::solve_system`].
-    fn hold_factor(&mut self, _matrix: &Self::Matrix) -> Result<bool, NonlinearError> {
-        Ok(false)
-    }
-
-    /// Solve against the factor the last [`Self::hold_factor`] returning `true` produced.
-    ///
-    /// # Errors
-    /// [`NonlinearError::UnsupportedSystem`] by default: called only after `hold_factor` held one.
-    fn solve_with_held_factor(&mut self, _rhs: &[f64]) -> Result<Vec<f64>, NonlinearError> {
-        Err(NonlinearError::UnsupportedSystem {
-            strategy: "held-tangent newton",
-            need: "solve_with_held_factor beside a hold_factor that returns true".to_owned(),
-        })
+    fn factorize(&mut self, _matrix: &Self::Matrix) -> Result<Option<Factor>, NonlinearError> {
+        Ok(None)
     }
 
     /// Solve the SECANT system `S y = rhs` for an arbitrary rhs, with BC reduction folded in.

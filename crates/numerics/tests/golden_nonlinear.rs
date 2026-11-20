@@ -145,7 +145,7 @@ impl NonlinearSystem for Affine {
             // fixture's `solve_secant(state, rhs) -> rhs`.
             system_matrix: Some(vec![1.0; x.len()]),
             total_energy,
-            state_change: None,
+            state_change: 0.0,
             payload: Some(x.to_vec()),
         })
     }
@@ -288,7 +288,7 @@ impl NonlinearSystem for Saturating {
         Ok(Some(AssembledState {
             system_matrix: Some(raw.vals.clone()),
             total_energy: raw.total_energy,
-            state_change: None,
+            state_change: 0.0,
             payload: None,
         }))
     }
@@ -355,7 +355,7 @@ impl NonlinearSystem for NuMix {
         Ok(Some(AssembledState {
             system_matrix: Some(raw.vals.clone()),
             total_energy: raw.total_energy,
-            state_change: None,
+            state_change: 0.0,
             payload: None,
         }))
     }

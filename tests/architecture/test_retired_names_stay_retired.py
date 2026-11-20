@@ -20,6 +20,7 @@ RETIRED: dict[str, str] = {
     'mod constraints': 'mod master_slave',
     'time_integrators._step.directional_line_search': 'numerics_lab.line_search.directional_line_search',
     'from numerics_lab.time_integrators import directional_line_search': 'numerics_lab.line_search',
+    'material_change': 'state_change (AssembledState, _has_converged, _StagnationWatch.observe)',
 }
 
 

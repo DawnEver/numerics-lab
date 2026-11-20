@@ -27,7 +27,7 @@ fn run(name: &str, sys: &mut Synth, max_iter: usize) -> Result<ResultOf<Synth>, 
 fn a_state_change_above_the_bar_blocks_every_strategy_from_converging() {
     for name in strategies() {
         let mut sys = affine();
-        sys.state_change = Box::new(|_| Some(1.0));
+        sys.state_change = Box::new(|_| 1.0);
         let res = run(name, &mut sys, 60).unwrap();
         assert!(
             !res.converged,
@@ -44,7 +44,7 @@ fn a_settled_state_change_reproduces_the_unreported_run_exactly() {
         // PLANTED CONTROL: the baseline converges, so the blocking test above can say no.
         assert!(base.converged, "{name} baseline did not converge");
         let mut settled = affine();
-        settled.state_change = Box::new(|_| Some(0.0));
+        settled.state_change = Box::new(|_| 1e-9);
         let res = run(name, &mut settled, 60).unwrap();
         assert_eq!(res.x, base.x, "{name}");
         assert_eq!(res.iterations, base.iterations, "{name}");
@@ -59,7 +59,7 @@ fn convergence_waits_for_the_state_change_to_settle() {
         let base = run(name, &mut plain, 200).unwrap();
         let settle_at = base.iterations * 3 + 5;
         let mut late = affine();
-        late.state_change = Box::new(move |k| Some(if k < settle_at { 1.0 } else { 0.0 }));
+        late.state_change = Box::new(move |k| if k < settle_at { 1.0 } else { 0.0 });
         let res = run(name, &mut late, 200).unwrap();
         assert!(
             res.converged,
@@ -166,9 +166,9 @@ fn a_held_factor_is_factorized_once_and_reused() {
             "{name}: one factor per tangent"
         );
         assert!(
-            sys.held_solves > sys.factorized,
+            sys.held_solves.get() > sys.factorized,
             "{name}: {} solves on {} factors",
-            sys.held_solves,
+            sys.held_solves.get(),
             sys.factorized
         );
         assert_eq!(sys.system_solves, 0, "{name} bypassed the held factor");
@@ -181,7 +181,7 @@ fn a_held_factor_matches_refactorisation() {
         let mut plain = modified();
         let base = run(name, &mut plain, 50).unwrap();
         // PLANTED CONTROL: the plain run never touches the hook.
-        assert_eq!(plain.factorized + plain.held_solves, 0, "{name}");
+        assert_eq!(plain.factorized + plain.held_solves.get(), 0, "{name}");
         assert!(plain.system_solves > 0, "{name}");
         let mut held = modified();
         held.holds_factor = true;

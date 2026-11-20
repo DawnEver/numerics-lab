@@ -11,7 +11,7 @@ type EnergyRule = Box<dyn Fn(&[f64], usize) -> f64>;
 /// `(x, call_index) -> g(x)`, the Picard image.
 type PicardMap = Box<dyn Fn(&[f64], usize) -> Vec<f64>>;
 /// `assembly index -> state_change`.
-type StateChangeRule = Box<dyn Fn(usize) -> Option<f64>>;
+type StateChangeRule = Box<dyn Fn(usize) -> f64>;
 /// `x -> whether the equation refuses to evaluate it`.
 type TrialRule = Box<dyn Fn(&[f64]) -> bool>;
 
@@ -45,10 +45,9 @@ struct Synth {
     unevaluable: TrialRule,
     /// Whether the system offers the held-factor pair.
     holds_factor: bool,
-    held: Option<Vec<f64>>,
     tangents: usize,
     factorized: usize,
-    held_solves: usize,
+    held_solves: std::rc::Rc<std::cell::Cell<usize>>,
     system_solves: usize,
     /// The largest component any assembly was asked to evaluate.
     max_seen: f64,
@@ -73,13 +72,12 @@ impl Synth {
             solved: 0,
             alphas: Vec::new(),
             increments: Vec::new(),
-            state_change: Box::new(|_| None),
+            state_change: Box::new(|_| 0.0),
             unevaluable: Box::new(|_| false),
             holds_factor: false,
-            held: None,
             tangents: 0,
             factorized: 0,
-            held_solves: 0,
+            held_solves: std::rc::Rc::default(),
             system_solves: 0,
             max_seen: f64::NEG_INFINITY,
         }
@@ -180,19 +178,17 @@ impl NonlinearSystem for Synth {
         Ok(self.tangent_diag.clone())
     }
 
-    fn hold_factor(&mut self, matrix: &Self::Matrix) -> Result<bool, NonlinearError> {
+    fn factorize(&mut self, matrix: &Self::Matrix) -> Result<Option<Factor>, NonlinearError> {
         if !self.holds_factor {
-            return Ok(false);
+            return Ok(None);
         }
         self.factorized += 1;
-        self.held = Some(matrix.iter().map(|d| 1.0 / d).collect());
-        Ok(true)
-    }
-
-    fn solve_with_held_factor(&mut self, rhs: &[f64]) -> Result<Vec<f64>, NonlinearError> {
-        self.held_solves += 1;
-        let inv = self.held.as_ref().expect("solved only after hold_factor");
-        Ok(inv.iter().zip(rhs).map(|(i, r)| r * i).collect())
+        let inv: Vec<f64> = matrix.iter().map(|d| 1.0 / d).collect();
+        let solves = std::rc::Rc::clone(&self.held_solves);
+        Ok(Some(Box::new(move |rhs: &[f64]| {
+            solves.set(solves.get() + 1);
+            Ok(inv.iter().zip(rhs).map(|(i, r)| r * i).collect())
+        })))
     }
 
     fn solve_system(

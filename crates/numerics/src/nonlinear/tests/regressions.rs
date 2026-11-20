@@ -388,7 +388,7 @@ impl NonlinearSystem for NuMix {
         Ok(Some(AssembledState {
             system_matrix: Some(raw.vals.clone()),
             total_energy: raw.total_energy,
-            state_change: None,
+            state_change: 0.0,
             payload: None,
         }))
     }
@@ -465,10 +465,9 @@ fn the_budgeted_set_is_every_expensive_entry_point() {
     // switched strategy would not think to look.
     for call in [
         "assemble",
-        "hold_factor",
+        "factorize",
         "solve_linear",
         "solve_system",
-        "solve_with_held_factor",
         "solve_secant",
         "tangent",
     ] {

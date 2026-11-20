@@ -54,9 +54,9 @@ class AssembledState:
         total_energy: the scalar the convergence test tracks.
         payload: equation-specific extras the CALLER reads back off the final state (e.g. the
             per-branch energy/flux/B for MEC); the strategy never inspects it.
-        material_change: relative change of the IRREVERSIBLE material state this assembly's trial
-            implies (the caller's material loop); ``0`` for a system whose materials are all
-            reversible. The material term of :func:`_has_converged`.
+        state_change: relative change of state the iterate does not carry (an internal state the
+            equation updates between trials, e.g. a history-dependent law); ``0`` when there is none.
+            The state term of :func:`_has_converged`; the Rust `AssembledState::state_change`.
         local_values: snapshots of per-element fields, one array per independently
             scaled quantity the caller chooses; Newton checks the worst element.
 
@@ -65,7 +65,7 @@ class AssembledState:
     system_matrix: object
     total_energy: float
     payload: object = None
-    material_change: float = 0.0
+    state_change: float = 0.0
     #: Per-element independently dimensioned fields checked by the local Newton criterion.
     local_values: tuple[np.ndarray, ...] = ()
 
@@ -470,11 +470,11 @@ def _has_converged(
     x_next: np.ndarray,
     rtol_energy_pct: float,
     *,
-    material_change: float,
+    state_change: float,
     residual_ratio: float | None = None,
 ) -> bool:
     """The ONE convergence rule: the equation is satisfied (or its energy settled), the iterate has
-    stopped moving, AND the irreversible material state has stopped changing.
+    stopped moving, AND the state the iterate does not carry has stopped changing.
 
     TWO FIRST HALVES, ONE SHARED REST (2026-09-25, the Newton unification). A strategy that holds
     the RESIDUAL -- the Newton family, which forms it every step anyway -- passes
@@ -484,12 +484,12 @@ def _has_converged(
     (the seed residual, or the source norm when a warm start makes that smaller), so the ratio is
     scale-free in every unit and every family. A fixed-point
     strategy that never forms a residual passes ``None`` and keeps the energy half described below.
-    The increment and material halves are shared, so neither can call a wandering iterate converged.
+    The increment and state halves are shared, so neither can call a wandering iterate converged.
 
-    THE MATERIAL TERM (D4, 2026-09-25). A reversible law (steel B-H) is a function of the iterate,
+    THE STATE TERM (D4, 2026-09-25). A reversible law (steel B-H) is a function of the iterate,
     so the iterate test already sees it settle and its change is ``0``. A one-way remanence clamp
     is NOT: its state is history, and an iterate can sit still for a step while the clamp is still
-    walking down the recoil line. ``material_change`` is that state's relative change on this
+    walking down the recoil line. ``state_change`` is that state's relative change on this
     step, held to the same bar as the increment. It is REQUIRED (keyword, no default) so a strategy
     cannot consult the rule without deciding what it passes.
 
@@ -519,7 +519,7 @@ def _has_converged(
     """
     rtol = rtol_energy_pct / 100.0
     settled = residual_ratio < rtol if residual_ratio is not None else err < rtol_energy_pct
-    return settled and increment_ratio(x, x_next) < rtol and float(material_change) < rtol
+    return settled and increment_ratio(x, x_next) < rtol and float(state_change) < rtol
 
 
 #: Consecutive steps of the stagnation window. MEASURED (2026-09-01): on
@@ -568,13 +568,13 @@ class _StagnationWatch:
         self._errs: deque[float] = deque(maxlen=self._window)
         self._increments: deque[float] = deque(maxlen=self._window)
 
-    def observe(self, err: float, increment: float, material_change: float, /) -> bool:
+    def observe(self, err: float, increment: float, state_change: float, /) -> bool:
         """Record one iteration's pair; True iff the full window is settled AND stationary.
 
-        A stationary INCREMENT is no escape while the irreversible material state is still moving:
-        ``material_change`` must be under the same bar :func:`_has_converged` holds it to.
+        A stationary INCREMENT is no escape while the state the iterate does not carry is still moving:
+        ``state_change`` must be under the same bar :func:`_has_converged` holds it to.
         """
-        if float(material_change) >= self._rtol / 100.0:
+        if float(state_change) >= self._rtol / 100.0:
             self._errs.clear()
             self._increments.clear()
             return False
