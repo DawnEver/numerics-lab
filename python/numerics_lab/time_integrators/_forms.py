@@ -363,10 +363,49 @@ class TransientSolution:
         return self.converged and not self.floor_converged_times
 
 
+class _CscStructure:
+    """One sparsity pattern's CSC structure and its CSR->CSC data permutation, built once.
+
+    A march's jacobian keeps its pattern step after step, so the column structure is reused while
+    the CSR ``indptr``/``indices`` are unchanged. ``csr_tocsc`` moves values without arithmetic, so
+    ``data[permutation]`` is exactly the converted data: the solve stays bit-identical.
+    """
+
+    def __init__(self) -> None:
+        self.clear()
+
+    def clear(self) -> None:
+        self.shape = None
+        self.indptr = self.indices = self.permutation = self.csc_indptr = self.csc_indices = None
+        self.builds = 0
+
+    def convert(self, matrix: sp.csr_matrix) -> sp.csc_matrix:
+        hit = (
+            self.shape == matrix.shape
+            and np.array_equal(self.indptr, matrix.indptr)
+            and np.array_equal(self.indices, matrix.indices)
+        )
+        if not hit:
+            probe = sp.csr_matrix(
+                (np.arange(matrix.nnz, dtype=float), matrix.indices, matrix.indptr), shape=matrix.shape
+            ).tocsc()
+            self.shape, self.indptr, self.indices = matrix.shape, matrix.indptr.copy(), matrix.indices.copy()
+            self.permutation = probe.data.astype(np.intp)
+            self.csc_indptr, self.csc_indices = probe.indptr, probe.indices
+            self.builds += 1
+        data = np.asarray(matrix.data, dtype=float)[self.permutation]
+        return sp.csc_matrix((data, self.csc_indices, self.csc_indptr), shape=self.shape)
+
+
+_CSC_STRUCTURE = _CscStructure()
+
+
 def _default_solve(matrix: object, rhs: NDArray[np.floating]) -> NDArray[np.floating]:
     """Solve ``matrix @ x = rhs`` for a dense ndarray or a scipy-sparse jacobian (physics-blind)."""
     b = np.asarray(rhs, dtype=float)
     if sp.issparse(matrix):
+        if matrix.format == 'csr' and matrix.dtype == np.float64:
+            return np.asarray(solve_linear_system(_CSC_STRUCTURE.convert(matrix), b))
         return np.asarray(solve_linear_system(sp.csc_matrix(matrix), b))
     m = np.asarray(matrix, dtype=float)
     if m.ndim == 0:  # scalar jacobian (1-DOF problem written as a plain number)

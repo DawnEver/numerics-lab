@@ -207,18 +207,21 @@ def _unseen_term_floor(problem, form, u, source):
     # `residual_roundoff_floor` can state that row's floor.
     u_arg, u_dot, u_ddot, t = form.u_arg(u), form.u_dot(u), form.u_ddot(u), form.t_eval
     source = np.abs(source)
-    try:
-        rate = problem.jacobian(u_arg, u_dot, u_ddot, t, DerivativeWeights(0, 1, 0))
-        acceleration = problem.jacobian(u_arg, u_dot, u_ddot, t, DerivativeWeights(0, 0, 1))
-    except (ValueError, ArithmeticError):
-        # A constitutive law may refuse the zero-rate point. The extra floor is then UNKNOWABLE, which this
-        # function answers ``False`` -- Newton iterates on; it never crashes on a diagnostic read.
-        return None
-    return (
-        residual_floor_by_row(rate, u_dot)
-        + residual_floor_by_row(acceleration, np.asarray(u_ddot, dtype=float))
-        + _roundoff_floor(source)
-    )
+    floor = _roundoff_floor(source)
+    # A term whose operand is exactly zero adds ``eps |J| 0 = 0``: its Jacobian is not assembled (a first-order
+    # march's acceleration, numerics-lab #55 -- each assembly is a full Jacobian of the coupled system).
+    for weights, operand in ((DerivativeWeights(0, 1, 0), u_dot), (DerivativeWeights(0, 0, 1), u_ddot)):
+        operand = np.asarray(operand, dtype=float)
+        if not np.any(operand):
+            continue
+        try:
+            tangent = problem.jacobian(u_arg, u_dot, u_ddot, t, weights)
+        except (ValueError, ArithmeticError):
+            # A constitutive law may refuse the zero-rate point. The extra floor is then UNKNOWABLE, which this
+            # function answers ``False`` -- Newton iterates on; it never crashes on a diagnostic read.
+            return None
+        floor = floor + residual_floor_by_row(tangent, operand)
+    return floor
 
 
 #: The stall-polish's ratio threshold (MANUAL-627 (i)): a per-iteration residual ratio

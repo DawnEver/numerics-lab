@@ -13,7 +13,8 @@ import numpy as np
 import pytest
 
 from numerics_lab.formulation import DerivativeWeights
-from numerics_lab.time_integrators._step import ProblemCapabilities, _at_roundoff_floor
+from numerics_lab.time_integrators._forms import _roundoff_floor, residual_floor_by_row
+from numerics_lab.time_integrators._step import ProblemCapabilities, _at_roundoff_floor, _unseen_term_floor
 
 _V, _R, _A1 = 512.3, 0.016, 3.4e6
 
@@ -111,3 +112,38 @@ def test_a_refused_tangent_floor_reads_the_rows_source_once():
     capabilities = ProblemCapabilities.resolve(problem)
     _at_roundoff_floor(problem, tangent, u, form, capabilities, np.array([float(np.spacing(_V))]))
     assert problem.rest_reads == 1
+
+
+class _Counting(_Winding):
+    """The winding, counting the Jacobians the floor assembles."""
+
+    def __init__(self) -> None:
+        self.assembled = []
+
+    def jacobian(self, u, rate, acceleration, time, weights):
+        self.assembled.append((weights.alpha0, weights.alpha1, weights.alpha2))
+        return super().jacobian(u, rate, acceleration, time, weights)
+
+
+def _unseen(problem, u_ddot):
+    form = SimpleNamespace(
+        t_eval=0.0, u_arg=lambda u: u, u_dot=lambda _u: np.array([_V]), u_ddot=lambda _u: np.array([u_ddot])
+    )
+    return _unseen_term_floor(problem, form, np.array([1e-12]), np.array([_V]))
+
+
+def test_a_first_order_march_never_assembles_the_acceleration_jacobian():
+    """#55: a zero acceleration adds eps|J|0 = 0, so its full Jacobian is not assembled -- the floor is unchanged."""
+    problem = _Counting()
+    floor = _unseen(problem, 0.0)
+    assert problem.assembled == [(0, 1, 0)]
+    rate = _Winding().jacobian(None, None, None, 0.0, DerivativeWeights(0, 1, 0))
+    full = residual_floor_by_row(rate, np.array([_V])) + _roundoff_floor(np.array([_V]))
+    np.testing.assert_array_equal(floor, full)
+
+
+def test_a_second_order_march_still_assembles_both():
+    """PLANTED CONTROL: a nonzero acceleration still assembles its Jacobian."""
+    problem = _Counting()
+    _unseen(problem, 2.0)
+    assert problem.assembled == [(0, 1, 0), (0, 0, 1)]
