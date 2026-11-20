@@ -102,6 +102,10 @@ always_run = true
 trunk = 'main'
 sessions = ['integrate/main']
 prune_merged = true
+# Branch limits (user ruling 2026-11-20): land or retire a head past them (dev_lab.dev.branchpolicy).
+max_ahead = 10
+max_idle_hours = 12
+ephemeral = ['pr/*']
 
 [tool.dev_lab.doors]
 BARE-TEST-INVOCATION = "<venv python> -m dev_lab.dev.verify -- <paths>  (the measure door; a full run is the forge producer's; a hand-written pytest line has none)"
