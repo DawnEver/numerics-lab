@@ -27,6 +27,7 @@ _SHIPPED: Final = frozenset({
     'BARE-PYTHON',
     'BARE-TEST-INVOCATION',
     'CI-CRON-NEEDS-CONSENT',  # 2026-11-17 dev-lab integrate/main: an HPC CI-cron verb is the user's
+    'FAMILY-REPO-IS-CHECKED-OUT',  # gained 2026-11-20 with dev-lab 2adcab2c
     'FORGE-WRITE-VIA-CLI',
     'FORGE-WRITE-VIA-GH-API',
     'FORGE-WRITE-VIA-HTTP',
@@ -36,6 +37,7 @@ _SHIPPED: Final = frozenset({
     'GIT-STASH',
     'HEAVY-IS-THE-MAIN-SESSIONS',  # 2026-11-17 dev-lab integrate/main: a subagent runs no heavy or full selection
     'HPC-THROUGH-THE-DOOR',  # gained 2026-11-07 with dev-lab 8c4ab734
+    'MACHINE-FILE-IS-RENDERED',  # gained 2026-11-20 with dev-lab 2adcab2c
     'PUSH-FORCE',
     'PUSH-NO-VERIFY',
     'REMOTE-WRITE-THROUGH-A-DOOR',  # gained 2026-11-08 with dev-lab #313 (agentpolicy)
