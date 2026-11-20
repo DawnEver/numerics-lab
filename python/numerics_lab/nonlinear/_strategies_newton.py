@@ -13,7 +13,7 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import LinearOperator, aslinearoperator, gmres, splu
 
 from numerics_lab.line_search import backtracking, sufficient_decrease
-from numerics_lab.linear import reject_nonfinite_solution
+from numerics_lab.linear import make_preconditioner, reject_nonfinite_solution
 from numerics_lab.linear.native_direct import native_factor
 from numerics_lab.nonlinear._seam import (
     _RTOL_ENERGY_PCT,
@@ -493,8 +493,13 @@ class NewtonKrylovStrategy:
 
     name = 'newton-krylov'
 
-    def __init__(self, eps: float = 1e-7) -> None:
+    def __init__(self, eps: float = 1e-7, preconditioner: str | LinearOperator | None = None) -> None:
+        """*preconditioner*: a :data:`numerics_lab.linear.PRECONDITIONER_REGISTRY` name (``'ilu'``, ``'jacobi'``,
+        ...) built on each step's exact sparse Jacobian, or a caller's :class:`LinearOperator`; ``None`` (the
+        default) keeps the unpreconditioned GMRES, selectable for verification (numerics-lab #36).
+        """
         self.eps = eps
+        self.preconditioner = preconditioner
 
     def solve(
         self, system: NonlinearSystem, *, max_iter: int, rtol_energy_pct: float = _RTOL_ENERGY_PCT
@@ -535,7 +540,14 @@ class NewtonKrylovStrategy:
                         return (r_pert - _r) / eps
 
                     op = aslinearoperator(SimpleNamespace(shape=(n, n), matvec=matvec))
-                dx, info = gmres(op, -r, rtol=1e-8, atol=0.0, maxiter=4 * max(n, 1))
+                # A named preconditioner needs the assembled matrix; a JFNK step has none, so only a caller's
+                # operator applies there.
+                built = (
+                    make_preconditioner(self.preconditioner, op)
+                    if sp.issparse(op) or isinstance(self.preconditioner, LinearOperator)
+                    else None
+                )
+                dx, info = gmres(op, -r, rtol=1e-8, atol=0.0, maxiter=4 * max(n, 1), M=built)
                 if info != 0 or not np.all(np.isfinite(dx)):
                     dx = system.solve_linear(state) - x  # Krylov breakdown -> Picard substitution
             x = x + dx
