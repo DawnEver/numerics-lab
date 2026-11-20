@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import math
 import warnings
+from typing import Literal
 
 import numpy as np
 import scipy.sparse as sp
@@ -39,6 +40,8 @@ from scipy.sparse.linalg import LinearOperator, MatrixRankWarning, onenormest, s
 from numerics_lab.linear.errors import LinearSolveError
 
 __all__ = [
+    'REFINEMENT_CRITERIA',
+    'OwnedFactor',
     'condition_estimate',
     'describe_refinement_trajectory',
     'direct_refinement_correction',
@@ -51,66 +54,6 @@ __all__ = [
     'repair_direct_solution',
     'settle_direct_solution',
 ]
-
-
-def refine_factored_solution(matrix, rhs, initial, solve_correction):
-    """Refine original rows with an owned factor; retain the best backward error."""
-    matrix = sp.csr_matrix(matrix)
-    rhs, best = np.asarray(rhs, dtype=float), np.array(initial, dtype=float, copy=True)
-    if (
-        matrix.shape != (best.size, best.size)
-        or best.ndim != 1
-        or rhs.shape != best.shape
-        or not np.isfinite(matrix.data).all()
-    ):
-        msg = 'factored refinement requires finite square operators and aligned vectors'
-        raise LinearSolveError(msg)
-
-    def measured(value):
-        defect = rhs - matrix @ value
-        magnitude = abs(matrix) @ abs(value) + abs(rhs)
-        if not all(np.isfinite(item).all() for item in (value, defect, magnitude)):
-            msg = 'factored refinement requires finite original row operands'
-            raise LinearSolveError(msg)
-        ratio = np.divide(abs(defect), magnitude, out=np.zeros_like(defect), where=magnitude != 0)
-        ratio[(magnitude == 0) & (defect != 0)] = np.inf
-        return defect, float(np.max(ratio, initial=0))
-
-    defect, score = measured(best)
-    for _ in range(3):
-        # A defect below the smallest NORMAL float has no representable correction: a row-scaled
-        # solve underflows it to zero and refuses. The refined value is final there.
-        if not np.any(abs(defect) >= np.finfo(float).tiny):
-            break
-        correction = np.asarray(solve_correction(defect), dtype=float)
-        if correction.shape != best.shape:
-            msg = 'factored refinement correction must retain actual coordinate shape'
-            raise LinearSolveError(msg)
-        candidate = best + correction
-        next_defect, next_score = measured(candidate)
-        if next_score >= score:
-            break
-        best, defect, score = candidate, next_defect, next_score
-    move = None
-    relative = direct_relative_residual(matrix, rhs, best)
-    if relative is not None and relative > _DIRECT_RESIDUAL_RTOL:
-        # The owned factor may use actual mixed-unit minors or row normalization.
-        # Refactoring the unscaled operator would judge a different numerical solve.
-        compensated = refinement_residual(matrix, rhs, best)
-        forcing = defect if compensated is None else compensated
-        correction = np.asarray(solve_correction(forcing), dtype=float)
-        if correction.shape != best.shape or not np.isfinite(correction).all():
-            msg = 'factored refinement correction must retain finite actual coordinate shape'
-            raise LinearSolveError(msg)
-        # A callback cannot certify itself by returning a small or zero vector.
-        # First retain the original equation guard for A*correction = forcing.
-        reject_unsolved_direct_system(matrix, forcing, correction, 'factored_refinement_correction')
-        correction_norm, solution_norm = float(np.linalg.norm(correction)), float(np.linalg.norm(best))
-        move = (
-            correction_norm / solution_norm if solution_norm != 0 else (0.0 if correction_norm == 0 else float('inf'))
-        )
-    reject_unsolved_direct_system(matrix, rhs, best, 'factored_refinement', refinement=move)
-    return best
 
 
 # Direct-solve singular guard, in TWO stages. The residual is the TRIGGER, never the verdict.
@@ -392,7 +335,7 @@ def refinement_residual(matrix, rhs, x) -> np.ndarray | None:
     return out
 
 
-def direct_refinement_correction(matrix, rhs, x) -> float | None:
+def direct_refinement_correction(matrix, rhs, x, *, factor=None) -> float | None:
     """``||d|| / ||x||`` for one step of iterative refinement, or ``None`` when it cannot speak.
 
     ``d = A^-1 (b - A x)`` estimates the error already present in ``x``, so this is the relative
@@ -408,7 +351,8 @@ def direct_refinement_correction(matrix, rhs, x) -> float | None:
     The factorization is taken fresh here rather than reused from the solve, because the caller
     is ``spsolve``, which discards its factor. That costs a second factorization, and is why this
     is reached ONLY after the residual trigger has already fired -- see
-    :func:`reject_unsolved_direct_system`.
+    :func:`reject_unsolved_direct_system`. A caller that OWNS its factor passes it as ``factor``
+    (anything with ``.solve(v)``) and no SuperLU factorization is taken at all.
     """
     shape = np.shape(matrix)
     if len(shape) != 2 or shape[0] != shape[1]:
@@ -425,12 +369,17 @@ def direct_refinement_correction(matrix, rhs, x) -> float | None:
     try:
         with warnings.catch_warnings():
             warnings.simplefilter('error', MatrixRankWarning)
-            correction = splu(sp.csc_matrix(matrix)).solve(residual_vec)
+            lu = factor if factor is not None else splu(sp.csc_matrix(matrix))
+            correction = np.asarray(lu.solve(residual_vec))
     except (RuntimeError, MatrixRankWarning, ValueError):
         return None
     if not np.all(np.isfinite(correction)):
         return None
     d_norm = float(np.linalg.norm(correction))
+    if d_norm == 0.0 and np.any(residual_vec):
+        # A factor that maps a nonzero residual to a zero step has not solved anything: an exact
+        # factor cannot, so this is an owned solve certifying itself. Unjudged, never a pass.
+        return None
     x_norm = float(np.linalg.norm(xv.ravel()))
     if x_norm == 0.0:
         return 0.0 if d_norm == 0.0 else float('inf')
@@ -471,6 +420,14 @@ def repair_direct_solution(matrix, rhs, x) -> tuple[np.ndarray, tuple[float, ...
     an exactly singular factorization, or a non-finite step returns ``x`` as it came: unjudged is
     not a pass, and the guard is what refuses.
     """
+    columns = np.asarray(rhs.todense() if sp.issparse(rhs) else rhs)
+    if columns.ndim == 2 and columns.shape[1] > 1:
+        return _repair_each_column(matrix, columns, x)
+    return _repair_one_column(matrix, rhs, x)
+
+
+def _repair_one_column(matrix, rhs, x) -> tuple[np.ndarray, tuple[float, ...]]:
+    """:func:`repair_direct_solution` of ONE right-hand side."""
     residual = direct_relative_residual(matrix, rhs, x)
     if residual is None or residual <= _DIRECT_RESIDUAL_RTOL:
         return np.asarray(x), ()
@@ -536,6 +493,19 @@ def repair_direct_solution(matrix, rhs, x) -> tuple[np.ndarray, tuple[float, ...
     return current, tuple(moves)
 
 
+def _repair_each_column(matrix, columns: np.ndarray, x) -> tuple[np.ndarray, tuple[float, ...]]:
+    """An ``(n, k)`` solve repaired COLUMN BY COLUMN, its shape kept (#32: the repair used to flatten it).
+
+    Each column is its own right-hand side, so each is judged and repaired alone; a column the
+    trigger never fires on comes back bit-identical. The moves returned are the WORST column's (the
+    largest last move), so the guard judges the column furthest from an answer.
+    """
+    xs = np.asarray(x.todense() if sp.issparse(x) else x).reshape(columns.shape)
+    repaired = [_repair_one_column(matrix, columns[:, j], xs[:, j]) for j in range(columns.shape[1])]
+    worst = max((moves for _, moves in repaired), key=lambda moves: moves[-1] if moves else -np.inf)
+    return np.stack([vector for vector, _ in repaired], axis=1), worst
+
+
 def _factorize(matrix):
     """``splu`` of *matrix*, or ``None`` when it is not square or is exactly singular.
 
@@ -575,7 +545,7 @@ def condition_estimate(matrix, *, factor=None) -> float | None:
     condition number, and that case is the trajectory's to report, not this one's.
     """
     lu = factor if factor is not None else _factorize(matrix)
-    if lu is None:
+    if lu is None or not getattr(lu, 'has_transpose', True):
         return None
     n = int(np.shape(matrix)[0])
     operator = LinearOperator((n, n), matvec=lu.solve, rmatvec=lambda v: lu.solve(v, 'T'))
@@ -702,7 +672,30 @@ def settle_direct_solution(matrix, rhs, x, backend: str) -> np.ndarray:
     return x
 
 
-def reject_unsolved_direct_system(matrix, rhs, x, backend: str, *, refinement: float | None = None) -> None:
+class OwnedFactor:
+    """A caller's own correction solve seen as a factor: ``solve(v)`` only, no transpose.
+
+    The diagnostics of :func:`reject_unsolved_direct_system` must judge THE CALLER'S numerical
+    solve (row-scaled, mixed-unit minors, a stale factor), not a fresh SuperLU of the unscaled
+    operator -- that would be a different solve, and a second factorization on a path already
+    lost. Without a transpose the 1-norm condition estimate is reported unavailable.
+    """
+
+    has_transpose = False
+
+    def __init__(self, solve) -> None:
+        self._solve = solve
+
+    def solve(self, rhs, trans='N'):
+        if trans != 'N':
+            msg = 'an owned correction solve has no transpose'
+            raise NotImplementedError(msg)
+        return np.asarray(self._solve(np.asarray(rhs, dtype=float)), dtype=float)
+
+
+def reject_unsolved_direct_system(
+    matrix, rhs, x, backend: str, *, refinement: float | None = None, factor=None
+) -> None:
     """Raise :class:`LinearSolveError` when a DIRECT solve did not actually solve its system.
 
     The half of the singular guard that catches FINITE garbage: SuperLU emits a
@@ -726,6 +719,9 @@ def reject_unsolved_direct_system(matrix, rhs, x, backend: str, *, refinement: f
     The message names which of the two was established, both statistics, the ORDER, and what the
     caller can do; a refusal that says "singular" about a solution accurate to 2e-17 sends its
     reader to the wrong place.
+
+    ``factor`` (anything with ``.solve(v)``, e.g. :class:`OwnedFactor`) is the caller's own
+    factorization; when given, every diagnostic uses it and SuperLU is never called.
     """
     residual = direct_relative_residual(matrix, rhs, x)
     if residual is None or residual <= _DIRECT_RESIDUAL_RTOL:
@@ -734,7 +730,7 @@ def reject_unsolved_direct_system(matrix, rhs, x, backend: str, *, refinement: f
     # judging a repaired vector does not pay for a third factorization. It is not a way to supply
     # a friendlier number: the value handed in is the LAST move of the repair, i.e. the one
     # measured on the vector being judged here, and omitting it falls back to measuring it.
-    correction = refinement if refinement is not None else direct_refinement_correction(matrix, rhs, x)
+    correction = refinement if refinement is not None else direct_refinement_correction(matrix, rhs, x, factor=factor)
     if correction is not None and correction <= _DIRECT_REFINEMENT_RTOL:
         return  # ill-CONDITIONED, not unsolved: the residual is cond*eps, the answer is sound.
     n = int(np.shape(matrix)[0])
@@ -764,9 +760,139 @@ def reject_unsolved_direct_system(matrix, rhs, x, backend: str, *, refinement: f
     # the conditioning ceiling -- sized on an n=864 system, which a field solve is
     # under no obligation to stay below. The trajectory separates them and costs one factorization
     # on a solve that is already lost. It changes no verdict: this line is inside the raise.
-    factor = _factorize(matrix)
+    if factor is None:
+        factor = _factorize(matrix)
     msg = (
         f'{msg} '
         f'{describe_refinement_trajectory(refinement_move_trajectory(matrix, rhs, x, factor=factor), condition_estimate(matrix, factor=factor))}'
     )
     raise LinearSolveError(msg)
+
+
+REFINEMENT_CRITERIA = ('backward-error', 'step-size')
+
+
+def refine_factored_solution(
+    matrix,
+    rhs,
+    initial,
+    solve_correction,
+    *,
+    criterion: Literal['backward-error', 'step-size'] = 'backward-error',
+    max_steps: int = 3,
+    step_rtol: float = _DIRECT_REFINEMENT_RTOL,
+    residual_rtol: float = _DIRECT_RESIDUAL_RTOL,
+) -> np.ndarray:
+    """Refine ``initial`` against the ORIGINAL rows with an owned correction solve.
+
+    ``criterion`` decides when refinement stops and what it accepts:
+
+    * ``'backward-error'`` (default): up to ``max_steps`` corrections, each kept only while it
+      LOWERS the componentwise backward error; the best vector is kept. If its normwise residual
+      exceeds ``residual_rtol`` (the trigger), one more correction measures the move and the
+      direct-solve guard judges it. ``step_rtol`` is not consulted.
+    * ``'step-size'``: up to ``max_steps`` corrections, stopping once one moves the answer by
+      ``<= step_rtol`` of itself (relative, 2-norm); then the answer is REFUSED if its normwise
+      residual ``||A x - b|| / ||b||`` exceeds ``residual_rtol``. For an inexact owned solve
+      (a stale or approximate factor), where every correction is wanted, not only a lowering one.
+
+    Raises:
+        ValueError: an option outside its declared domain.
+        LinearSolveError: misaligned or non-finite operands, or an answer the criterion refuses.
+
+    """
+    if criterion not in REFINEMENT_CRITERIA:
+        msg = f'criterion must be one of {REFINEMENT_CRITERIA}, got {criterion!r}'
+        raise ValueError(msg)
+    if isinstance(max_steps, bool) or not isinstance(max_steps, int) or max_steps < 1:
+        msg = f'max_steps must be a positive int, got {max_steps!r}'
+        raise ValueError(msg)
+    for name, value in (('step_rtol', step_rtol), ('residual_rtol', residual_rtol)):
+        if not (math.isfinite(value) and value > 0):
+            msg = f'{name} must be finite and positive, got {value!r}'
+            raise ValueError(msg)
+    matrix = sp.csr_matrix(matrix)
+    rhs, best = np.asarray(rhs, dtype=float), np.array(initial, dtype=float, copy=True)
+    if (
+        matrix.shape != (best.size, best.size)
+        or best.ndim != 1
+        or rhs.shape != best.shape
+        or not np.isfinite(matrix.data).all()
+    ):
+        msg = 'factored refinement requires finite square operators and aligned vectors'
+        raise LinearSolveError(msg)
+
+    def measured(value):
+        defect = rhs - matrix @ value
+        magnitude = abs(matrix) @ abs(value) + abs(rhs)
+        if not all(np.isfinite(item).all() for item in (value, defect, magnitude)):
+            msg = 'factored refinement requires finite original row operands'
+            raise LinearSolveError(msg)
+        ratio = np.divide(abs(defect), magnitude, out=np.zeros_like(defect), where=magnitude != 0)
+        ratio[(magnitude == 0) & (defect != 0)] = np.inf
+        return defect, float(np.max(ratio, initial=0))
+
+    owned = OwnedFactor(solve_correction)
+    if criterion == 'step-size':
+        return _refine_by_step_size(matrix, rhs, best, solve_correction, max_steps, step_rtol, residual_rtol)
+    defect, score = measured(best)
+    for _ in range(max_steps):
+        # A defect below the smallest NORMAL float has no representable correction: a row-scaled
+        # solve underflows it to zero and refuses. The refined value is final there.
+        if not np.any(abs(defect) >= np.finfo(float).tiny):
+            break
+        correction = np.asarray(solve_correction(defect), dtype=float)
+        if correction.shape != best.shape:
+            msg = 'factored refinement correction must retain actual coordinate shape'
+            raise LinearSolveError(msg)
+        candidate = best + correction
+        next_defect, next_score = measured(candidate)
+        if next_score >= score:
+            break
+        best, defect, score = candidate, next_defect, next_score
+    move = None
+    relative = direct_relative_residual(matrix, rhs, best)
+    if relative is not None and relative > residual_rtol:
+        # The owned factor may use actual mixed-unit minors or row normalization.
+        # Refactoring the unscaled operator would judge a different numerical solve.
+        compensated = refinement_residual(matrix, rhs, best)
+        forcing = defect if compensated is None else compensated
+        correction = np.asarray(solve_correction(forcing), dtype=float)
+        if correction.shape != best.shape or not np.isfinite(correction).all():
+            msg = 'factored refinement correction must retain finite actual coordinate shape'
+            raise LinearSolveError(msg)
+        # A callback cannot certify itself by returning a small or zero vector.
+        # First retain the original equation guard for A*correction = forcing.
+        reject_unsolved_direct_system(matrix, forcing, correction, 'factored_refinement_correction', factor=owned)
+        correction_norm, solution_norm = float(np.linalg.norm(correction)), float(np.linalg.norm(best))
+        move = (
+            correction_norm / solution_norm if solution_norm != 0 else (0.0 if correction_norm == 0 else float('inf'))
+        )
+    reject_unsolved_direct_system(matrix, rhs, best, 'factored_refinement', refinement=move, factor=owned)
+    return best
+
+
+def _refine_by_step_size(matrix, rhs, best, solve_correction, max_steps, step_rtol, residual_rtol):
+    """The ``'step-size'`` criterion of :func:`refine_factored_solution` on validated operands."""
+    for _ in range(max_steps):
+        defect = rhs - matrix @ best
+        if not np.any(abs(defect) >= np.finfo(float).tiny):
+            break
+        correction = np.asarray(solve_correction(defect), dtype=float)
+        if correction.shape != best.shape or not np.isfinite(correction).all():
+            msg = 'factored refinement correction must retain finite actual coordinate shape'
+            raise LinearSolveError(msg)
+        best = best + correction
+        if np.linalg.norm(correction) <= step_rtol * np.linalg.norm(best):
+            break
+    defect = rhs - matrix @ best
+    rhs_norm, defect_norm = float(np.linalg.norm(rhs)), float(np.linalg.norm(defect))
+    relative = defect_norm / rhs_norm if rhs_norm else (0.0 if defect_norm == 0 else math.inf)
+    if not relative <= residual_rtol:
+        msg = (
+            f'factored refinement (step-size, max_steps={max_steps}) left a normwise residual '
+            f'{relative:.3e} above residual_rtol={residual_rtol:.3e}; the system is singular or '
+            'the owned solve does not converge on it'
+        )
+        raise LinearSolveError(msg)
+    return best

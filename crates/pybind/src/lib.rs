@@ -5,9 +5,11 @@
 //! `scipy.sparse.coo_matrix` hands out on the Python side, and `numerics::sparse` owns the
 //! COO -> CSR conversion.
 
-use numerics::sparse::{Coo, Csr};
+mod kernels;
+
 use numerics::linear::direct::DirectFactorization;
 use numerics::linear::{check_direct_residual, requires_symmetric, solve_linear_system};
+use numerics::sparse::{Coo, Csr};
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -281,5 +283,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_solve_linear_system, m)?)?;
     m.add_function(wrap_pyfunction!(py_requires_symmetric, m)?)?;
     m.add_class::<PyDirectFactorization>()?;
+    kernels::register(m)?;
+    kernels::register_lti(m)?;
     Ok(())
 }
