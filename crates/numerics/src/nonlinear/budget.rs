@@ -7,10 +7,12 @@ use super::{NonlinearError, NonlinearSystem, RawState, StateOf};
 ///
 /// Declared as data so the scope claim in [`TimeBudgetedSystem`] is checkable instead of merely
 /// asserted.
-pub const BUDGETED_CALLS: [&str; 5] = [
+pub const BUDGETED_CALLS: [&str; 7] = [
     "assemble",
+    "hold_factor",
     "solve_linear",
     "solve_system",
+    "solve_with_held_factor",
     "solve_secant",
     "tangent",
 ];
@@ -152,6 +154,16 @@ impl<S: NonlinearSystem, C: Fn() -> f64> NonlinearSystem for TimeBudgetedSystem<
     ) -> Result<Vec<f64>, NonlinearError> {
         self.check("solve_system")?;
         self.inner.solve_system(matrix, rhs)
+    }
+
+    fn hold_factor(&mut self, matrix: &Self::Matrix) -> Result<bool, NonlinearError> {
+        self.check("hold_factor")?;
+        self.inner.hold_factor(matrix)
+    }
+
+    fn solve_with_held_factor(&mut self, rhs: &[f64]) -> Result<Vec<f64>, NonlinearError> {
+        self.check("solve_with_held_factor")?;
+        self.inner.solve_with_held_factor(rhs)
     }
 
     fn solve_secant(

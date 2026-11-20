@@ -34,15 +34,15 @@ pub mod roots;
 
 pub use budget::{with_time_budget, TimeBudgetedSystem, BUDGETED_CALLS};
 pub use convergence::{
-    energy_error_pct, has_converged, has_converged_residual, increment_ratio, norm, IncrementTrend,
-    StagnationWatch, INCREMENT_RISE_STEPS,
+    energy_error_pct, has_converged, has_converged_residual, increment_ratio, norm, state_settled,
+    IncrementTrend, StagnationWatch, INCREMENT_RISE_STEPS,
 };
 pub use local::{local_change, newton_linear_tolerance, LocalFields};
 pub use newton::{
     ContinuationStrategy, HeldFactorNewtonStrategy, ModifiedNewtonStrategy, NewtonKrylovStrategy,
     NewtonLineSearchStrategy, NewtonStrategy,
 };
-pub use picard::{DampedPicardStrategy, CoefficientDampedPicardStrategy, PicardStrategy};
+pub use picard::{CoefficientDampedPicardStrategy, DampedPicardStrategy, PicardStrategy};
 pub use quasi::{AndersonStrategy, BfgsStrategy, BroydenStrategy, LbfgsStrategy};
 
 // -- The damped-Picard parameters, moved verbatim from `mec/_sparse.py` -----------------------
@@ -168,6 +168,12 @@ pub enum NonlinearError {
     ShapeMismatch { expected: usize, got: usize },
     /// The equation refused for a reason only it can name.
     Equation(String),
+    /// The equation cannot be evaluated at this trial point (outside its domain).
+    ///
+    /// RECOVERABLE where a step length is still being chosen: a line search shrinks the step and
+    /// retries, and refuses with this only when no trial it may take is evaluable. Every strategy
+    /// without a line search aborts with it.
+    TrialNotEvaluable(String),
 }
 
 impl fmt::Display for NonlinearError {
@@ -204,6 +210,11 @@ impl fmt::Display for NonlinearError {
                 write!(f, "expected a vector of length {expected}; got {got}")
             }
             Self::Equation(msg) => write!(f, "the equation refused: {msg}"),
+            Self::TrialNotEvaluable(msg) => write!(
+                f,
+                "the equation cannot be evaluated at the trial point ({msg}); a line search \
+                 shrinks past such a trial, every other strategy stops here"
+            ),
         }
     }
 }
@@ -220,6 +231,10 @@ pub struct AssembledState<M, P> {
     pub system_matrix: Option<M>,
     /// The scalar the convergence test tracks.
     pub total_energy: f64,
+    /// The change, as a FRACTION, of state the iterate does not carry (an internal state the
+    /// equation updates between trials). `Some(c)` makes every strategy's convergence also
+    /// require `c < rtol_energy_pct / 100` ([`state_settled`]); `None` reports nothing.
+    pub state_change: Option<f64>,
     /// Equation-specific extras the CALLER reads off the final state (e.g. the per-branch
     /// energy/flux/B for MEC); the strategy never inspects it.
     pub payload: Option<P>,
@@ -360,6 +375,29 @@ pub trait NonlinearSystem: Sized {
         matrix: &Self::Matrix,
         rhs: &[f64],
     ) -> Result<Vec<f64>, NonlinearError>;
+
+    /// Factorize `matrix` and HOLD the factor for [`Self::solve_with_held_factor`].
+    ///
+    /// `Ok(false)` (the default) offers no held factor, and a strategy that reuses a tangent
+    /// solves through [`Self::solve_system`] instead. Only the held-tangent (modified) Newton
+    /// strategies call this, once per tangent they refresh.
+    ///
+    /// # Errors
+    /// As [`Self::solve_system`].
+    fn hold_factor(&mut self, _matrix: &Self::Matrix) -> Result<bool, NonlinearError> {
+        Ok(false)
+    }
+
+    /// Solve against the factor the last [`Self::hold_factor`] returning `true` produced.
+    ///
+    /// # Errors
+    /// [`NonlinearError::UnsupportedSystem`] by default: called only after `hold_factor` held one.
+    fn solve_with_held_factor(&mut self, _rhs: &[f64]) -> Result<Vec<f64>, NonlinearError> {
+        Err(NonlinearError::UnsupportedSystem {
+            strategy: "held-tangent newton",
+            need: "solve_with_held_factor beside a hold_factor that returns true".to_owned(),
+        })
+    }
 
     /// Solve the SECANT system `S y = rhs` for an arbitrary rhs, with BC reduction folded in.
     ///

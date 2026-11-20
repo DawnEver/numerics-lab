@@ -145,6 +145,7 @@ impl NonlinearSystem for Affine {
             // fixture's `solve_secant(state, rhs) -> rhs`.
             system_matrix: Some(vec![1.0; x.len()]),
             total_energy,
+            state_change: None,
             payload: Some(x.to_vec()),
         })
     }
@@ -250,7 +251,11 @@ impl NonlinearSystem for Saturating {
         x: &[f64],
         _state: &StateOf<Self>,
     ) -> Result<Option<Self::Matrix>, NonlinearError> {
-        Ok(Some(x.iter().map(|&xi| self.nu(xi) + xi * self.dnu(xi)).collect()))
+        Ok(Some(
+            x.iter()
+                .map(|&xi| self.nu(xi) + xi * self.dnu(xi))
+                .collect(),
+        ))
     }
 
     fn solve_system(
@@ -283,6 +288,7 @@ impl NonlinearSystem for Saturating {
         Ok(Some(AssembledState {
             system_matrix: Some(raw.vals.clone()),
             total_energy: raw.total_energy,
+            state_change: None,
             payload: None,
         }))
     }
@@ -349,6 +355,7 @@ impl NonlinearSystem for NuMix {
         Ok(Some(AssembledState {
             system_matrix: Some(raw.vals.clone()),
             total_energy: raw.total_energy,
+            state_change: None,
             payload: None,
         }))
     }
@@ -464,7 +471,11 @@ fn the_saturating_fixture_walks_the_python_recovery() {
         for (k, ((alpha, err, inc), w)) in sys.trace.iter().zip(want_trace).enumerate() {
             close_opt(*alpha, &w["alpha"], &format!("{where_}.trace[{k}].alpha"));
             close_opt(*err, &w["err"], &format!("{where_}.trace[{k}].err"));
-            close_opt(*inc, &w["increment"], &format!("{where_}.trace[{k}].increment"));
+            close_opt(
+                *inc,
+                &w["increment"],
+                &format!("{where_}.trace[{k}].increment"),
+            );
         }
         assert_eq!(sys.trace.len(), want_trace.len(), "{where_}: trace length");
         assert_eq!(
@@ -472,7 +483,11 @@ fn the_saturating_fixture_walks_the_python_recovery() {
             want["iterations"].as_u64().expect("iterations") as usize,
             "{where_}: iteration count"
         );
-        assert_eq!(res.converged, want["converged"].as_bool().expect("converged"), "{where_}: converged");
+        assert_eq!(
+            res.converged,
+            want["converged"].as_bool().expect("converged"),
+            "{where_}: converged"
+        );
         let want_x = want["x"].as_array().expect("x is an array");
         for (k, (got, w)) in res.x.iter().zip(want_x).enumerate() {
             close_opt(*got, w, &format!("{where_}.x[{k}]"));
@@ -495,20 +510,47 @@ fn coefficient_damped_mixes_the_raw_arrays_the_way_the_python_does() {
         rtol_energy_pct: g["rtol_energy_pct"].as_f64().expect("rtol"),
         seed: None,
     };
-    let strategy: Box<dyn IterationStrategy<NuMix>> = get_strategy(Some("coefficient-damped")).unwrap();
-    let res = strategy.solve(&mut sys, &opts).expect("coefficient-damped runs");
+    let strategy: Box<dyn IterationStrategy<NuMix>> =
+        get_strategy(Some("coefficient-damped")).unwrap();
+    let res = strategy
+        .solve(&mut sys, &opts)
+        .expect("coefficient-damped runs");
 
     let want = nu["folded"].as_array().expect("folded is an array");
-    assert_eq!(sys.folded.len(), want.len(), "coefficient_damped: fold count");
+    assert_eq!(
+        sys.folded.len(),
+        want.len(),
+        "coefficient_damped: fold count"
+    );
     for (k, ((vals, source), w)) in sys.folded.iter().zip(want).enumerate() {
-        close_opt(*vals, &w[0], &format!("coefficient_damped.folded[{k}].vals"));
-        close_opt(*source, &w[1], &format!("coefficient_damped.folded[{k}].source"));
+        close_opt(
+            *vals,
+            &w[0],
+            &format!("coefficient_damped.folded[{k}].vals"),
+        );
+        close_opt(
+            *source,
+            &w[1],
+            &format!("coefficient_damped.folded[{k}].source"),
+        );
     }
     let want_trace = nu["trace"].as_array().expect("trace is an array");
-    assert_eq!(sys.trace.len(), want_trace.len(), "coefficient_damped: trace length");
+    assert_eq!(
+        sys.trace.len(),
+        want_trace.len(),
+        "coefficient_damped: trace length"
+    );
     for (k, ((alpha, err, inc), w)) in sys.trace.iter().zip(want_trace).enumerate() {
-        close_opt(*alpha, &w["alpha"], &format!("coefficient_damped.trace[{k}].alpha"));
-        close_opt(*err, &w["err"], &format!("coefficient_damped.trace[{k}].err"));
+        close_opt(
+            *alpha,
+            &w["alpha"],
+            &format!("coefficient_damped.trace[{k}].alpha"),
+        );
+        close_opt(
+            *err,
+            &w["err"],
+            &format!("coefficient_damped.trace[{k}].err"),
+        );
         close_opt(
             *inc,
             &w["increment"],

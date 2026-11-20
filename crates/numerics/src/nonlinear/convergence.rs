@@ -82,6 +82,15 @@ pub fn has_converged_residual(
     residual_ratio < rtol && increment_ratio(x, x_next) < rtol
 }
 
+/// The state-change half of the ONE rule: an equation's reported
+/// [`super::AssembledState::state_change`] (a fraction) is below `rtol_energy_pct / 100`, or none
+/// is reported. ANDed onto every strategy's verdict, the stagnation break included -- a strategy
+/// clears its [`StagnationWatch`] while this is false, as the iterate alone cannot see that state.
+#[must_use]
+pub fn state_settled(state_change: Option<f64>, rtol_energy_pct: f64) -> bool {
+    state_change.is_none_or(|c| c < rtol_energy_pct / 100.0)
+}
+
 /// The stagnation break, consulted NEXT TO [`has_converged`] — never instead of it.
 ///
 /// [`has_converged`] is the FAST break: energy settled AND the increment below `rtol/100`, checked
