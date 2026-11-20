@@ -7,8 +7,9 @@ use super::{NonlinearError, NonlinearSystem, RawState, StateOf};
 ///
 /// Declared as data so the scope claim in [`TimeBudgetedSystem`] is checkable instead of merely
 /// asserted.
-pub const BUDGETED_CALLS: [&str; 5] = [
+pub const BUDGETED_CALLS: [&str; 6] = [
     "assemble",
+    "factorize",
     "solve_linear",
     "solve_system",
     "solve_secant",
@@ -152,6 +153,14 @@ impl<S: NonlinearSystem, C: Fn() -> f64> NonlinearSystem for TimeBudgetedSystem<
     ) -> Result<Vec<f64>, NonlinearError> {
         self.check("solve_system")?;
         self.inner.solve_system(matrix, rhs)
+    }
+
+    fn factorize(
+        &mut self,
+        matrix: &Self::Matrix,
+    ) -> Result<Option<super::Factor>, NonlinearError> {
+        self.check("factorize")?;
+        self.inner.factorize(matrix)
     }
 
     fn solve_secant(

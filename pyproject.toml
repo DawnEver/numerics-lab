@@ -47,6 +47,10 @@ markers = [
     "unit: fast unit tests",
 ]
 
+# The extras every environment of this repo installs (dev_lab.dev.dep reads it): dev_lab and the test kit live
+# only in `dev`, so a relock without it drops them and the family renderer cannot run.
+[tool.dev_lab.dep]
+extras = ["dev"]
 
 [tool.dev_lab.parts]
 output = "output/logs"
@@ -99,3 +103,8 @@ dev-lab = { git = "https://github.com/DawnEver/dev-lab.git", branch = "integrate
 # What the family renderers read from this repo (dev_lab.dev.famfiles.RENDERERS); a relock re-runs each one due.
 deltas = "tests/architecture/_famconfig.py"
 adoption = "scripts/deny_rules.py"
+
+# Who reviews this repo's PRs: the family's isolated judge host (user ruling 2026-11-10), gated on GitHub by the
+# family App's review/judge check run. Keys and defaults: dev_lab.dev.forgereview_declared.
+[tool.dev_lab.review]
+judge_app = 5619495

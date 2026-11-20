@@ -432,6 +432,16 @@ def _sparse_joint_border(
         # The rows already shared stay in the set, driven to zero together: shared one at a time,
         # the residual of a solid body's dependent net-current row only moved to its sibling bodies.
         selected_bars = _row_bars(matrix, selected_rows, trial, rhs, row_scale, tolerance)
+        if state_directions is not None:
+            # A supplied range OWNS the state: the share moves rates only. The eliminated rows that
+            # solve for a STATE (an air coordinate's state row, every stored-charge row) take a zero
+            # bar, i.e. exact. Shared through them, the state left the range and was reset below,
+            # and the rows that had absorbed the share lost it (JMAG cond03 re-admission at 156 us:
+            # field states moved 1.7e-10, field rows then 250x their bars).
+            solves_state = np.r_[
+                ~np.isin(indices, stored_rows[stored_positions]), np.ones(len(stored_positions), dtype=bool)
+            ]
+            selected_bars[: len(solves_state)][solves_state] = 0.0
         shared = np.zeros(len(rows), dtype=bool)
         for _ in range(4):
             trial[remaining_columns] = answer

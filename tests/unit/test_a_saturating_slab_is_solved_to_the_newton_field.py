@@ -23,7 +23,8 @@ import pytest
 import scipy.sparse as sp
 from scipy.sparse.linalg import spsolve
 
-from numerics_lab.nonlinear import AssembledState, get_strategy
+from numerics_lab.nonlinear import AssembledState, get_strategy, strategy_stops_on_residual
+from numerics_lab.nonlinear import _strategies_newton as newton
 
 _RTOL_ENERGY_PCT = 0.01  # the production fixed-point bar: increment and field held to 1e-4
 _FIELD_BAR = _RTOL_ENERGY_PCT / 100.0
@@ -174,3 +175,46 @@ def test_a_globalised_strategy_converges_to_the_newton_field(name, j):
     result = get_strategy(name).solve(_SaturatingSlab(j=j), max_iter=_MAX_ITER, rtol_energy_pct=_RTOL_ENERGY_PCT)
     assert result.converged
     assert _field_error(result.x, reference) < _FIELD_BAR
+
+
+def _rule_inputs(monkeypatch, stop):
+
+    seen, rule = [], newton._has_converged
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs['residual_ratio'])
+        return rule(*args, **kwargs)
+
+    monkeypatch.setattr(newton, '_has_converged', spy)
+    result = newton.NewtonStrategy(stop=stop).solve(_SaturatingSlab(j=3.0), max_iter=_MAX_ITER, rtol_energy_pct=1e-6)
+    return result, seen
+
+
+def test_the_default_newton_stop_is_the_residual_and_the_energy_stop_is_declared(monkeypatch):
+
+    assert newton.NewtonStrategy().stop_rule == 'residual'
+    assert strategy_stops_on_residual('newton')
+    _, residual_seen = _rule_inputs(monkeypatch, 'residual')
+    assert residual_seen and all(ratio is not None for ratio in residual_seen)
+    # PLANTED CONTROL: the spy can say no -- the energy stop hands the rule no residual.
+    _, energy_seen = _rule_inputs(monkeypatch, 'energy')
+    assert energy_seen and all(ratio is None for ratio in energy_seen)
+
+
+def test_the_energy_stopped_newton_holds_the_residual_stopped_field(monkeypatch):
+    reference = _newton_field(j=3.0)
+    result, _ = _rule_inputs(monkeypatch, 'energy')
+    assert result.converged
+    assert _field_error(result.x, reference) < _FIELD_BAR
+
+
+def test_an_undeclared_newton_stop_raises():
+
+    with pytest.raises(ValueError, match='stop must be one of'):
+        newton.NewtonStrategy(stop='increment')
+
+
+def test_the_held_factor_newton_carries_the_same_declared_stop():
+    assert newton.HeldFactorNewtonStrategy().stop_rule == 'residual'
+    held = newton.HeldFactorNewtonStrategy(refactor_every=3, stop='energy')
+    assert (held.stop_rule, held.refactor_every) == ('energy', 3)

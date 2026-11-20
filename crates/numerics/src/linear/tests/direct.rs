@@ -206,6 +206,39 @@ fn a_symmetric_indefinite_operator_is_refused_by_cholesky_and_solved_by_lu() {
 }
 
 #[test]
+fn one_indefinite_refactor_does_not_pin_the_pattern_to_lu() {
+    // Issue #39: a march that meets ONE indefinite iterate must return to Cholesky on every later
+    // SPD one on the same pattern. The planted control: a nonsymmetric value set still goes LU.
+    let (a, b) = spd_system(20);
+    let mut indefinite = a.clone();
+    for r in 0..20 {
+        for k in indefinite.indptr()[r] as usize..indefinite.indptr()[r + 1] as usize {
+            if indefinite.indices()[k] as usize == r && r % 2 == 1 {
+                indefinite.values_mut()[k] = -indefinite.values()[k];
+            }
+        }
+    }
+    let mut doubled = a.clone();
+    doubled.values_mut().iter_mut().for_each(|v| *v *= 2.0);
+    let mut f = DirectFactorization::new(&a).unwrap();
+    let kinds: Vec<&str> = [&indefinite, &a, &doubled]
+        .into_iter()
+        .map(|m| f.refactor(m).unwrap().as_str())
+        .collect();
+    assert_eq!(kinds.join(" "), "lu cholesky cholesky");
+    assert_eq!(f.held(), vec![FactorKind::Cholesky]);
+    let x = f.solve(&doubled, &b).unwrap();
+    assert!(residual(&doubled, &x, &b) < 1e-13);
+    let mut skew = a.clone();
+    let k = skew.indptr()[5] as usize;
+    skew.values_mut()[k] *= 1.25;
+    assert_eq!(f.refactor(&skew).unwrap(), FactorKind::Lu);
+    assert_eq!(f.held(), vec![FactorKind::Lu]);
+    let x = f.solve(&skew, &b).unwrap();
+    assert!(residual(&skew, &x, &b) < 1e-13);
+}
+
+#[test]
 fn one_factorisation_back_substitutes_several_right_hand_sides() {
     let (a, b) = nonsymmetric_system(25);
     let mut f = DirectFactorization::new(&a).unwrap();

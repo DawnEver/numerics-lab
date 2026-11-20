@@ -10,6 +10,10 @@ use super::*;
 type EnergyRule = Box<dyn Fn(&[f64], usize) -> f64>;
 /// `(x, call_index) -> g(x)`, the Picard image.
 type PicardMap = Box<dyn Fn(&[f64], usize) -> Vec<f64>>;
+/// `assembly index -> state_change`.
+type StateChangeRule = Box<dyn Fn(usize) -> f64>;
+/// `x -> whether the equation refuses to evaluate it`.
+type TrialRule = Box<dyn Fn(&[f64]) -> bool>;
 
 /// A synthetic [`NonlinearSystem`] driven by two closures: the energy it reports and the Picard
 /// image it returns. Everything real physics supplies, reduced to the two things a strategy reads.
@@ -34,6 +38,19 @@ struct Synth {
     solved: usize,
     alphas: Vec<f64>,
     increments: Vec<f64>,
+    /// `assembly index -> state_change` reported on each assembled state.
+    state_change: StateChangeRule,
+    /// A trial `x` the equation cannot evaluate: `assemble` refuses it with
+    /// [`NonlinearError::TrialNotEvaluable`].
+    unevaluable: TrialRule,
+    /// Whether the system offers the held-factor pair.
+    holds_factor: bool,
+    tangents: usize,
+    factorized: usize,
+    held_solves: std::rc::Rc<std::cell::Cell<usize>>,
+    system_solves: usize,
+    /// The largest component any assembly was asked to evaluate.
+    max_seen: f64,
 }
 
 impl Synth {
@@ -55,6 +72,14 @@ impl Synth {
             solved: 0,
             alphas: Vec::new(),
             increments: Vec::new(),
+            state_change: Box::new(|_| 0.0),
+            unevaluable: Box::new(|_| false),
+            holds_factor: false,
+            tangents: 0,
+            factorized: 0,
+            held_solves: std::rc::Rc::default(),
+            system_solves: 0,
+            max_seen: f64::NEG_INFINITY,
         }
     }
 
@@ -115,11 +140,17 @@ impl NonlinearSystem for Synth {
     }
 
     fn assemble(&mut self, x: &[f64]) -> Result<StateOf<Self>, NonlinearError> {
+        self.max_seen = x.iter().copied().fold(self.max_seen, f64::max);
+        if (self.unevaluable)(x) {
+            return Err(NonlinearError::TrialNotEvaluable(format!("x = {x:?}")));
+        }
         let total_energy = (self.energy)(x, self.assembled);
+        let state_change = (self.state_change)(self.assembled);
         self.assembled += 1;
         Ok(AssembledState {
             system_matrix: Some(vec![1.0; self.n]),
             total_energy,
+            state_change,
             payload: Some(x.to_vec()),
         })
     }
@@ -143,7 +174,21 @@ impl NonlinearSystem for Synth {
         _x: &[f64],
         _state: &StateOf<Self>,
     ) -> Result<Option<Self::Matrix>, NonlinearError> {
+        self.tangents += 1;
         Ok(self.tangent_diag.clone())
+    }
+
+    fn factorize(&mut self, matrix: &Self::Matrix) -> Result<Option<Factor>, NonlinearError> {
+        if !self.holds_factor {
+            return Ok(None);
+        }
+        self.factorized += 1;
+        let inv: Vec<f64> = matrix.iter().map(|d| 1.0 / d).collect();
+        let solves = std::rc::Rc::clone(&self.held_solves);
+        Ok(Some(Box::new(move |rhs: &[f64]| {
+            solves.set(solves.get() + 1);
+            Ok(inv.iter().zip(rhs).map(|(i, r)| r * i).collect())
+        })))
     }
 
     fn solve_system(
@@ -151,6 +196,7 @@ impl NonlinearSystem for Synth {
         matrix: &Self::Matrix,
         rhs: &[f64],
     ) -> Result<Vec<f64>, NonlinearError> {
+        self.system_solves += 1;
         if matrix.len() != rhs.len() {
             return Err(NonlinearError::ShapeMismatch {
                 expected: matrix.len(),
@@ -317,5 +363,6 @@ fn the_default_bar_is_newton_rtol_for_a_residual_stop_and_the_fixed_point_one_ot
     }
 }
 
+mod hooks;
 mod local;
 mod regressions;

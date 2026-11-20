@@ -20,10 +20,13 @@ from deny_rules import ADOPTION  # noqa: E402
 #: THE FLOOR, BY NAME: the rules numerics-lab ships (adopted with dev-lab c9eaa7f).
 _SHIPPED: Final = frozenset({
     # Gained 2026-11-07 with dev-lab #311 (consent credentials): an agent never types a consent code.
+    'COMMIT-HOOKS-RUN',  # 2026-11-13 dev-lab 61560e40
     'CONSENT-CODE-FROM-THE-USER',  # 2026-11-08 dev-lab #325: replaces CONSENT-CODE-NEVER-TYPED (user ruling)
+    'BACKGROUND-SHELL-IS-BOUNDED',  # 2026-11-17 dev-lab integrate/main: a background shell starts with its bound
     'BARE-INTERPRETER',
     'BARE-PYTHON',
     'BARE-TEST-INVOCATION',
+    'CI-CRON-NEEDS-CONSENT',  # 2026-11-17 dev-lab integrate/main: an HPC CI-cron verb is the user's
     'FORGE-WRITE-VIA-CLI',
     'FORGE-WRITE-VIA-GH-API',
     'FORGE-WRITE-VIA-HTTP',
@@ -31,6 +34,7 @@ _SHIPPED: Final = frozenset({
     'GIT-RESET',
     'GIT-STAGE-EVERYTHING',
     'GIT-STASH',
+    'HEAVY-IS-THE-MAIN-SESSIONS',  # 2026-11-17 dev-lab integrate/main: a subagent runs no heavy or full selection
     'HPC-THROUGH-THE-DOOR',  # gained 2026-11-07 with dev-lab 8c4ab734
     'PUSH-FORCE',
     'PUSH-NO-VERIFY',
@@ -41,6 +45,7 @@ _SHIPPED: Final = frozenset({
     'REPORTS-LIVE-IN-MEMORY',
     'STATUS-VIA-DOORS',
     'SUBAGENT-NO-PUSH',
+    'TRACKED-CITES-NO-EPHEMERAL',  # 2026-11-17 dev-lab #670: the journal door folded into the deny engine
     'TREE-HAS-A-LIVE-RUN',
     'WORKTREE-BASE-IS-EXPLICIT',
     'WORKTREES-STAY-INSIDE',

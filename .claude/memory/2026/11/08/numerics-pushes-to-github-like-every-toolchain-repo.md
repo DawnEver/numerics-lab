@@ -6,7 +6,7 @@ metadata:
 ---
 # numerics-lab pushes to GitHub like every toolchain repo (2026-11-08)
 
-- User, 2026-11-08: "numerics-lab 等等 工具链仓库都在 github 都是通过 pr 合并的逻辑啊？！" -- every toolchain repo
+- User, 2026-11-08: "numerics-lab and the other toolchain repos are all on github, and the logic is that they all merge via PR?!" (user, translated) -- every toolchain repo
   (dev-lab, lab-commons, ai-lab, numerics-lab, optimi-lab, learn-lab) publishes `pr/*` to GitHub DawnEver and lands by PR.
 - Misleading state found: the main checkout's machine-local `.git/config` carried
   `remote.origin.pushurl = DISABLED-push-from-the-private-history-repo` (and `remote.gitea-private.pushurl =
@@ -22,3 +22,5 @@ metadata:
   `git config --unset remote.origin.pushurl`. KEEP `remote.gitea-private.pushurl` disabled: the private history is
   read-only and is never pushed anywhere, nor deleted, nor rewritten.
 - No other toolchain repo carries a disabled pushurl (dev-lab, lab-commons, ai-lab, optimi-lab checked 2026-11-08).
+
+> Amended 2026-11-17: translated to English (D26) -- approved: "(user, translated) .claude/memory/ and .claude/tasks/ should also be English only"

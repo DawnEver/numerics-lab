@@ -10,6 +10,8 @@ rust-version.workspace = true
 # Direct sparse LU (ruling D4 -- scipy may be replaced). Pure Rust, no SuiteSparse build step.
 # It is faer that raises the workspace rust-version floor to 1.84; see ../../Cargo.toml.
 faer = { version = "0.24.4", default-features = false, features = ["std"] }
+# Block condensation runs one task per independent block (`linear::condense`).
+rayon = "1"
 
 [dev-dependencies]
 serde_json = { version = "1", features = ["float_roundtrip"] }

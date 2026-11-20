@@ -28,7 +28,8 @@ _HOOKS: Final = TestPath('tests/architecture/test_the_hooks_are_the_family_base.
 _MECHANISMS: Final = {
     'PROJECT-FILES-HAVE-ONE-SOURCE': (TestPath('tests/architecture/test_the_family_config_is_rendered.py'),),
     'RETIRED-NAMES-REGISTERED': (TestPath('tests/architecture/test_retired_names_stay_retired.py'),),
-    'FORMATS-UPGRADE-ON-READ': (TestPath('tests/unit/test_an_older_checkpoint_file_upgrades_on_read.py'),),
+    # Adopted 2026-11-13 (user ruling D51): the checkpoint reader keeps only the current envelope.
+    'FORMATS-MIGRATE-ONCE': (TestPath('tests/unit/test_an_older_checkpoint_file_is_refused_by_name.py'),),
     'NO-LAZY-IMPORT': (LintRule(code='PLC0415'),),
     'ONE-BRANCH-PER-SESSION': (_BRANCHES,),
     'MERGE-OR-DELETE': (_BRANCHES,),
@@ -38,6 +39,7 @@ _MECHANISMS: Final = {
     'SESSION-HISTORY-ONLY-GROWS': (_HOOKS,),
     'INTEGRATION-IS-MERGES-ONLY': (_HOOKS,),
     'ORIGIN-HOLDS-ONLY-DECLARED-BRANCHES': (_HOOKS,),  # the same `session-branch` pre-push row (dev-lab ea264f8)
+    'PUSHED-HEAD-CARRIES-ITS-TASK': (_HOOKS,),  # adopted 2026-11-18: the same `session-branch` pre-push row
     'LATEST-DEPENDENCIES': (_HOOKS,),
     # Adopted 2026-10-21 with the lab-commons a04f7ab relock: both are the forge's server-side steps
     # (dev_lab.dev.forgemerge, dev_lab.dev.forgereview) over a repo whose integrator table declares
@@ -64,6 +66,9 @@ _MECHANISMS: Final = {
     'NO-PUSH-ONTO-A-CLOSED-PR': (TestPath('pyproject.toml'),),
     # Adopted 2026-11-07 with dev-lab #304: the base pre-push row `pr-current` this pyproject's hooks table runs.
     'PR-HEAD-IS-CURRENT': (TestPath('pyproject.toml'),),
+    # Adopted 2026-11-13 (user ruling): the base pre-push row `milestone-base` this pyproject's hooks table runs.
+    'BASE-HOLDS-THE-MILESTONE': (TestPath('pyproject.toml'),),
+    'VERSION-TAG-NEEDS-APPROVAL': (TestPath('pyproject.toml'),),
     # Adopted 2026-10-24 with dev-lab 1d74f38: the October summary is the first month this tree holds.
     'MONTHLY-PLANS-CARRIED': (TestPath('tests/architecture/test_every_month_carries_its_plans.py'),),
     # Adopted 2026-10-26 with dev-lab c9eaa7f: the agent guard ships in every family repo; the rendered
@@ -79,8 +84,18 @@ _MECHANISMS: Final = {
             # wiring (pinned live by the same test) runs `dev_lab.dev.pushwatch` on PostToolUse.
             'RECURSIVE-DELETE',
             'PUSHED-HEAD-IS-WATCHED',
+            'TASK-HEARS-ITS-FORGE-EVENTS',
             # Adopted 2026-11-07 with dev-lab 8c4ab734: the guard refuses a write outside the checkout.
             'WRITES-STAY-IN-THE-TREE',
+            # Adopted 2026-11-13 (user ruling): the same live wiring runs `dev_lab.dev.walls` post-tool and stop.
+            'WALLS-ARE-RECORDED',
+            # Adopted 2026-11-17 with dev-lab integrate/main (#670): the engine refuses a journal line citing an
+            # ephemeral path, and a subagent's heavy or full selection, each by its own rule.
+            'TRACKED-CITES-NO-EPHEMERAL',
+            'HEAVY-IS-THE-MAIN-SESSIONS',
+            # Adopted 2026-11-18 with the {python} relock: the rendered wiring refuses a hook row over the
+            # five-second budget unless detached, and this live-guard test fails when the wiring differs.
+            'HOOK-UNDER-FIVE-SECONDS',
         ),
         (TestPath('tests/architecture/test_the_agent_guard_is_live.py'),),
     ),
@@ -106,7 +121,6 @@ _ABSENT: Final = frozenset({
     'DOCS-SPLIT', 'MEMORY-SHAPE', 'INJECTED-DOC-WIDTH-CEILING',
     # Code placement and scratch: one python/ and one tests/ tree, no scratch.
     'CODE-IN-CODE-ROOTS', 'SCRATCH-IS-NEVER-COMMITTED', 'STRAY-FILE-REFUSED', 'SPLIT-BY-CONCEPT',
-    'TRACKED-CITES-NO-EPHEMERAL',
     # Meta-rules about guards: carried by the family's shared bodies.
     'DECLARATION-LIES', 'PLANTED-CONTROL', 'FLOOR-ON-EVERY-SCAN', 'ESCAPE-HATCH-CEILING', 'RATCHET-TWO-SIDES',
     'NAMED-SETS-NOT-COUNTS', 'XFAIL-NOT-SKIP', 'MODULE-SIZE-ALARM',

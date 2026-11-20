@@ -207,18 +207,21 @@ def _unseen_term_floor(problem, form, u, source):
     # `residual_roundoff_floor` can state that row's floor.
     u_arg, u_dot, u_ddot, t = form.u_arg(u), form.u_dot(u), form.u_ddot(u), form.t_eval
     source = np.abs(source)
-    try:
-        rate = problem.jacobian(u_arg, u_dot, u_ddot, t, DerivativeWeights(0, 1, 0))
-        acceleration = problem.jacobian(u_arg, u_dot, u_ddot, t, DerivativeWeights(0, 0, 1))
-    except (ValueError, ArithmeticError):
-        # A constitutive law may refuse the zero-rate point. The extra floor is then UNKNOWABLE, which this
-        # function answers ``False`` -- Newton iterates on; it never crashes on a diagnostic read.
-        return None
-    return (
-        residual_floor_by_row(rate, u_dot)
-        + residual_floor_by_row(acceleration, np.asarray(u_ddot, dtype=float))
-        + _roundoff_floor(source)
-    )
+    floor = _roundoff_floor(source)
+    # A term whose operand is exactly zero adds ``eps |J| 0 = 0``: its Jacobian is not assembled (a first-order
+    # march's acceleration, numerics-lab #55 -- each assembly is a full Jacobian of the coupled system).
+    for weights, operand in ((DerivativeWeights(0, 1, 0), u_dot), (DerivativeWeights(0, 0, 1), u_ddot)):
+        operand = np.asarray(operand, dtype=float)
+        if not np.any(operand):
+            continue
+        try:
+            tangent = problem.jacobian(u_arg, u_dot, u_ddot, t, weights)
+        except (ValueError, ArithmeticError):
+            # A constitutive law may refuse the zero-rate point. The extra floor is then UNKNOWABLE, which this
+            # function answers ``False`` -- Newton iterates on; it never crashes on a diagnostic read.
+            return None
+        floor = floor + residual_floor_by_row(tangent, operand)
+    return floor
 
 
 #: The stall-polish's ratio threshold (MANUAL-627 (i)): a per-iteration residual ratio
@@ -447,7 +450,9 @@ class RowAcceptance:
         ):
             return False
         zero = np.zeros_like(np.asarray(u_dot, dtype=float))
-        scale = np.abs(np.asarray(problem.residual(u_arg, zero, zero, t), dtype=float))
+        # ``F(u, 0)``, read ONCE: the scale takes its magnitude, the homogeneity screen its sign.
+        source = np.asarray(problem.residual(u_arg, zero, zero, t), dtype=float).ravel()
+        scale = np.abs(source)
         magnitudes = []
         for weights, operand in ((DerivativeWeights(1, 0, 0), u_arg), (DerivativeWeights(0, 1, 0), u_dot)):
             matrix = problem.jacobian(u_arg, u_dot, u_ddot, t, weights)
@@ -462,11 +467,17 @@ class RowAcceptance:
         if declared is not None:
             resolved = np.maximum(resolved, np.abs(np.asarray(declared(u), dtype=float)).reshape(resolved.shape))
         built = abs(form.weights.alpha1.real) * resolved
-        floor = FLOOR_SAFETY * float(np.finfo(float).eps) * np.asarray(magnitudes[1] @ built).ravel()
+        eps = FLOOR_SAFETY * float(np.finfo(float).eps)
+        # An ALGEBRAIC row reads its unknowns through ``|F_u|``: it resolves no finer than their declared resolution
+        # either (an ideal transformer's idle current, placed by ``i0 + i1 - i2 = 0`` with i0, i2 ~ 3.7 A, is known
+        # to ~1e-15 A however small it is; barred at face value, Newton spun to its ceiling every step).
+        floor = eps * np.maximum(
+            np.asarray(magnitudes[1] @ built).ravel(), np.asarray(magnitudes[0] @ resolved).ravel()
+        )
         relative = self.tol * scale
         # A HOMOGENEOUS row (``u_i = 0`` beside a coupled system) holds only the solve's rounding, and its
         # own bar ``tol |u_i|`` sits below its own residual for every nonzero iterate.
-        own = _noise_judged(problem, form, u, relative, scale, system_resolution(scale))
+        own = _noise_judged(problem, form, u, relative, scale, system_resolution(scale), source=source)
         self.bars = np.maximum(own, floor)
         # A noise row's bar IS the system's resolution, a round-off already; every other row rounds at its own scale.
         rounding = np.where(own != relative, own, FLOOR_SAFETY * float(np.finfo(float).eps) * scale)
