@@ -47,19 +47,6 @@ markers = [
     "unit: fast unit tests",
 ]
 
-[tool.lab_commons.hpc]
-# PIN + FRESHNESS (user ruling 2026-10-17): the venv is exactly the committed lock, and the lock keys it.
-# The project itself is NOT installed into the venv: the venv is keyed on the lock, so a Rust-only change
-# would be served the kernel of an older tree.
-install = 'uv sync --frozen --extra dev --no-install-project'
-dependency_inputs = ['pyproject.toml', 'uv.lock']
-source_roots = ['python']
-needs = ['cargo', 'cc']  # the native build compiles the Rust extension
-# The kernel is its own build keyed on the Rust sources, written under $LAB_CI_NATIVE and reached through
-# the `numerics_lab` package's extended `__path__` (python/numerics_lab/__init__.py).
-native = { inputs = ['crates', 'Cargo.toml', 'Cargo.lock'], build = 'uv pip install --no-deps --refresh-package numerics-lab --target "$LAB_CI_NATIVE" .' }
-collect = 'tests'
-
 # The extras every environment of this repo installs (dev_lab.dev.dep reads it): dev_lab and the test kit live
 # only in `dev`, so a relock without it drops them and the family renderer cannot run.
 [tool.dev_lab.dep]
