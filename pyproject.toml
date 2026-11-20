@@ -48,10 +48,10 @@ markers = [
 ]
 
 [tool.lab_commons.hpc]
-# PIN + FRESHNESS (user ruling 2026-10-17): the venv is exactly the committed lock, and the lock keys it.
+# PIN + FRESHNESS (user ruling 2026-10-17): the venv is exactly the committed lock, and the lock keys it. Its sync is
+# derived from [tool.dev_lab.dep] for the run's need-set (lab_commons.extras), never declared here.
 # The project itself is NOT installed into the venv: the venv is keyed on the lock, so a Rust-only change
 # would be served the kernel of an older tree.
-install = 'uv sync --frozen --extra dev --no-install-project'
 dependency_inputs = ['pyproject.toml', 'uv.lock']
 source_roots = ['python']
 needs = ['cargo', 'cc']  # the native build compiles the Rust extension
