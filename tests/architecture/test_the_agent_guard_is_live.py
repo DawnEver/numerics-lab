@@ -38,6 +38,8 @@ _SHIPPED: Final = frozenset({
     'HEAVY-IS-THE-MAIN-SESSIONS',  # 2026-11-17 dev-lab integrate/main: a subagent runs no heavy or full selection
     'HPC-THROUGH-THE-DOOR',  # gained 2026-11-07 with dev-lab 8c4ab734
     'MACHINE-FILE-IS-RENDERED',  # gained 2026-11-20 with dev-lab 2adcab2c
+    'MAIN-ONLY-DOOR',  # gained 2026-11-22 with dev-lab 77ef8452
+    'OUTPUT-HOLDS-NO-CODE',  # gained 2026-11-22 with dev-lab 77ef8452
     'PUSH-FORCE',
     'PUSH-NO-VERIFY',
     'REMOTE-WRITE-THROUGH-A-DOOR',  # gained 2026-11-08 with dev-lab #313 (agentpolicy)
@@ -50,6 +52,7 @@ _SHIPPED: Final = frozenset({
     'TRACKED-CITES-NO-EPHEMERAL',  # 2026-11-17 dev-lab #670: the journal door folded into the deny engine
     'TREE-HAS-A-LIVE-RUN',
     'WORKTREE-BASE-IS-EXPLICIT',
+    'WORKTREE-NAMES-ITS-TASK',  # gained 2026-11-22 with dev-lab 77ef8452
     'WORKTREES-STAY-INSIDE',
     'WRITES-STAY-IN-THE-TREE',  # gained 2026-11-07 with dev-lab 8c4ab734
 })

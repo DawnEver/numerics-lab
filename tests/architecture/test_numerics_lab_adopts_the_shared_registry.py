@@ -96,13 +96,20 @@ _MECHANISMS: Final = {
             # Adopted 2026-11-18 with the {python} relock: the rendered wiring refuses a hook row over the
             # five-second budget unless detached, and this live-guard test fails when the wiring differs.
             'HOOK-UNDER-FIVE-SECONDS',
+            # Adopted 2026-11-22 with dev-lab 77ef8452: the rendered deny rows refuse code written under output/
+            # and a hash-like worktree name, and the same live wiring's Stop hook sends back a final message
+            # naming an image by a relative path.
+            'OUTPUT-HOLDS-NO-CODE',
+            'WORKTREE-NAMES-ITS-TASK',
+            'IMAGES-BY-ABSOLUTE-PATH',
         ),
         (TestPath('tests/architecture/test_the_agent_guard_is_live.py'),),
     ),
     # Adopted 2026-11-20 with dev-lab 2adcab2: `[tool.dev_lab.dep] extras` is the one declaration; the rendered
     # workflows sync only it (ciworkflows refuses an `--all-extras` at render) and the render test pins them.
     'ALL-EXTRAS-REFUSED': (
-        TestPath('pyproject.toml'), TestPath('tests/architecture/test_the_ci_workflow_is_rendered.py'),
+        TestPath('pyproject.toml'),
+        TestPath('tests/architecture/test_the_ci_workflow_is_rendered.py'),
     ),
 }
 
@@ -129,8 +136,8 @@ _ABSENT: Final = frozenset({
     # Meta-rules about guards: carried by the family's shared bodies.
     'DECLARATION-LIES', 'PLANTED-CONTROL', 'FLOOR-ON-EVERY-SCAN', 'ESCAPE-HATCH-CEILING', 'RATCHET-TWO-SIDES',
     'NAMED-SETS-NOT-COUNTS', 'XFAIL-NOT-SKIP', 'MODULE-SIZE-ALARM',
-    # Hosts: numerics-lab deploys no host role, so it runs no scheduler to restrict.
-    'SCHEDULER-ONLY-FOR-SERVING',
+    # Hosts: numerics-lab deploys no host role, so it runs no scheduler to restrict, and declares no ssh endpoint.
+    'SCHEDULER-ONLY-FOR-SERVING', 'SSH-HOST-KEY-DECLARED',
 })  # fmt: skip
 
 #: The size of the absent set at adoption (2026-10-18: 47; 2026-10-23: 50, the three rules the registry gained
@@ -139,6 +146,8 @@ _ABSENT: Final = frozenset({
 #: Lowered to 44 on 2026-11-07: NO-CJK-IN-TRACKED-SOURCE is always on (dev_lab.dev.famtests.alwayson).
 #: Raised to 45 on 2026-11-20: dev-lab 2adcab2 added SCHEDULER-ONLY-FOR-SERVING, a host-deploy rule with no
 #: subject in this engine.
+#: Held at 45 on 2026-11-22: dev-lab 77ef8452 added SSH-HOST-KEY-DECLARED (no ssh endpoint is declared here),
+#: which fills the ceiling exactly.
 _ABSENT_CEILING: Final = 45
 
 

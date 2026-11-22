@@ -22,9 +22,16 @@
   },
   {
     "name": "SUBAGENT-NO-PUSH",
-    "pattern": "(?:git(?:\\.exe)?(?:\\s+-C\\s+\\S+)*\\s+push\\b|(?:sh\\s+)?\\S*with-retry\\.sh\\s+push\\b|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab.dev\\.netverb\\b[^\\n]*\\spush\\b|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.family\\s+(?:join)(?![\\w-])|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.sshhold\\s+(?:open|run|credential|close)(?![\\w-])|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.forge\\s+(?:pr\\s+create|pr\\s+ready|pr\\s+draft|pr\\s+hold|pr\\s+release|pr\\s+close|pr\\s+continue|review\\s+carry|pr\\s+close\\-landed|pr\\s+close\\-superseded|pr\\s+breakglass|breakglass\\s+open|review\\s+takeover|review\\s+again|security\\s+release|cancel\\-stuck)(?![\\w-])|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.ops\\.consent\\s+(?:grant)(?![\\w-])|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.integrate\\s+(?:promote)(?![\\w-])|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.branchprune\\s+(?:delete|task)(?![\\w-])|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.hpcaccount\\s+(?:deploy\\-fleet|forget|retention|credential)(?![\\w-])|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.opsserver(?![\\w.-])|gh(?:\\.exe)?\\s+workflow\\s+enable(?![\\w-])|gh(?:\\.exe)?\\s+workflow\\s+disable(?![\\w-])|git(?:\\.exe)?\\b[^\\n]*\\s--no-verify\\b|SKIP=|\\$env:SKIP\\s*=)",
+    "pattern": "(?:git(?:\\.exe)?(?:\\s+-C\\s+\\S+)*\\s+push\\b|(?:sh\\s+)?\\S*with-retry\\.sh\\s+push\\b|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab.dev\\.netverb\\b[^\\n]*\\spush\\b|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.forge\\s+(?:pr\\s+create(?![\\w-])|pr\\s+ready(?![\\w-])|pr\\s+draft(?![\\w-])|pr\\s+hold(?![\\w-])|pr\\s+release(?![\\w-])|pr\\s+close(?![\\w-])|pr\\s+continue(?![\\w-])|review\\s+carry(?![\\w-])|pr\\s+close\\-landed(?![\\w-])|pr\\s+close\\-superseded(?![\\w-])|pr\\s+breakglass(?![\\w-])|breakglass\\s+open(?![\\w-])|review\\s+takeover(?![\\w-])|review\\s+again(?![\\w-])|security\\s+release(?![\\w-])|cancel\\-stuck(?![\\w-]))|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.integrate\\s+(?:promote(?![\\w-]))|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.branchprune\\s+(?:delete(?![\\w-])|task(?![\\w-]))|gh(?:\\.exe)?\\s+workflow\\s+enable(?![\\w-])|gh(?:\\.exe)?\\s+workflow\\s+disable(?![\\w-])|git(?:\\.exe)?\\b[^\\n]*\\s--no-verify\\b|SKIP=|\\$env:SKIP\\s*=)",
     "matches": "shell",
     "reason": "SUBAGENT-NO-PUSH: publishing is the main session`s, and a skipped hook publishes what nobody checked.\nCommit on your lane and hand the commit SHA back to the main session, which merges and pushes; measure the tests you touched: {python} -m dev_lab.dev.verify -- <paths>.\ndetails: docs-src/dev/refusals.md#subagent-no-push (dev-lab)",
+    "scope": "subagent"
+  },
+  {
+    "name": "MAIN-ONLY-DOOR",
+    "pattern": "(?:\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.family\\s+(?:join(?![\\w-]))|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.sshhold\\s+(?:open(?![\\w-])|run(?![\\w-])|credential(?![\\w-])|close(?![\\w-]))|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.ops\\.consent\\s+(?:grant(?![\\w-]))|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.hpcaccount\\s+(?:deploy\\-fleet(?![\\w-])(?![^\\n;&|]*\\s\\-\\-dry\\-run(?![\\w-]))|forget(?![\\w-])|retention(?![\\w-])|credential(?![\\w-]))|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.opsserver(?![\\w.-]))",
+    "matches": "shell",
+    "reason": "MAIN-ONLY-DOOR: this door is the main session`s alone: it acts on another machine or on shared state under the user`s word.\nHand the exact command back to the main session, which runs it and reads the result. Reading stays yours: {python} -m dev_lab.dev.sshhold status, {python} -m dev_lab.dev.hpcaccount drift-fleet, and hpcaccount deploy-fleet --dry-run.\ndetails: docs-src/dev/refusals.md#main-only-door (dev-lab)",
     "scope": "subagent"
   },
   {
@@ -112,7 +119,7 @@
     "name": "PUSH-REMOTE-DELETE",
     "pattern": "(?:\"?\\S*python[\\w.]*(?:\\.exe)?\"?\\s+-m\\s+dev_lab\\.dev\\.netverb(?:\\s+--)?\\s+)?(?:(?:\"[^\"]*[/\\\\])?\"?\\S*?\\bgit(?:\\.exe)?\"?(?:\\s+-[Cc]\\s+\\S+)*|(?:sh\\s+)?\\S*with-retry\\.sh)\\s+push\\b[^\\n]*\\s(?:--delete\\b|-d\\b|--prune\\b|--mirror\\b|:\\S)",
     "matches": "command",
-    "reason": "PUSH-REMOTE-DELETE: a raw remote delete can lose commits held nowhere else.\na branch: `{python} -m dev_lab.dev.branchprune delete <branch>` (LOSSLESS-DELETE); one it refuses is MERGED, or LANDED by a declared `git merge -s ours` PR and then deleted (MERGE-OR-DELETE, D22: no tags).\ndetails: docs-src/dev/refusals.md#push-remote-delete (dev-lab)"
+    "reason": "PUSH-REMOTE-DELETE: a raw remote delete can lose commits held nowhere else.\na branch: `{python} -m dev_lab.dev.branchprune delete <branch>` (LOSSLESS-DELETE; one it refuses is MERGED, or LANDED by a `git merge -s ours` PR); a tag: `{python} -m dev_lab.dev.branchprune tag <tag>` (a contained one).\ndetails: docs-src/dev/refusals.md#push-remote-delete (dev-lab)"
   },
   {
     "name": "PUSH-NO-VERIFY",
@@ -148,6 +155,12 @@
     ]
   },
   {
+    "name": "WORKTREE-NAMES-ITS-TASK",
+    "pattern": "git(?:\\.exe)?(?:\\s+-[Cc]\\s+(?:\"[^\"\\n]*\"|'[^'\\n]*'|[^\\s;&|()]+))*\\s+worktree\\s+(?:add(?:\\s+(?:-[bB]\\s+(?:\"[^\"\\n]*\"|'[^'\\n]*'|[^\\s;&|()]+)|--reason(?:=|\\s+)(?:\"[^\"\\n]*\"|'[^'\\n]*'|[^\\s;&|()]+)|--(?!reason\\b)[\\w-]+|-(?![bB](?:\\s|$))\\w+))*|move(?:\\s+-\\S+)*\\s+(?:\"[^\"\\n]*\"|'[^'\\n]*'|[^\\s;&|()]+))\\s+(?:\"(?:[^\"\\n]*[\\\\/])?\\.claude[\\\\/]+worktrees[\\\\/]+(?:[aA][gG][eE][nN][tT]-[0-9a-fA-F]{6,}|(?:[\\w.-]*[-_.])?(?=[0-9a-fA-F]*[0-9])(?=[0-9a-fA-F]*[a-fA-F])[0-9a-fA-F]{6,})[\\\\/]?\"|'(?:[^'\\n]*[\\\\/])?\\.claude[\\\\/]+worktrees[\\\\/]+(?:[aA][gG][eE][nN][tT]-[0-9a-fA-F]{6,}|(?:[\\w.-]*[-_.])?(?=[0-9a-fA-F]*[0-9])(?=[0-9a-fA-F]*[a-fA-F])[0-9a-fA-F]{6,})[\\\\/]?'|(?:[^\\s\"\\';&|()]*[\\\\/])?\\.claude[\\\\/]+worktrees[\\\\/]+(?:[aA][gG][eE][nN][tT]-[0-9a-fA-F]{6,}|(?:[\\w.-]*[-_.])?(?=[0-9a-fA-F]*[0-9])(?=[0-9a-fA-F]*[a-fA-F])[0-9a-fA-F]{6,})[\\\\/]?)(?=\\s|$|[;&|)])",
+    "matches": "command",
+    "reason": "WORKTREE-NAMES-ITS-TASK: a hash-like worktree name says nothing about its task: nobody can tell what the tree is for.\nName it for what it does under its task: git worktree add -b pr/<task>/<feature> .claude/worktrees/<feature> <sha>\ndetails: docs-src/dev/refusals.md#worktree-names-its-task (dev-lab)"
+  },
+  {
     "name": "BARE-INTERPRETER",
     "pattern": "(?:uv(?:\\.exe)?\\s+run\\b|uvx(?:\\.exe)?\\b)",
     "matches": "command",
@@ -172,13 +185,19 @@
     "name": "RECURSIVE-DELETE",
     "pattern": "(?:(?:[cC][mM][dD](?:\\.[eE][xX][eE])?\\s+/[cCkK]\\s+[\"']?|xargs(?:\\s+-\\S+)*\\s+|find\\b[^\\n;&|]*?\\s-exec(?:dir)?\\s+)?(?:[rR][eE][mM][oO][vV][eE]-[iI][tT][eE][mM]|[rR][mM][dD][iI][rR]|[eE][rR][aA][sS][eE]|[rR][mM]|[rR][iI]|[rR][dD]|[dD][eE][lL])(?:\\.exe)?(?=(?:\\s+(?:\"[^\"\\n]*\"|'[^'\\n]*'|[^\\s\"';&|()]+))*?\\s+(?:-[fvidI]*[rR][fvidI]*|--recursive|-[rR](?:[eE](?:[cC](?:[uU](?:[rR](?:[sS][eE]?)?)?)?)?)?|/[sS])(?=\\s|$|:))(?!(?=(?:\\s+(?:\"[^\"\\n]*\"|'[^'\\n]*'|[^\\s\"';&|()]+))*?\\s+(?![^\\s;&|()]*\\.\\.)[\"']?(?:/tmp/|\\$\\{?(?:TEMP|TMP|TMPDIR)\\}?[\\\\/]|%(?:TEMP|TMP)%[\\\\/]|\\$env:(?:TEMP|TMP)[\\\\/]|(?:[^\\s\"';&|()]*[\\\\/])?[aA][pP][pP][dD][aA][tT][aA][\\\\/][lL][oO][cC][aA][lL][\\\\/][tT][eE][mM][pP][\\\\/]|(?:[^\\s\"';&|()]*[\\\\/])?output[\\\\/])[^\\s\"'\\\\/;&|()][^\\s\"';&|()]*[\"']?(?=\\s|$))(?:\\s+(?:(?:-[^\\s\"';&|()]*|/[a-zA-Z])(?=\\s|$)|(?![^\\s;&|()]*\\.\\.)[\"']?(?:/tmp/|\\$\\{?(?:TEMP|TMP|TMPDIR)\\}?[\\\\/]|%(?:TEMP|TMP)%[\\\\/]|\\$env:(?:TEMP|TMP)[\\\\/]|(?:[^\\s\"';&|()]*[\\\\/])?[aA][pP][pP][dD][aA][tT][aA][\\\\/][lL][oO][cC][aA][lL][\\\\/][tT][eE][mM][pP][\\\\/]|(?:[^\\s\"';&|()]*[\\\\/])?output[\\\\/])[^\\s\"'\\\\/;&|()][^\\s\"';&|()]*[\"']?(?=\\s|$)))+\\s*[\"']?\\s*$)|git(?:\\.exe)?(?:\\s+-[Cc]\\s+(?:\"[^\"\\n]*\"|'[^'\\n]*'|[^\\s\"';&|()]+))*\\s+worktree\\s+remove\\b|git(?:\\.exe)?(?:\\s+-[Cc]\\s+(?:\"[^\"\\n]*\"|'[^'\\n]*'|[^\\s\"';&|()]+))*\\s+clean\\b(?=[^\\n;&|]*\\s(?:-[a-zA-Z]*[xXd][a-zA-Z]*|--directory)(?=\\s|$|[;&|]))(?![^\\n;&|]*\\s(?:-[a-zA-Z]*n[a-zA-Z]*|--dry-run)(?=\\s|$|[;&|]))|\\S*python[\\w.]*(?:\\.exe)?\\s+-c\\s+[^\\n]*?\\bshutil\\.rmtree\\b|(?:[^;\\n'\"]*;\\s*)*(?:shutil\\.)?rmtree\\s*\\()",
     "matches": "command",
-    "reason": "RECURSIVE-DELETE: a raw recursive delete judges deletability by hand; on 2026-10-27 one took a MAIN checkout.\n{door} -m dev_lab.dev.scratch clear --yes|{door} -m dev_lab.dev.branchset --apply|{door} -m dev_lab.dev.branchset --discard <branch> --approved <why>|detached {door} -m dev_lab.dev.worktrees --remove <name>|{door} -m dev_lab.dev.venvprune --apply; never a worktree? ask the user\ndetails: docs-src/dev/refusals.md#recursive-delete (dev-lab)"
+    "reason": "RECURSIVE-DELETE: a raw recursive delete judges deletability by hand; on 2026-10-27 one took a MAIN checkout.\n{door} -m dev_lab.dev.scratch clear <NAME> --yes|{door} -m dev_lab.dev.branchset --apply|{door} -m dev_lab.dev.branchset --discard <branch> --approved <why>|detached {door} -m dev_lab.dev.worktrees --remove <name>|{door} -m dev_lab.dev.venvprune --apply; never a worktree? ask the user\ndetails: docs-src/dev/refusals.md#recursive-delete (dev-lab)"
   },
   {
     "name": "REPORTS-LIVE-IN-MEMORY",
     "pattern": "(?:>>?|\\btee\\b(?:\\s+-a)?|\\bOut-File\\b(?:\\s+-FilePath)?|\\b(?:Set|Add)-Content\\b(?:\\s+-Path)?)\\s*[\"\\']?(?:[^\\s\"\\'<>|;&]*[/\\\\])?output[/\\\\][^\\s\"\\'<>|;&]*\\.md(?=[\"\\'\\s;&|)]|$)",
     "matches": "argument",
     "reason": "REPORTS-LIVE-IN-MEMORY: a written report (audit, analysis, design, plan, findings) is not regenerable, and output/ holds only what a program can regenerate.\nNo door: write it with your Write tool as a dated memory entry: .claude/memory/<yyyy>/<mm>/<dd>/<slug>.md with the MEMORY-SHAPE frontmatter (name, description, created; never accessed).\ndetails: docs-src/dev/refusals.md#reports-live-in-memory (dev-lab)"
+  },
+  {
+    "name": "OUTPUT-HOLDS-NO-CODE",
+    "pattern": "(?:>>?|\\btee\\b(?:\\s+-a)?|\\bOut-File\\b(?:\\s+-FilePath)?|\\b(?:Set|Add)-Content\\b(?:\\s+-Path)?|\\b(?:cp|mv|Copy-Item|Move-Item)\\b[^;&|\\n]*?\\s|\\bgit\\s+bundle\\s+create\\b)\\s*[\"\\']?(?:[^\\s\"\\'<>|;&]*[/\\\\])?output[/\\\\][^\\s\"\\'<>|;&]*\\.(?:py|pyi|pyx|ipynb|js|mjs|cjs|ts|tsx|jsx|rs|c|h|cpp|hpp|go|java|m|jl|sh|bash|ps1|psm1|bat|cmd|toml|patch|diff|bundle|whl)(?=[\"\\'\\s;&|)]|$)",
+    "matches": "argument",
+    "reason": "OUTPUT-HOLDS-NO-CODE: output/ holds only what a program regenerates; code, a patch or a bundle there is unlanded work.\nCommit it on its branch and push it; a one-off goes to scratch/; unwanted work is discarded: {python} -m dev_lab.dev.branchset --discard <branch> --approved \"<the user words>\".\ndetails: docs-src/dev/refusals.md#output-holds-no-code (dev-lab)"
   },
   {
     "name": "WRITES-STAY-IN-THE-TREE",
