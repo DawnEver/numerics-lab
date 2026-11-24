@@ -22,6 +22,7 @@ _SHIPPED: Final = frozenset({
     # Gained 2026-11-07 with dev-lab #311 (consent credentials): an agent never types a consent code.
     'COMMIT-HOOKS-RUN',  # 2026-11-13 dev-lab 61560e40
     'CONSENT-CODE-FROM-THE-USER',  # 2026-11-08 dev-lab #325: replaces CONSENT-CODE-NEVER-TYPED (user ruling)
+    'ARCHIVE-IS-NO-STORE',  # gained 2026-11-24 with dev-lab cbecf58a (relock-family-1124)
     'BACKGROUND-SHELL-IS-BOUNDED',  # 2026-11-17 dev-lab integrate/main: a background shell starts with its bound
     'BARE-INTERPRETER',
     'BARE-PYTHON',
