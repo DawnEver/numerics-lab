@@ -69,6 +69,8 @@ _MECHANISMS: Final = {
     # Adopted 2026-11-13 (user ruling): the base pre-push row `milestone-base` this pyproject's hooks table runs.
     'BASE-HOLDS-THE-MILESTONE': (TestPath('pyproject.toml'),),
     'VERSION-TAG-NEEDS-APPROVAL': (TestPath('pyproject.toml'),),
+    # Adopted 2026-11-24 with dev-lab cbecf58a: the same milestonebase pre-push row refuses a non-version tag.
+    'ONLY-VERSION-TAGS': (TestPath('pyproject.toml'),),
     # Adopted 2026-10-24 with dev-lab 1d74f38: the October summary is the first month this tree holds.
     'MONTHLY-PLANS-CARRIED': (TestPath('tests/architecture/test_every_month_carries_its_plans.py'),),
     # Adopted 2026-10-26 with dev-lab c9eaa7f: the agent guard ships in every family repo; the rendered
