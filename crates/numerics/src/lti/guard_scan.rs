@@ -223,6 +223,8 @@ pub struct AffineGuards {
     count: usize,
     start: f64,
     reads: HashMap<u64, Vec<f64>>,
+    lattice: Option<GridLattice>,
+    expm_calls: usize,
 }
 
 impl AffineGuards {
@@ -257,7 +259,107 @@ impl AffineGuards {
             count,
             start,
             reads: HashMap::new(),
+            lattice: None,
+            expm_calls: 0,
         })
+    }
+
+    /// Select the GRID-LATTICE propagation for reads on `grid` (the scan's grid, increasing, in [s]): along each
+    /// uniform run of steps the state advances `y_{k+1} = E_h y_k` with ONE `E_h = expm(M h)` per run, computed
+    /// lazily; a step change starts a new run, a lone step and every off-grid read (a Brent iterate) stay the exact
+    /// per-step `expm(M (t - start)) y0`. Reads agree with the per-step path to the round-off of the run's matvecs;
+    /// a step whose `M h`, `E_h` or matvec cancellation exceeds its ceiling falls back to the exact read.
+    #[must_use]
+    pub fn with_grid_lattice(mut self, grid: &[f64]) -> Self {
+        let index_of = grid
+            .iter()
+            .enumerate()
+            .map(|(k, t)| (t.to_bits(), k))
+            .collect();
+        self.lattice = Some(GridLattice {
+            grid: grid.to_vec(),
+            index_of,
+            states: Vec::with_capacity(grid.len()),
+            step: None,
+            anchor: 0,
+        });
+        self
+    }
+
+    /// The `expm` evaluations this reader has made (the cost the lattice saves; a diagnostic).
+    #[must_use]
+    pub fn expm_calls(&self) -> usize {
+        self.expm_calls
+    }
+
+    fn exp(&mut self, dt: f64) -> Result<Vec<f64>, GuardScanError> {
+        let scaled: Vec<f64> = self.system.iter().map(|m| m * dt).collect();
+        self.expm_calls += 1;
+        expm(&scaled, self.n).map_err(GuardScanError::Expm)
+    }
+
+    /// The per-step read: `expm(M (time - start)) y0`.
+    fn exact_state(&mut self, time: f64) -> Result<Vec<f64>, GuardScanError> {
+        let e = self.exp(time - self.start)?;
+        let n = self.n;
+        Ok((0..n)
+            .map(|i| (0..n).map(|k| e[i * n + k] * self.state[k]).sum())
+            .collect())
+    }
+
+    /// The state at grid index `target`, propagating the lattice up to it.
+    fn lattice_state(&mut self, target: usize) -> Result<Vec<f64>, GuardScanError> {
+        let mut lat = self.lattice.take().expect("a lattice read has a lattice");
+        let result = self.advance(&mut lat, target);
+        self.lattice = Some(lat);
+        result
+    }
+
+    fn advance(
+        &mut self,
+        lat: &mut GridLattice,
+        target: usize,
+    ) -> Result<Vec<f64>, GuardScanError> {
+        if lat.states.is_empty() {
+            lat.states.push(self.exact_state(lat.grid[0])?);
+        }
+        let span = (lat.grid[lat.grid.len() - 1] - lat.grid[0]).max(f64::MIN_POSITIVE);
+        while lat.states.len() <= target {
+            let k = lat.states.len() - 1;
+            let next_t = lat.grid[k + 1];
+            let dh = next_t - lat.grid[k];
+            let same = |h: f64, d: f64| (d - h).abs() <= UNIFORM_STEP_REL_TOL * h;
+            let in_run = lat.step.as_ref().is_some_and(|(h, _)| {
+                let drift =
+                    ((next_t - lat.grid[lat.anchor]) - (k + 1 - lat.anchor) as f64 * h).abs();
+                same(*h, dh) && drift <= UNIFORM_STEP_REL_TOL * span.max(*h)
+            });
+            if !in_run {
+                lat.step = None;
+                let repeats = k + 2 < lat.grid.len() && same(dh, lat.grid[k + 2] - next_t);
+                let scaled_norm = dh * inf_norm(&self.system, self.n);
+                if repeats && scaled_norm <= MAX_STEP_MH_NORM {
+                    let e_h = self.exp(dh)?;
+                    if inf_norm(&e_h, self.n) <= MAX_STEP_EH_NORM {
+                        lat.step = Some((dh, e_h));
+                        lat.anchor = k;
+                    }
+                }
+            }
+            let propagated = lat
+                .step
+                .as_ref()
+                .and_then(|(_, e_h)| matvec_checked(e_h, &lat.states[k], self.n));
+            let y = match propagated {
+                Some(y) => y,
+                None => {
+                    lat.step = None;
+                    self.exact_state(next_t)?
+                }
+            };
+            lat.states.push(y);
+        }
+        Ok(lat.states[target].clone())
     }
 
     /// The guards' values at `time`.
@@ -265,13 +367,15 @@ impl AffineGuards {
         if let Some(values) = self.reads.get(&time.to_bits()) {
             return Ok(values.clone());
         }
+        let on_grid = self
+            .lattice
+            .as_ref()
+            .and_then(|l| l.index_of.get(&time.to_bits()).copied());
+        let y = match on_grid {
+            Some(k) => self.lattice_state(k)?,
+            None => self.exact_state(time)?,
+        };
         let n = self.n;
-        let dt = time - self.start;
-        let scaled: Vec<f64> = self.system.iter().map(|m| m * dt).collect();
-        let e = expm(&scaled, n).map_err(GuardScanError::Expm)?;
-        let y: Vec<f64> = (0..n)
-            .map(|i| (0..n).map(|k| e[i * n + k] * self.state[k]).sum())
-            .collect();
         let values: Vec<f64> = (0..self.count)
             .map(|g| (0..n).map(|k| self.guards[g * n + k] * y[k]).sum())
             .collect();
@@ -281,6 +385,57 @@ impl AffineGuards {
         self.reads.insert(time.to_bits(), values.clone());
         Ok(values)
     }
+}
+
+/// Relative tolerance [1] for two consecutive grid steps to count as one uniform step `h`.
+const UNIFORM_STEP_REL_TOL: f64 = 1e-12;
+/// Infinity-norm ceiling [1] on `M h` for a run's `E_h`; a stiffer step reads exactly.
+const MAX_STEP_MH_NORM: f64 = 500.0;
+/// Infinity-norm ceiling [1] on `E_h` for repeated propagation (bounds the growth of round-off per step).
+const MAX_STEP_EH_NORM: f64 = 1e3;
+/// Ceiling [1] on a matvec's cancellation `max_i sum_k |E_ik y_k| / max_i |(E y)_i|` before the exact read.
+const MAX_PROPAGATION_CANCELLATION: f64 = 1e6;
+
+fn inf_norm(mat: &[f64], n: usize) -> f64 {
+    mat.chunks(n)
+        .map(|row| row.iter().map(|v| v.abs()).sum::<f64>())
+        .fold(0.0, |a, s| {
+            if s.is_finite() {
+                a.max(s)
+            } else {
+                f64::INFINITY
+            }
+        })
+}
+
+/// `E y`, or `None` when it is non-finite or cancels past [`MAX_PROPAGATION_CANCELLATION`].
+fn matvec_checked(mat: &[f64], x: &[f64], n: usize) -> Option<Vec<f64>> {
+    let (mut max_y, mut max_abs) = (0.0f64, 0.0f64);
+    let mut y = Vec::with_capacity(n);
+    for row in mat.chunks(n) {
+        let (acc, abs) = row
+            .iter()
+            .zip(x)
+            .fold((0.0, 0.0), |(a, s), (p, q)| (a + p * q, s + (p * q).abs()));
+        if !acc.is_finite() {
+            return None;
+        }
+        max_y = max_y.max(acc.abs());
+        max_abs = max_abs.max(abs);
+        y.push(acc);
+    }
+    (max_abs <= MAX_PROPAGATION_CANCELLATION * max_y.max(f64::MIN_POSITIVE)).then_some(y)
+}
+
+/// The grid-lattice option's lazy state cache over one scan grid.
+struct GridLattice {
+    grid: Vec<f64>,
+    index_of: HashMap<u64, usize>,
+    states: Vec<Vec<f64>>,
+    /// The current uniform run's `(h, E_h)`.
+    step: Option<(f64, Vec<f64>)>,
+    /// The grid index the current run starts at (its drift is measured from there).
+    anchor: usize,
 }
 
 impl GuardRead for AffineGuards {
