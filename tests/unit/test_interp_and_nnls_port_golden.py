@@ -19,10 +19,10 @@ import pytest
 import scipy
 from scipy.interpolate import PchipInterpolator, PPoly, make_interp_spline
 from scipy.optimize import nnls
-from tests.port_goldens import GOLDENS, load_golden, register
+from tests.port_goldens import GOLDENS, load_golden, register, write_golden
 
-_INTERP = GOLDENS / 'interp.json'
-_NNLS = GOLDENS / 'nnls.json'
+_INTERP = GOLDENS / 'interp.jsonl'
+_NNLS = GOLDENS / 'nnls.jsonl'
 
 #: ``(name, x, y)`` -- every branch of the slope rule reached by at least one table.
 _TABLES = (
@@ -128,7 +128,7 @@ register(_NNLS, _build_nnls)
 def write() -> None:
     """Rewrite both goldens from the live SciPy (a deliberate act; commit the result)."""
     for path, build in ((_INTERP, _build_interp), (_NNLS, _build_nnls)):
-        path.write_text(json.dumps(build(), indent=1) + '\n', encoding='utf-8', newline='\n')
+        write_golden(path, build())
 
 
 def _same(got: object, want: object, where: str) -> None:

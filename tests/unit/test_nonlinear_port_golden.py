@@ -8,7 +8,7 @@ installed into MAIN's venv from a lane (`.claude/rules/workflow.md`: "never muta
 resource the other party learns about by accident").
 
 So the comparison goes through a committed DATA file instead.
-`crates/numerics/tests/goldens/nonlinear.json` holds the fixtures and what the PYTHON does on
+`crates/numerics/tests/goldens/nonlinear.jsonl` holds the fixtures and what the PYTHON does on
 them. Two tests read it:
 
 * this one, asserting the live Python still produces those trajectories;
@@ -47,7 +47,7 @@ from tests.port_goldens import GOLDENS, load_golden, register
 
 from numerics_lab.nonlinear import ITERATION_REGISTRY, AssembledState, get_strategy
 
-_GOLDEN = GOLDENS / 'nonlinear.json'
+_GOLDEN = GOLDENS / 'nonlinear.jsonl'
 
 #: `coefficient-damped` is driven on its own fixture: it needs the raw pre-fold pair (`raw_state` /
 #: `fold_raw`) and REFUSES a system without it, so it cannot share the generic one. Named here

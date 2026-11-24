@@ -38,7 +38,7 @@ from numerics_lab.linear import (
     solve_linear_system,
 )
 
-_GOLDEN = GOLDENS / 'linear.json'
+_GOLDEN = GOLDENS / 'linear.jsonl'
 
 #: The backends both sides register.
 _SOLVERS = ('direct', 'cg', 'minres', 'gmres', 'bicgstab', 'qmr')

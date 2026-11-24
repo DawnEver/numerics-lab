@@ -1,5 +1,5 @@
 //! `numerics::interp` against SciPy (`PchipInterpolator`, `PPoly.antiderivative`, the `k=1` spline) through the
-//! committed `goldens/interp.json` that `tests/unit/test_interp_and_nnls_port_golden.py` freezes from live SciPy.
+//! committed `goldens/interp.jsonl` that `tests/unit/test_interp_and_nnls_port_golden.py` freezes from live SciPy.
 //!
 //! Tolerance: `1e-12` relative, plus a dust floor of `1e-12` times the largest magnitude in the compared series
 //! (exact zeros -- a clamped slope, a vanished derivative -- make a pure relative test meaningless). Unitless: the
@@ -11,7 +11,7 @@ use serde_json::Value;
 const RTOL: f64 = 1e-12;
 
 fn golden() -> Value {
-    serde_json::from_str(include_str!("goldens/interp.json")).expect("goldens/interp.json")
+    serde_json::from_str(include_str!("goldens/interp.jsonl")).expect("goldens/interp.jsonl")
 }
 
 fn nums(v: &Value) -> Vec<f64> {
