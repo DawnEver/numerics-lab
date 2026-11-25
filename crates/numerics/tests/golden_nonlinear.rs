@@ -1,6 +1,6 @@
 //! The nonlinear port judged against the PYTHON, through the committed golden TRAJECTORIES.
 //!
-//! `goldens/nonlinear.json` is generated from `python/numerics_lab/nonlinear/` and is read by
+//! `goldens/nonlinear.jsonl` is generated from `python/numerics_lab/nonlinear/` and is read by
 //! both languages: `tests/unit/test_nonlinear_port_golden.py` asserts the live Python still
 //! produces it (that is the freeze protocol, made executable), and this file asserts the Rust port
 //! produces it too. Neither half alone is the proof.
@@ -35,7 +35,7 @@ fn golden() -> Value {
         env!("CARGO_MANIFEST_DIR"),
         "tests",
         "goldens",
-        "nonlinear.json",
+        "nonlinear.jsonl",
     ]
     .iter()
     .collect();
@@ -46,7 +46,7 @@ fn golden() -> Value {
             path.display()
         )
     });
-    serde_json::from_str(&text).expect("goldens/nonlinear.json is valid JSON")
+    serde_json::from_str(&text).expect("goldens/nonlinear.jsonl is one valid JSONL record")
 }
 
 fn floats(v: &Value) -> Vec<f64> {

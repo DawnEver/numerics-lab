@@ -59,7 +59,7 @@ fn golden() -> Value {
         env!("CARGO_MANIFEST_DIR"),
         "tests",
         "goldens",
-        "linear.json",
+        "linear.jsonl",
     ]
     .iter()
     .collect();
@@ -70,7 +70,7 @@ fn golden() -> Value {
             path.display()
         )
     });
-    serde_json::from_str(&text).expect("goldens/linear.json is valid JSON")
+    serde_json::from_str(&text).expect("goldens/linear.jsonl is one valid JSONL record")
 }
 
 fn floats(v: &Value) -> Vec<f64> {

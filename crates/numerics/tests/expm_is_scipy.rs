@@ -26,8 +26,11 @@ fn bits(v: &serde_json::Value) -> Vec<f64> {
 }
 
 fn cases() -> Vec<Case> {
-    let text = include_str!("fixtures/expm_scipy.json");
-    let rows: Vec<serde_json::Value> = serde_json::from_str(text).expect("the fixture");
+    let text = include_str!("fixtures/expm_scipy.jsonl");
+    let rows: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("one fixture row per line"))
+        .collect();
     rows.iter()
         .map(|r| Case {
             name: r["name"].as_str().expect("name").to_owned(),
