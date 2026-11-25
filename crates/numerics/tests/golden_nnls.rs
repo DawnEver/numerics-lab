@@ -1,4 +1,4 @@
-//! `numerics::linear::nnls` against `scipy.optimize.nnls` through the committed `goldens/nnls.json` that
+//! `numerics::linear::nnls` against `scipy.optimize.nnls` through the committed `goldens/nnls.jsonl` that
 //! `tests/unit/test_interp_and_nnls_port_golden.py` freezes from live SciPy.
 //!
 //! Both are Lawson-Hanson, but not the same floating-point program, so the bar is round-off, not bits:
@@ -22,7 +22,7 @@ fn nums(v: &Value) -> Vec<f64> {
 
 fn cases() -> Vec<Value> {
     let g: Value =
-        serde_json::from_str(include_str!("goldens/nnls.json")).expect("goldens/nnls.json");
+        serde_json::from_str(include_str!("goldens/nnls.jsonl")).expect("goldens/nnls.jsonl");
     let cases = g["cases"].as_array().expect("cases").clone();
     assert!(cases.len() >= 8, "the golden lost a problem");
     cases
