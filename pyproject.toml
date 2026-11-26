@@ -113,6 +113,11 @@ adoption = "scripts/deny_rules.py"
 [tool.dev_lab.review]
 judge_app = 5619495
 
+# ENV-IS-READ-ONCE (dev_lab.dev.envreads): no module reads the process environment; the direct backend's A/B
+# selector is configuration (numerics_lab.linear.native_direct.NATIVE_SELECTED).
+[tool.dev_lab.env]
+entry = []
+
 # DECLARED-LAYOUT (dev_lab.dev.layout): the WHOLE tree as an allow-list -- each directory pattern (one glob per
 # segment; the deepest matching row judges) and the formats a file there may be ('.suffix', an exact name, "" for
 # none, "*" for anything). Undeclared is refused. NO-BACKUP-COPIES: nothing under output/ or scratch/ is ever a
