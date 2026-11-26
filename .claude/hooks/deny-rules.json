@@ -35,9 +35,9 @@
   },
   {
     "name": "MAIN-ONLY-DOOR",
-    "pattern": "(?:\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.cloneremove(?![\\w.-])|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.family\\s+(?:join(?![\\w-]))|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.sshhold\\s+(?:open(?![\\w-])|run(?![\\w-])|credential(?![\\w-])|close(?![\\w-]))|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.ops\\.consent\\s+(?:grant(?![\\w-]))|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.hpcaccount\\s+(?:deploy\\-fleet(?![\\w-])(?![^\\n;&|]*\\s\\-\\-dry\\-run(?![\\w-]))|forget(?![\\w-])|retention(?![\\w-])|archive(?![\\w-])|archive\\-clean(?![\\w-])|credential(?![\\w-]))|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.opsserver(?![\\w.-]))",
+    "pattern": "(?:\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.cloneremove(?![\\w.-])|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.family\\s+(?:join(?![\\w-]))|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.sshhold\\s+(?:open(?![\\w-])|run(?![\\w-])|credential(?![\\w-])|close(?![\\w-]))|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.ops\\.consent\\s+(?:grant(?![\\w-]))|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.hpcaccount\\s+(?:deploy\\-fleet(?![\\w-])(?![^\\n;&|]*\\s\\-\\-dry\\-run(?![\\w-]))|forget(?![\\w-])|retention(?![\\w-])|archive(?![\\w-])|archive\\-clean(?![\\w-])|credential(?![\\w-]))|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.opsserver(?![\\w.-])(?!\\s+[\\w.-]+\\s+card(?![\\w-])(?![^\\n;&|]*[^\\s;&|])))",
     "matches": "shell",
-    "reason": "MAIN-ONLY-DOOR: this door is the main session`s alone: it acts on another machine or on shared state under the user`s word.\nHand the exact command back to the main session, which runs it and reads the result. Reading stays yours: {python} -m dev_lab.dev.sshhold status, {python} -m dev_lab.dev.hpcaccount drift-fleet, and hpcaccount deploy-fleet --dry-run.\ndetails: docs-src/dev/refusals.md#main-only-door (dev-lab)",
+    "reason": "MAIN-ONLY-DOOR: this door is the main session`s alone: it acts on another machine or on shared state under the user`s word.\nHand the exact command back to the main session, which runs it and reads the result. Reading stays yours: {python} -m dev_lab.dev.sshhold status, {python} -m dev_lab.dev.hpcaccount drift-fleet, hpcaccount deploy-fleet --dry-run, and {python} -m dev_lab.dev.opsserver <server|all> card.\ndetails: docs-src/dev/refusals.md#main-only-door (dev-lab)",
     "scope": "subagent"
   },
   {
@@ -146,6 +146,12 @@
     "matches": "command",
     "reason": "PUSH-NO-VERIFY: `--no-verify` skips the pre-push hooks (admission, the trunk proof), so the push publishes what no hook checked.\nPush without the flag (no hook runs a test; the forge produces the part after the push), and to check a change first measure what you touched: {python} -m dev_lab.dev.verify\ndetails: docs-src/dev/refusals.md#push-no-verify (dev-lab)",
     "needs": "verdict-entry-point"
+  },
+  {
+    "name": "ENVIRONMENT-THROUGH-DEP",
+    "pattern": "(?:\\S*python[\\w.]*\\s+-m\\s+dev_lab\\.dev\\.netverb\\b[^;&|\\n]*?\\s--\\s+)?(?:\\S*[/\\\\])?uv(?:\\.exe)?(?:\\s+-\\S+(?:\\s+[^-\\s]\\S*)?)*?\\s+sync\\b",
+    "matches": "command",
+    "reason": "ENVIRONMENT-THROUGH-DEP: a bare uv sync builds a checkout environment with no declared extras and no published prefix.\nBuild the environment through its door: {python} -m dev_lab.dev.dep --bootstrap <checkout> (a new tree), or {python} -m dev_lab.dev.dep --root <checkout> --sync [--extra X].\ndetails: docs-src/dev/refusals.md#environment-through-dep (dev-lab)"
   },
   {
     "name": "WORKTREE-BASE-IS-EXPLICIT",
