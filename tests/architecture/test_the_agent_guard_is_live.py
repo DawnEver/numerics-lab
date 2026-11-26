@@ -28,6 +28,7 @@ _SHIPPED: Final = frozenset({
     'BARE-PYTHON',
     'BARE-TEST-INVOCATION',
     'CI-CRON-NEEDS-CONSENT',  # 2026-11-17 dev-lab integrate/main: an HPC CI-cron verb is the user's
+    'ENVIRONMENT-THROUGH-DEP',  # gained 2026-11-26 with the dev-lab relock in this PR
     'FAMILY-REPO-IS-CHECKED-OUT',  # gained 2026-11-20 with dev-lab 2adcab2c
     'FORGE-WRITE-VIA-CLI',
     'FORGE-WRITE-VIA-GH-API',
