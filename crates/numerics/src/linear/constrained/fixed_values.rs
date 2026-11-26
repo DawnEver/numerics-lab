@@ -4,17 +4,14 @@
 //! assembly's COO stream ([`apply_dirichlet_triplets`]); [`super::pin_rows`] pins a matrix that
 //! is already built.
 //!
-//! # The one thing deliberately NOT ported: the complex dtype
+//! # Both scalar types, one implementation
 //!
-//! The Python's `apply_dirichlet_triplets` is dtype-agnostic on purpose — `studies/harmonic`
-//! pins a COMPLEX phasor through it, and a real-only implementation would silently truncate the
-//! phase. `crate::sparse` is `f64` throughout (ruling D3's data structures are real), so a
-//! complex pin has no Rust representation to be faithful to yet. The real path is ported; the
-//! complex path is NOT, and it is named here rather than left to be discovered by a harmonic
-//! solve that loses its imaginary part. When `crate::sparse` grows a complex operator, this function
-//! is the first caller that needs it.
+//! The Python's `apply_dirichlet_triplets` is dtype-agnostic on purpose: a complex system pins a
+//! complex value through it, and a real-only implementation would silently drop the imaginary
+//! part. [`apply_dirichlet_triplets`] is generic over [`Scalar`] for the same reason, so a `c64`
+//! pin keeps both components and the pinned triplets feed a `Coo<c64>` directly.
 
-use crate::sparse::{Coo, Csr, SparseError};
+use crate::sparse::{Coo, Csr, Scalar, SparseError};
 
 /// A Dirichlet group: one prescribed value and the indices it is imposed on.
 ///
@@ -23,9 +20,9 @@ use crate::sparse::{Coo, Csr, SparseError};
 /// not be one in Python either — two groups whose values differ by an ulp are different keys —
 /// so the port carries the pairs as a SEQUENCE, which is also what `dict` iteration order gives.
 #[derive(Debug, Clone, PartialEq)]
-pub struct DirichletGroup {
+pub struct DirichletGroup<T = f64> {
     /// The prescribed value.
-    pub value: f64,
+    pub value: T,
     /// The indices it is imposed on. Duplicates are collapsed, mirroring the Python's
     /// `np.unique`.
     pub indices: Vec<u32>,
@@ -102,14 +99,14 @@ pub fn lift_identity_rows(
 /// `rhs` is modified in place at the pinned indices; the triplets are consumed and returned
 /// extended.
 #[must_use]
-pub fn apply_dirichlet_triplets(
+pub fn apply_dirichlet_triplets<T: Scalar>(
     mut rows: Vec<u32>,
     mut cols: Vec<u32>,
-    mut values: Vec<f64>,
-    rhs: &mut [f64],
-    groups: &[DirichletGroup],
-    bias: f64,
-) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
+    mut values: Vec<T>,
+    rhs: &mut [T],
+    groups: &[DirichletGroup<T>],
+    bias: T,
+) -> (Vec<u32>, Vec<u32>, Vec<T>) {
     for group in groups {
         let mut ids = group.indices.clone();
         ids.sort_unstable();
@@ -122,13 +119,13 @@ pub fn apply_dirichlet_triplets(
         }
         for (k, &r) in rows.iter().enumerate() {
             if ids.binary_search(&r).is_ok() {
-                values[k] = 0.0;
+                values[k] = T::ZERO;
             }
         }
         for &i in &ids {
             rows.push(i);
             cols.push(i);
-            values.push(1.0);
+            values.push(T::ONE);
         }
     }
     (rows, cols, values)

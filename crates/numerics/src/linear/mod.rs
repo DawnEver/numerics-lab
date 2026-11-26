@@ -21,7 +21,8 @@
 //!    `pypardiso` (Intel MKL) is installed, and it is not installed on this box — so there is no
 //!    baseline to characterize against and nothing to port. It is an ABSENCE with a reason, not
 //!    an omission. When it arrives it joins as a peer of `direct`, under the same residual guard.
-//! 4. **The complex Dirichlet path** is not portable to an `f64` operator; see [`constrained::fixed_values`].
+//! 4. **The registry is real.** The Krylov peers and the preconditioners take `f64`; a `c64` system
+//!    goes through [`solve_direct`] or [`solve_equilibrated`], each under the same two-sided guard.
 //!
 //! # The two-sided singular guard
 //!
@@ -41,7 +42,7 @@ pub mod precond;
 #[cfg(test)]
 mod tests;
 
-use crate::sparse::{Csr, SparseError};
+use crate::sparse::{Csr, Scalar, SparseError};
 
 pub use constrained::fixed_values::{apply_dirichlet_triplets, DirichletGroup};
 pub use constrained::master_slave::{resolve_constraint_chains, Constraint, ConstraintError};
@@ -366,8 +367,8 @@ pub fn solve_linear_system_with_tolerances(
 ///
 /// # Errors
 /// [`LinearSolveError::NonFinite`].
-pub fn check_finite(x: &[f64], backend: &str) -> Result<(), LinearSolveError> {
-    if x.iter().all(|v| v.is_finite()) {
+pub fn check_finite<T: Scalar>(x: &[T], backend: &str) -> Result<(), LinearSolveError> {
+    if x.iter().all(|v| Scalar::is_finite(*v)) {
         Ok(())
     } else {
         Err(LinearSolveError::NonFinite {
@@ -386,27 +387,100 @@ pub fn check_finite(x: &[f64], backend: &str) -> Result<(), LinearSolveError> {
 /// own factorisation can reuse.
 ///
 /// A zero-norm rhs is not judged: `||b|| = 0` has no relative residual, and `x = 0` is the answer.
+/// A residual that cannot be measured (`||b||^2` overflowing) is refused, never passed; [`solve_equilibrated`] is the entry point for an operator scaled that far.
 ///
 /// # Errors
 /// [`LinearSolveError::DirectResidual`].
-pub fn check_direct_residual(matrix: &Csr, rhs: &[f64], x: &[f64]) -> Result<(), LinearSolveError> {
-    let b_norm = rhs.iter().map(|v| v * v).sum::<f64>().sqrt();
+pub fn check_direct_residual<T: Scalar>(
+    matrix: &Csr<T>,
+    rhs: &[T],
+    x: &[T],
+) -> Result<(), LinearSolveError> {
+    let b_norm = rhs.iter().map(|v| v.modulus().powi(2)).sum::<f64>().sqrt();
     if b_norm <= 0.0 {
         return Ok(());
     }
     let ax = matrix.matvec(x)?;
-    let residual = ax
-        .iter()
-        .zip(rhs)
-        .map(|(a, b)| (a - b) * (a - b))
-        .sum::<f64>()
-        .sqrt()
-        / b_norm;
-    if residual > DIRECT_RESIDUAL_RTOL {
+    // An overflowing `||b||^2` makes every finite `||A x - b||` read as 0: the guard could no
+    // longer say no, so an unmeasurable norm IS the refusal (reported as a NaN residual).
+    let residual = if b_norm.is_finite() {
+        ax.iter()
+            .zip(rhs)
+            .map(|(a, b)| (*a - *b).modulus().powi(2))
+            .sum::<f64>()
+            .sqrt()
+            / b_norm
+    } else {
+        f64::NAN
+    };
+    // `!(<=)`, not `>`: a NaN compares false against every bound, and must be refused.
+    if !(residual <= DIRECT_RESIDUAL_RTOL) {
         return Err(LinearSolveError::DirectResidual {
             residual,
             bound: DIRECT_RESIDUAL_RTOL,
         });
     }
     Ok(())
+}
+
+/// The guarded direct solve over either scalar type: factorise, then refuse a non-finite solution and a
+/// relative residual above [`DIRECT_RESIDUAL_RTOL`] -- the `direct` branch of
+/// [`solve_linear_system`], which is the entry point for a `c64` system.
+///
+/// # Errors
+/// [`LinearSolveError::Direct`] (the factorisation refused), [`LinearSolveError::NonFinite`],
+/// [`LinearSolveError::DirectResidual`].
+pub fn solve_direct<T: Scalar>(matrix: &Csr<T>, rhs: &[T]) -> Result<Vec<T>, LinearSolveError> {
+    let x = direct::solve(matrix, rhs).map_err(LinearSolveError::Direct)?;
+    check_finite(&x, "direct")?;
+    check_direct_residual(matrix, rhs, &x)?;
+    Ok(x)
+}
+
+/// Solve `matrix @ x = rhs` after taking the operator's own scaling out of it -- the Rust mirror of
+/// the Python `solve_equilibrated`.
+///
+/// SYMMETRIC JACOBI EQUILIBRATION, an algebraic identity: with `D = diag(1/sqrt(|a_ii|))`, solving
+/// `(D A D) y = D b` and returning `D y` is the same `x` in exact arithmetic; only the
+/// floating-point path differs. A row with no diagonal entry (or a zero one) passes through at unit
+/// scale rather than dividing by zero, and the modulus is taken before the square root so a
+/// negative or complex diagonal never produces a NaN.
+///
+/// The guard runs on the SCALED system, through [`solve_direct`]: the residual it refuses on is the
+/// one the factorisation actually saw. The scaling is a per-operator claim, not a general accuracy
+/// improvement -- the Python's docstring records an operator on which it measured worse.
+///
+/// # Errors
+/// As [`solve_direct`], plus [`LinearSolveError::Shape`] when the matrix is not square or `rhs` has
+/// the wrong length.
+pub fn solve_equilibrated<T: Scalar>(
+    matrix: &Csr<T>,
+    rhs: &[T],
+) -> Result<Vec<T>, LinearSolveError> {
+    let n = matrix.shape().0;
+    if rhs.len() != n {
+        return Err(LinearSolveError::Shape(SparseError::ShapeMismatch {
+            expected: n,
+            got: rhs.len(),
+        }));
+    }
+    let s: Vec<f64> = matrix
+        .diagonal()?
+        .iter()
+        .map(|d| {
+            let m = d.modulus();
+            1.0 / if m == 0.0 { 1.0 } else { m }.sqrt()
+        })
+        .collect();
+    let mut scaled = matrix.clone();
+    let (indptr, indices) = (matrix.indptr(), matrix.indices());
+    let values = scaled.values_mut();
+    for r in 0..n {
+        for k in indptr[r] as usize..indptr[r + 1] as usize {
+            values[k] = values[k].scale(s[r] * s[indices[k] as usize]);
+        }
+    }
+    let scaled_rhs: Vec<T> = rhs.iter().zip(&s).map(|(b, si)| b.scale(*si)).collect();
+    let y = solve_direct(&scaled, &scaled_rhs)?;
+    Ok(y.iter().zip(&s).map(|(v, si)| v.scale(*si)).collect())
 }

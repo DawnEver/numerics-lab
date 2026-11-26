@@ -8,8 +8,11 @@
 mod kernels;
 
 use numerics::linear::direct::DirectFactorization;
-use numerics::linear::{check_direct_residual, requires_symmetric, solve_linear_system};
-use numerics::sparse::{Coo, Csr};
+use numerics::linear::{
+    check_direct_residual, requires_symmetric, solve_direct, solve_equilibrated,
+    solve_linear_system,
+};
+use numerics::sparse::{c64, Coo, Csr};
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -86,6 +89,50 @@ pub fn py_solve_linear_system<'py>(
     let warm = x0.map(|a| a.as_array().to_vec());
     let x = solve_linear_system(&csr, &b, solver, preconditioner, warm.as_deref())
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(x.into_pyarray(py))
+}
+
+/// `solve_direct_complex(n_rows, n_cols, rows, cols, values, rhs, equilibrated=False)`
+///
+/// Solve the `complex128` system `A @ x = rhs`, `A` as COO triplets (duplicates summed), through the
+/// guarded direct LU -- or, with `equilibrated=True`, through the symmetric Jacobi equilibrated solve.
+/// Returns `x` as `complex128[n_rows]`; a refusal of the guard is a `ValueError`.
+#[pyfunction]
+#[pyo3(
+    name = "solve_direct_complex",
+    signature = (n_rows, n_cols, rows, cols, values, rhs, equilibrated=false)
+)]
+#[allow(clippy::too_many_arguments)]
+pub fn py_solve_direct_complex<'py>(
+    py: Python<'py>,
+    n_rows: usize,
+    n_cols: usize,
+    rows: PyReadonlyArray1<'py, i64>,
+    cols: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, c64>,
+    rhs: PyReadonlyArray1<'py, c64>,
+    equilibrated: bool,
+) -> PyResult<Bound<'py, PyArray1<c64>>> {
+    let r: Vec<u32> = rows
+        .as_array()
+        .iter()
+        .map(|&i| narrow_index(i, n_rows, "row"))
+        .collect::<PyResult<_>>()?;
+    let c: Vec<u32> = cols
+        .as_array()
+        .iter()
+        .map(|&i| narrow_index(i, n_cols, "column"))
+        .collect::<PyResult<_>>()?;
+    let csr = Coo::from_triplets(n_rows, n_cols, r, c, values.as_array().to_vec())
+        .and_then(|coo| coo.to_csr())
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let b = rhs.as_array().to_vec();
+    let x = if equilibrated {
+        solve_equilibrated(&csr, &b)
+    } else {
+        solve_direct(&csr, &b)
+    }
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(x.into_pyarray(py))
 }
 
@@ -281,6 +328,7 @@ pub fn py_requires_symmetric(name: &str) -> bool {
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_solve_linear_system, m)?)?;
+    m.add_function(wrap_pyfunction!(py_solve_direct_complex, m)?)?;
     m.add_function(wrap_pyfunction!(py_requires_symmetric, m)?)?;
     m.add_class::<PyDirectFactorization>()?;
     kernels::register(m)?;
