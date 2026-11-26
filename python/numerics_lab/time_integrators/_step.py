@@ -183,7 +183,15 @@ def _noise_judged(problem, form, u, bars, operands, resolution: float, *, source
     state is queried, so a constitutive law's domain is never left (the constitutive-domain control).
     A row whose intercept vanishes to its own rounding has no source of its own; when its whole scale is
     also under the system's resolution, its residual is the coupled solve's rounding (`row_bar`).
+
+    Where no row's ``operands`` are under ``resolution`` the homogeneity mask cannot move a single bar, and it
+    is not read: no residual, no Jacobian (numerics-lab #55 -- one full Jacobian of the coupled system per
+    Newton iterate). It is NOT cached per step: the intercept is read at the iterate and moves with a
+    nonlinear row's ``F_u(u)``.
     """
+    bars = np.asarray(bars, dtype=float)
+    if not np.any(np.asarray(operands, dtype=float) <= resolution):
+        return bars
     u_arg = np.asarray(form.u_arg(u), dtype=float)
     zero = np.zeros_like(np.asarray(form.u_dot(u), dtype=float))
     try:
@@ -191,7 +199,7 @@ def _noise_judged(problem, form, u, bars, operands, resolution: float, *, source
             source = np.asarray(problem.residual(u_arg, zero, zero, form.t_eval), dtype=float).ravel()
         jacobian = problem.jacobian(u_arg, zero, zero, form.t_eval, DerivativeWeights(1, 0, 0))
     except (ValueError, ArithmeticError):
-        return np.asarray(bars, dtype=float)  # Unknowable homogeneity keeps every row's own bar.
+        return bars  # Unknowable homogeneity keeps every row's own bar.
     magnitude = abs(jacobian) if sp.issparse(jacobian) else np.abs(np.asarray(jacobian, dtype=float))
     state_terms = np.asarray(magnitude @ np.abs(u_arg)).ravel()
     intercept = source - np.asarray(jacobian @ u_arg).ravel()
