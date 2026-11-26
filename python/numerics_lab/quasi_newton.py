@@ -1,28 +1,33 @@
-"""Quasi-Newton secant updates for nonlinear SOLVES: the secant pair, the two-loop recursion and Broyden.
+"""Quasi-Newton secant updates: the secant pair, the two-loop recursion and L-BFGS pair memory, and Broyden.
 
-A secant pair is ``s = x_{k+1} - x_k`` and ``y = r_{k+1} - r_k`` (``r`` a residual). The nonlinear
-BFGS / L-BFGS / Broyden strategies run on these MATRIX-FREE forms: :func:`two_loop` applies the
-inverse model ``H r`` over a list of :class:`SecantPair` on top of a caller-supplied ``H0`` action;
-:func:`broyden_apply` applies Broyden's ("good") inverse model as stored rank-1
-:class:`BroydenUpdate` terms, and :func:`broyden_inverse_update` is its dense form.
+A secant pair is ``s = x_{k+1} - x_k`` and ``y = g_{k+1} - g_k`` (``g`` a gradient or a residual).
+Every form here is MATRIX-FREE: :func:`two_loop` applies the BFGS inverse model ``H g`` over a list
+of :class:`SecantPair` on top of a caller-supplied ``H0`` action; :class:`LbfgsMemory` is the pair
+memory behind :func:`numerics_lab.minimize.minimize_lbfgs`; :func:`broyden_apply` applies Broyden's
+("good") inverse model as stored rank-1 :class:`BroydenUpdate` terms, and
+:func:`broyden_inverse_update` is its dense form. The dense Hessian models of trust-region and SQP
+strategies are optimi_lab's (``optimi_lab.operator.quasi_newton``).
 
 Every update keeps its secant equation exactly in exact arithmetic (``H y = s``), and an update whose
-denominator vanishes is SKIPPED (returns ``None`` or the model unchanged), never divided through. The
-minimizer's dense Hessian models and its pair memory are optimi-lab's (``optimi_lab.operator.quasi_newton``).
+denominator vanishes is SKIPPED (returns ``None`` or the model unchanged), never divided through.
 """
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy.linalg import LinAlgError, LinAlgWarning, solve
 
 __all__ = [
     'SECANT_FLOOR',
     'BroydenUpdate',
+    'LbfgsMemory',
     'SecantPair',
+    'SingularCompactModel',
     'broyden_apply',
     'broyden_inverse_update',
     'broyden_update',
@@ -34,7 +39,15 @@ __all__ = [
 #: carries no information; the pair is skipped.
 SECANT_FLOOR = 1e-30
 
+#: An L-BFGS pair is kept only if ``s . y > CURVATURE_EPS * y . y`` (Byrd, Lu, Nocedal and Zhu 1995):
+#: a curvature that is roundoff against ``|y|^2`` would scale ``theta = y.y / s.y`` past float range.
+CURVATURE_EPS = float(np.finfo(float).eps)
+
 Vector = NDArray[np.float64]
+
+
+class SingularCompactModel(LinAlgError):
+    """The compact L-BFGS middle matrix is singular in floating point; reset the memory."""
 
 
 @dataclass(frozen=True)
@@ -105,3 +118,69 @@ def broyden_inverse_update(h: NDArray[np.float64], s: Vector, y: Vector) -> NDAr
     if abs(denominator) <= SECANT_FLOOR:
         return h
     return h + np.outer(s - hy, s @ h) / denominator
+
+
+class LbfgsMemory:
+    """The L-BFGS pair memory: the ONE bookkeeping behind every limited-memory BFGS model here.
+
+    Keeps the last ``size`` secant pairs (oldest first), SKIPS a pair whose curvature ``y . s`` is not above ``CURVATURE_EPS * y . y`` or
+    above :data:`SECANT_FLOOR`, and scales by ``gamma = s.y / y.y`` of the newest kept pair (``1``
+    when empty). One model, two forms: :meth:`inverse_apply` is the two-loop ``H q`` on ``gamma I``;
+    :meth:`hessian` is the compact direct form ``B = theta I - W M W^T`` with ``theta = 1 / gamma``
+    (Byrd, Nocedal and Schnabel 1994, eq. 3.5), which a bound-constrained (Cauchy point) step needs.
+    """
+
+    def __init__(self, size: int) -> None:
+        if size < 1:
+            msg = f'an L-BFGS memory holds at least one secant pair, got {size!r}'
+            raise ValueError(msg)
+        self.size = size
+        self.pairs: tuple[SecantPair, ...] = ()
+        self.gamma = 1.0
+        self._dimension: int | None = None
+
+    def push(self, s: Vector, y: Vector) -> bool:
+        """Keep ``(s, y)`` if ``s.y`` clears both :data:`SECANT_FLOOR` and ``CURVATURE_EPS * y.y``; True if kept."""
+        s, y = np.asarray(s, dtype=float), np.asarray(y, dtype=float)
+        self._dimension = s.size
+        ys = float(y @ s)
+        if not (ys > SECANT_FLOOR and ys > CURVATURE_EPS * float(y @ y)):
+            return False
+        self.pairs = (*self.pairs[max(0, len(self.pairs) + 1 - self.size) :], SecantPair(s.copy(), y.copy(), 1.0 / ys))
+        self.gamma = ys / float(y @ y)
+        return True
+
+    def clear(self) -> None:
+        """Forget every pair (a restart): the model is the identity again."""
+        self.pairs, self.gamma = (), 1.0
+
+    def inverse_apply(self, q: Vector) -> Vector:
+        """``H q``: the two-loop recursion over the kept pairs on ``H0 = gamma I``."""
+        return two_loop(np.asarray(q, dtype=float), self.pairs, lambda v: self.gamma * v)
+
+    def compact_factors(self) -> tuple[float, NDArray[np.float64], NDArray[np.float64]]:
+        """``(theta, W, M)`` with ``B = theta I - W M W^T``; ``W`` is ``n x 2m`` (``[Y, theta S]``)."""
+        theta = 1.0 / self.gamma
+        if not self.pairs:
+            return theta, np.zeros((self._dimension or 0, 0)), np.zeros((0, 0))
+        s = np.column_stack([pair.s for pair in self.pairs])
+        y = np.column_stack([pair.y for pair in self.pairs])
+        sy = s.T @ y
+        lower = np.tril(sy, -1)
+        middle = np.block([[-np.diag(np.diag(sy)), lower.T], [lower, theta * (s.T @ s)]])
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', LinAlgWarning)
+            try:
+                m = solve(middle, np.eye(middle.shape[0]))
+            except (LinAlgError, LinAlgWarning) as exc:
+                msg = f'the compact L-BFGS middle matrix ({middle.shape[0]}x{middle.shape[0]}) is singular'
+                raise SingularCompactModel(msg) from exc
+        return theta, np.hstack([y, theta * s]), m
+
+    def hessian(self) -> NDArray[np.float64]:
+        """The dense direct model ``B`` (the compact form expanded); for small ``n`` and for tests."""
+        if self._dimension is None:
+            msg = 'an L-BFGS memory that never saw a pair has no dimension'
+            raise ValueError(msg)
+        theta, w, m = self.compact_factors()
+        return theta * np.eye(self._dimension) - w @ m @ w.T

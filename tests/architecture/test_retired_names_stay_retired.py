@@ -21,16 +21,9 @@ RETIRED: dict[str, str] = {
     'time_integrators._step.directional_line_search': 'numerics_lab.line_search.directional_line_search',
     'from numerics_lab.time_integrators import directional_line_search': 'numerics_lab.line_search',
     'material_change': 'state_change (AssembledState, _has_converged, _StagnationWatch.observe)',
-    # Engine split (2026-11-26): minimization and sampling live in optimi-lab; callers import it there.
-    'numerics_lab.minimize': 'optimi_lab.operator.minimize (minimize_lbfgs, MinimizeResult)',
-    'minimize_lbfgs': 'optimi_lab.operator.minimize.minimize_lbfgs',
+    # Engine split (2026-11-26): optimization strategies and sampling live in optimi-lab; callers import it there.
     'numerics_lab.trust_region': 'optimi_lab.operator.trust_region (agreement, update_radius, dogleg)',
     'numerics_lab.random_streams': 'optimi_lab.core.random_streams.Stream',
-    'strong_wolfe': 'optimi_lab.operator.wolfe.strong_wolfe',
-    'WolfeSearchFailed': 'optimi_lab.operator.wolfe.WolfeSearchFailed',
-    'WolfeStep': 'optimi_lab.operator.wolfe.WolfeStep',
-    'LbfgsMemory': 'optimi_lab.operator.quasi_newton.LbfgsMemory',
-    'SingularCompactModel': 'optimi_lab.operator.quasi_newton.SingularCompactModel',
     'bfgs_update': 'optimi_lab.operator.quasi_newton.bfgs_update',
     'bfgs_inverse_update': 'optimi_lab.operator.quasi_newton.bfgs_inverse_update',
     'sr1_update': 'optimi_lab.operator.quasi_newton.sr1_update',
