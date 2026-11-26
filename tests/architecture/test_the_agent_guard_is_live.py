@@ -38,7 +38,9 @@ _SHIPPED: Final = frozenset({
     'GIT-STASH',
     'HEAVY-IS-THE-MAIN-SESSIONS',  # 2026-11-17 dev-lab integrate/main: a subagent runs no heavy or full selection
     'HPC-THROUGH-THE-DOOR',  # gained 2026-11-07 with dev-lab 8c4ab734
+    'LEDGER-WRITES-THROUGH-ITS-DOOR',  # gained 2026-11-26 with the adopt-dev-lab-1126 relock
     'MACHINE-FILE-IS-RENDERED',  # gained 2026-11-20 with dev-lab 2adcab2c
+    'NO-BACKUP-COPIES',  # gained 2026-11-26 with the adopt-dev-lab-1126 relock
     'MAIN-ONLY-DOOR',  # gained 2026-11-22 with dev-lab 77ef8452
     'OUTPUT-HOLDS-NO-CODE',  # gained 2026-11-22 with dev-lab 77ef8452
     'PUSH-FORCE',
@@ -52,6 +54,7 @@ _SHIPPED: Final = frozenset({
     'SUBAGENT-NO-PUSH',
     'TRACKED-CITES-NO-EPHEMERAL',  # 2026-11-17 dev-lab #670: the journal door folded into the deny engine
     'TREE-HAS-A-LIVE-RUN',
+    'USER-FROZEN-FILES',  # gained 2026-11-26 with the adopt-dev-lab-1126 relock
     'WORKTREE-BASE-IS-EXPLICIT',
     'WORKTREE-NAMES-ITS-TASK',  # gained 2026-11-22 with dev-lab 77ef8452
     'WORKTREES-STAY-INSIDE',
@@ -109,7 +112,7 @@ def test_a_forbidden_shape_is_refused_by_the_rule_that_owns_it(command: str, rul
     [
         './.venv/Scripts/python.exe -m dev_lab.dev.verify',
         'git push origin main',
-        'git worktree add --detach .claude/worktrees/scratch 1a2b3c4',
+        'git worktree add --detach .claude/worktrees/review-fold 1a2b3c4',
         './.venv/Scripts/python.exe -m dev_lab.dev.forge issue create --title x --body y',
         'gh issue list --state open',
         'git add -- python/numerics_lab/__init__.py',

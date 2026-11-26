@@ -17,16 +17,14 @@ REPO: Final = 'numerics-lab'
 
 _GITIGNORE: Final = Delta(
     repo=REPO,
-    # The cargo target directory and the native extension an editable build writes beside its sources.
-    added=('/target/', '*.pyd', '*.so'),
+    # The native extension an editable build writes beside its sources (the base carries the cargo target).
+    added=('*.pyd', '*.so'),
     dropped={},
-    ceiling=3,
+    ceiling=2,
 )
 
 DELTAS: Final[dict[str, Delta]] = {
     '.gitignore': _GITIGNORE,
-    # Every tracked text file is LF in the tree on every OS, as when this code lived in its original repo.
-    '.gitattributes': Delta(repo=REPO, added=('* text=auto eol=lf',), dropped={}, ceiling=1),
-    '.rgignore': Delta(repo=REPO, added=(), dropped={}, ceiling=0),
-    'Makefile': Delta(repo=REPO, added=(), dropped={}, ceiling=0),
+    # The base now carries '* text=auto eol=lf' itself; this repo adds nothing.
+    '.gitattributes': Delta(repo=REPO, added=(), dropped={}, ceiling=0),
 }
