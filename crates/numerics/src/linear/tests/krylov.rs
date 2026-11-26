@@ -11,7 +11,7 @@ const GENERAL: [&str; 3] = ["gmres", "bicgstab", "qmr"];
 #[test]
 fn every_krylov_backend_reaches_the_direct_solution_on_the_spd_system() {
     let (a, b) = spd_system(60);
-    let reference = direct::solve(&a, &b).expect("the SPD system factorises");
+    let reference = direct::solve(&a, &b).expect("the SPD system factorizes");
     for name in ALL {
         let x = solve_linear_system(&a, &b, Some(name), None, None)
             .unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -22,7 +22,7 @@ fn every_krylov_backend_reaches_the_direct_solution_on_the_spd_system() {
 #[test]
 fn the_general_backends_reach_the_direct_solution_on_a_non_symmetric_system() {
     let (a, b) = nonsymmetric_system(60);
-    let reference = direct::solve(&a, &b).expect("the non-symmetric system factorises");
+    let reference = direct::solve(&a, &b).expect("the non-symmetric system factorizes");
     for name in GENERAL {
         let x = solve_linear_system(&a, &b, Some(name), None, None)
             .unwrap_or_else(|e| panic!("{name}: {e}"));

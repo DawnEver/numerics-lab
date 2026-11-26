@@ -1,9 +1,9 @@
-//! The dense BORDER of a sparse direct factorisation: the dense rows/columns found, and their
+//! The dense BORDER of a sparse direct factorization: the dense rows/columns found, and their
 //! elimination through the `k x k` Schur complement so the supernodal kernel sees only the sparse
 //! block. Split out of `direct.rs` on 2026-09-29; see [`super::DirectFactorization`] for why.
 
 use super::{DirectFailure, FactorKind, Kernel};
-use crate::sparse::{Coo, Csr};
+use crate::sparse::{Coo, Csr, Scalar};
 use faer::linalg::solvers::{PartialPivLu, Solve};
 use faer::Mat;
 
@@ -41,9 +41,9 @@ pub(super) fn dense_indices(n: usize, indptr: &[u32], indices: &[u32]) -> Vec<us
     dense
 }
 
-/// `A = [[A11, A12], [A21, A22]]` with the dense indices last: `A11` is factorised sparsely and
+/// `A = [[A11, A12], [A21, A22]]` with the dense indices last: `A11` is factorized sparsely and
 /// the border is eliminated through the `k x k` Schur complement `S = A22 - A21 A11^{-1} A12`.
-pub(super) struct Border {
+pub(super) struct Border<T: Scalar> {
     pub(super) dense: Vec<usize>,
     interior: Vec<usize>,
     /// `(original CSR slot, slot in a11)`.
@@ -54,17 +54,17 @@ pub(super) struct Border {
     to_a21: Vec<(usize, usize, usize)>,
     /// `(original slot, border row, border col)`.
     to_a22: Vec<(usize, usize, usize)>,
-    a11: Csr,
-    pub(super) kernel: Kernel,
+    a11: Csr<T>,
+    pub(super) kernel: Kernel<T>,
     /// `A11^{-1} A12`, `n1 x k` column-major.
-    y: Vec<f64>,
+    y: Vec<T>,
     /// `A21`, `k x n1` row-major.
-    a21: Vec<f64>,
-    s_lu: Option<PartialPivLu<f64>>,
+    a21: Vec<T>,
+    s_lu: Option<PartialPivLu<T>>,
 }
 
-impl Border {
-    pub(super) fn new(a: &Csr, dense: Vec<usize>) -> Result<Self, DirectFailure> {
+impl<T: Scalar> Border<T> {
+    pub(super) fn new(a: &Csr<T>, dense: Vec<usize>) -> Result<Self, DirectFailure> {
         let n = a.shape().0;
         let mut where_ = vec![(false, 0usize); n]; // (is_dense, position within its block)
         for (p, &d) in dense.iter().enumerate() {
@@ -86,7 +86,7 @@ impl Border {
                     (false, false) => {
                         to_a11.push((slot, to_a11.len()));
                         #[allow(clippy::cast_possible_truncation)]
-                        coo.push(rp as u32, cp as u32, 0.0)?;
+                        coo.push(rp as u32, cp as u32, T::ZERO)?;
                     }
                     (false, true) => to_a12.push((slot, rp, cp)),
                     (true, false) => to_a21.push((slot, rp, cp)),
@@ -103,8 +103,8 @@ impl Border {
         let kernel = Kernel::new(&a11)?;
         let k = dense.len();
         Ok(Self {
-            y: vec![0.0; n1 * k],
-            a21: vec![0.0; k * n1],
+            y: vec![T::ZERO; n1 * k],
+            a21: vec![T::ZERO; k * n1],
             dense,
             interior,
             to_a11,
@@ -117,7 +117,7 @@ impl Border {
         })
     }
 
-    pub(super) fn refactor(&mut self, values: &[f64]) -> Result<FactorKind, DirectFailure> {
+    pub(super) fn refactor(&mut self, values: &[T]) -> Result<FactorKind, DirectFailure> {
         let (n1, k) = (self.interior.len(), self.dense.len());
         self.s_lu = None;
         {
@@ -127,16 +127,16 @@ impl Border {
             }
         }
         let kind = self.kernel.refactor(&self.a11)?;
-        self.y.iter_mut().for_each(|v| *v = 0.0);
+        self.y.iter_mut().for_each(|v| *v = T::ZERO);
         for &(o, r, c) in &self.to_a12 {
             self.y[c * n1 + r] = values[o];
         }
         self.kernel.solve_in_place(&mut self.y, k)?;
-        self.a21.iter_mut().for_each(|v| *v = 0.0);
+        self.a21.iter_mut().for_each(|v| *v = T::ZERO);
         for &(o, r, c) in &self.to_a21 {
             self.a21[r * n1 + c] = values[o];
         }
-        let mut s = Mat::<f64>::zeros(k, k);
+        let mut s = Mat::<T>::zeros(k, k);
         for &(o, r, c) in &self.to_a22 {
             s[(r, c)] += values[o];
         }
@@ -144,7 +144,7 @@ impl Border {
             let row = &self.a21[i * n1..(i + 1) * n1];
             for j in 0..k {
                 let col = &self.y[j * n1..(j + 1) * n1];
-                s[(i, j)] -= row.iter().zip(col).map(|(p, q)| p * q).sum::<f64>();
+                s[(i, j)] -= dot(row, col);
             }
         }
         self.s_lu = Some(s.partial_piv_lu());
@@ -152,14 +152,14 @@ impl Border {
     }
 
     /// One bordered solve of `nrhs` column-major columns of length `n`, in place.
-    pub(super) fn solve(&self, b: &mut [f64], nrhs: usize) -> Result<(), DirectFailure> {
+    pub(super) fn solve(&self, b: &mut [T], nrhs: usize) -> Result<(), DirectFailure> {
         let Some(s_lu) = self.s_lu.as_ref() else {
             return Err(DirectFailure::NotFactored);
         };
         let (n1, k) = (self.interior.len(), self.dense.len());
         let n = n1 + k;
-        let mut b1 = vec![0.0; n1 * nrhs];
-        let mut t = Mat::<f64>::zeros(k, nrhs);
+        let mut b1 = vec![T::ZERO; n1 * nrhs];
+        let mut t = Mat::<T>::zeros(k, nrhs);
         for c in 0..nrhs {
             let col = &b[c * n..(c + 1) * n];
             for (p, &i) in self.interior.iter().enumerate() {
@@ -174,7 +174,7 @@ impl Border {
             let y1 = &b1[c * n1..(c + 1) * n1];
             for i in 0..k {
                 let row = &self.a21[i * n1..(i + 1) * n1];
-                t[(i, c)] -= row.iter().zip(y1).map(|(p, q)| p * q).sum::<f64>();
+                t[(i, c)] -= dot(row, y1);
             }
         }
         let x2 = s_lu.solve(&t);
@@ -193,4 +193,9 @@ impl Border {
         }
         Ok(())
     }
+}
+
+/// `sum p_i q_i` -- the unconjugated product the Schur complement is built from.
+fn dot<T: Scalar>(p: &[T], q: &[T]) -> T {
+    p.iter().zip(q).fold(T::ZERO, |acc, (a, b)| acc + *a * *b)
 }

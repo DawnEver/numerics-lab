@@ -585,7 +585,7 @@ impl<S: NonlinearSystem> IterationStrategy<S> for HeldFactorNewtonStrategy {
 /// the Python's own comment says about that branch. What is missing is the JACOBIAN-FREE path,
 /// which needs a Krylov backend; that lives in `numerics::linear`, not here, and wiring it in is a
 /// follow-on rather than a rewrite of this file. Until then a system with no tangent takes the
-/// Picard substitution — the Python's own breakdown behaviour, reached one step earlier.
+/// Picard substitution — the Python's own breakdown behavior, reached one step earlier.
 ///
 /// `eps` is retained (unused today) so the JFNK differencing parameter does not have to be
 /// re-derived when the backend arrives.

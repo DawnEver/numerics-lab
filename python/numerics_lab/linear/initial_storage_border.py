@@ -421,7 +421,7 @@ def _sparse_joint_border(
             else _weighted_by_row_bars(dense, forcing[supported], answer, bars)
         )
         # A retained row whose Schur row is too weak to share its residual with the other
-        # retained rows (case_a admission 338: a body row at 2e-5 of its neighbours, 2.6x its
+        # retained rows (case_a admission 338: a body row at 2e-5 of its neighbors, 2.6x its
         # bar) takes it from the ELIMINATED rows, through the elimination's adjoint, each in
         # units of its own bar -- the same weighted least squares, one level down.
         # Judged on the ACTUAL original rows, not the Schur model: the elimination's own

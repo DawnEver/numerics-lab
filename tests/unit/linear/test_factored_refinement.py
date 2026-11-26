@@ -151,7 +151,7 @@ def test_a_singular_system_is_refused_by_each_criterion(criterion):
         )
 
 
-def test_backward_error_criterion_honours_its_step_budget():
+def test_backward_error_criterion_honors_its_step_budget():
     calls = []
     solve = _jacobi(_DIAGONALLY_DOMINANT)
 

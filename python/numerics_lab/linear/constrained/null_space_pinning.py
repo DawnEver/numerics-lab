@@ -2,8 +2,8 @@
 
 An assembled operator can carry a row that is NUMERICALLY empty: every entry on it is an
 explicit zero. A DOF like that couples to nothing, so the operator has a null vector along it
-and any direct factorisation is exactly singular. Its value is pure gauge freedom -- pinning it
-to zero with an identity row is EXACT, not a regularisation, and it is the only way to pin it
+and any direct factorization is exactly singular. Its value is pure gauge freedom -- pinning it
+to zero with an identity row is EXACT, not a regularization, and it is the only way to pin it
 that cannot change the rest of the solution, because the DOF appears in no other equation.
 
 The test is NUMERIC (row sum of ``|entries|`` == 0), not structural: an assembler that drops a
@@ -108,7 +108,7 @@ def floats_on_a_constant(mat, *, rtol: float = 1e-8) -> bool:
     every `param_fit` sector reaches the solver ungauged.
 
     Constraint rows are EXCLUDED (see :func:`constraint_rows`); the tolerance is relative to the
-    largest equation row sum, so it means the same in metres and millimetres.
+    largest equation row sum, so it means the same in meters and millimeters.
     """
     n = mat.shape[0]
     if n == 0:
@@ -145,7 +145,7 @@ def gauge_pin_floating_constant(mat, rhs: NDArray[np.float64], *, has_dirichlet:
     direction.
 
     WHAT IT CANNOT CHANGE: ``B = curl A``, so a constant shift in ``A`` leaves every flux density,
-    energy and torque untouched. The pin is EXACT for every observable, not a regularisation.
+    energy and torque untouched. The pin is EXACT for every observable, not a regularization.
 
     WHY ``has_dirichlet`` IS THE CALLER'S TO ANSWER AND NOT THIS FUNCTION'S. A real Dirichlet row
     and a fold's eliminated slave row are the SAME OBJECT -- a lone 1.0 on the diagonal -- so no
@@ -163,7 +163,7 @@ def gauge_pin_floating_constant(mat, rhs: NDArray[np.float64], *, has_dirichlet:
     free = ~constraint_rows(csr)
     diag = np.abs(csr.diagonal()) * free
     # THE BEST-CONDITIONED FREE DOF. Pinning is exact wherever it lands, but a sliver cell's tiny
-    # diagonal makes the factorisation worse for nothing, and a CONSTRAINT row must not be chosen:
+    # diagonal makes the factorization worse for nothing, and a CONSTRAINT row must not be chosen:
     # overwriting one would drop the seam pairing it encodes.
     r = int(np.argmax(diag))
     lil = csr.tolil()

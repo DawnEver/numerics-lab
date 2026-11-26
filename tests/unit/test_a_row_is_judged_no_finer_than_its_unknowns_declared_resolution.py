@@ -5,7 +5,7 @@ unknown that a cancelling constraint places -- an ideal transformer's ``i_0 + i_
 ``i_0, i_2 ~ 3.7 A`` -- is resolved only to the rounding of that sum (~1e-15 A), however small its own value
 (``i_1 ~ 5e-11 A``). A row reading it was barred at 1e-20 A against a 2.2e-17 A residual: Newton converged by
 its third iteration, then backtracked to its ceiling every step (measured downstream 2026-11-12 on an LLC
-march: 24 Newton iterations and 82 trials per step, 553 of 1000 steps labelled non-converged). The rate's
+march: 24 Newton iterations and 82 trials per step, 553 of 1000 steps labeled non-converged). The rate's
 CONSTRUCTION floor already reads ``state_resolution``; an algebraic row now gets the same floor through
 ``|F_u|``: ``FLOOR_SAFETY eps |F_u| resolved``.
 """

@@ -2,7 +2,7 @@
 
 A march stores every accepted step; a reader needs only enough points that linear interpolation
 between them reproduces the trajectory. :func:`decimate` greedily removes points (forward)
-such that EVERY dropped point lies within ``bound`` of the chord between its kept neighbours, unknown
+such that EVERY dropped point lies within ``bound`` of the chord between its kept neighbors, unknown
 by unknown -- the error claim is checked on the points themselves, never assumed. The first and last
 points and every located event instant are always kept: an event is where the trajectory kinks.
 """

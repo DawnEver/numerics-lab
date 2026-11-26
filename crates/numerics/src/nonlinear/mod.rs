@@ -9,7 +9,7 @@
 //!
 //! First principle (`AGENTS.md`): IMPLEMENT every method and characterize it — never exclude one
 //! because an experiment showed it inferior. Plain Picard's historical divergence on saturating
-//! B-H is a labelled datum, not a hidden exclusion. The default is the damped Picard extracted
+//! B-H is a labeled datum, not a hidden exclusion. The default is the damped Picard extracted
 //! VERBATIM from the MEC/FEA inline loops, so wiring this seam leaves every golden unchanged.
 //!
 //! # What the Python calls a Protocol, this calls a trait
@@ -316,7 +316,7 @@ pub trait NonlinearSystem: Sized {
     /// As [`Self::assemble`].
     fn residual(&mut self, x: &[f64], state: &StateOf<Self>) -> Result<Vec<f64>, NonlinearError>;
 
-    /// Scalar convergence measure a line search minimises — the norm over the FREE DOFs only.
+    /// Scalar convergence measure a line search minimizes — the norm over the FREE DOFs only.
     ///
     /// Defaults to `||residual||` (correct for MEC, whose reduced loop residual has no pinned
     /// rows). FEA overrides it to EXCLUDE the Dirichlet rows: the full-space FEA residual
@@ -641,7 +641,7 @@ pub fn default_rtol_energy_pct(name: &str) -> Result<f64, NonlinearError> {
     })
 }
 
-/// Resolve an iteration-strategy name; `None` -> the default damped Picard (today's behaviour).
+/// Resolve an iteration-strategy name; `None` -> the default damped Picard (today's behavior).
 ///
 /// # Errors
 /// [`NonlinearError::UnknownStrategy`].

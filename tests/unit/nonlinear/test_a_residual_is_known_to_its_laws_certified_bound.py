@@ -25,7 +25,7 @@ pytestmark = pytest.mark.unit
 
 def test_the_law_term_is_its_own_name_and_independent_of_the_arithmetic_mask():
     bound = ResidualAssemblyBound(np.array([1.0, 2.0]), np.array([True, False]), np.array([0.5, 0.25]))
-    assert np.array_equal(bound.allowance(), [1.5, 0.25])  # an unknown arithmetic does not unknow the law
+    assert np.array_equal(bound.allowance(), [1.5, 0.25])  # an unknown arithmetic does not make the law unknown
     assert np.array_equal(ResidualAssemblyBound(np.ones(2), np.ones(2, dtype=bool)).law, np.zeros(2))
     assert np.array_equal(bound.take([1]).law, [0.25])
     with pytest.raises(ValueError, match='law'):

@@ -110,7 +110,7 @@ def test_the_budget_cannot_interrupt_a_call_already_running() -> None:
 
 
 def test_no_budget_is_a_pass_through() -> None:
-    """`None` must be today's behaviour EXACTLY, so opting in is the only thing that changes a solve."""
+    """`None` must be today's behavior EXACTLY, so opting in is the only thing that changes a solve."""
     inner = _Counting()
     assert with_time_budget(inner, seconds=None) is inner
 

@@ -10,7 +10,7 @@ curvature contradicts actual stored-acceleration and differentiated equations". 
 sorted indices passed, and the method sorted the CALLER's matrix in place, so a retry passed: the result
 was a function of storage order.
 
-The model is the massless-transformer of the neighbouring test plus that open node: a coordinate ``p`` with
+The model is the massless-transformer of the neighboring test plus that open node: a coordinate ``p`` with
 its own algebraic row ``p = 0`` that also enters every field row with a tiny coefficient. Any structural
 maximum matching may pair ``p`` with a field row; only a magnitude-aware one is sound.
 """

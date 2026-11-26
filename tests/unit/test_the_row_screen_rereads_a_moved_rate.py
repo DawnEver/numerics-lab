@@ -36,7 +36,7 @@ _FORM = SimpleNamespace(
     t_eval=0.0,
     weights=DerivativeWeights(1.0, ALPHA1, 0.0),
     u_arg=lambda state: state,
-    u_dot=lambda state: ALPHA1 * (state - _ORIGIN),  # BDF1 centred on the previous state, as the march builds it
+    u_dot=lambda state: ALPHA1 * (state - _ORIGIN),  # BDF1 centered on the previous state, as the march builds it
     u_ddot=np.zeros_like,
 )
 

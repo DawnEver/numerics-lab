@@ -2,9 +2,9 @@
 
 Each takes the operator as a callable ``v -> A v`` (or anything with ``@``), so an assembled matrix,
 a ``LinearOperator`` and a Jacobian-free product all work. These are the PUBLIC primitives an
-optimiser composes (a Newton-CG inner solve, a trust-region subproblem); the registry's ``cg`` and
+optimizer composes (a Newton-CG inner solve, a trust-region subproblem); the registry's ``cg`` and
 ``minres`` backends (:data:`numerics_lab.linear.LINEAR_SOLVER_REGISTRY`) are the solve seam's own
-and are characterised by the linear goldens.
+and are characterized by the linear goldens.
 
 - :func:`conjugate_gradient` -- symmetric positive definite ``A``.
 - :func:`minres` -- symmetric, possibly indefinite ``A`` (Paige and Saunders).
@@ -88,7 +88,7 @@ def conjugate_gradient(
 def minres(
     a, b: Vector, *, x0: Vector | None = None, rtol: float = 1e-10, atol: float = 0.0, max_iterations: int | None = None
 ) -> KrylovSolution:
-    """MINRES (Paige and Saunders) for a symmetric, possibly indefinite ``a``: minimises ``||b - A x||`` on the Krylov space."""
+    """MINRES (Paige and Saunders) for a symmetric, possibly indefinite ``a``: minimizes ``||b - A x||`` on the Krylov space."""
     apply = _operator(a)
     b = np.asarray(b, dtype=float)
     x = np.zeros_like(b) if x0 is None else np.asarray(x0, dtype=float).copy()

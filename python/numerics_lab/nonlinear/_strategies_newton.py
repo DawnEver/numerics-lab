@@ -195,7 +195,7 @@ class NewtonStrategy:
         x = system.initial_guess()
         if max_iter <= 0:
             # NO ITERATION RUNS NO ASSEMBLY, the contract every strategy keeps: the caller gets
-            # back its pre-initialised fields, never an assembly nobody asked for.
+            # back its pre-initialized fields, never an assembly nobody asked for.
             return IterationResult(x=x, state=None, iterations=0, converged=False)
         state = system.assemble(x)
         r_norm = _free_residual_norm(system, x, state)

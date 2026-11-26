@@ -29,7 +29,7 @@ def test_a_small_coefficient_above_its_own_bound_survives():
 
 def test_a_huge_sparse_product_is_judged_on_its_own_entries_only():
     # MEASURED 2026-10-12 on case_a voltage-driven: `abs(product) <= bound` on two sparse
-    # matrices is TRUE at every implicit zero, so the comparison materialised n^2 entries (76 GiB).
+    # matrices is TRUE at every implicit zero, so the comparison materialized n^2 entries (76 GiB).
     n = 2_000_000
     left = sp.identity(n, format='csr') * 2.0
     product = certified_sparse_product(left, left)

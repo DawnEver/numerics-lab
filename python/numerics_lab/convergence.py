@@ -56,7 +56,7 @@ class ConvergenceBand:
 
     @property
     def finest(self) -> float:
-        """The value at the finest refinement -- the estimate the band is centred on."""
+        """The value at the finest refinement -- the estimate the band is centered on."""
         return self.values[-1]
 
     @property

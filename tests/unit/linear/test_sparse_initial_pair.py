@@ -425,7 +425,7 @@ def _inductor_cutset(first_inductance, second_inductance):
 def test_a_redundant_row_left_as_a_roundoff_pivot_does_not_drop_a_physical_equation(
     first_inductance, second_inductance
 ):
-    """``1e-4`` is no binary fraction, so the redundant copy of the tie survives the scaled factorisation as a pivot of
+    """``1e-4`` is no binary fraction, so the redundant copy of the tie survives the scaled factorization as a pivot of
     round-off size: ``splu`` does not raise on it, and the consistent start was refused as a contradiction although
     the same circuit with ``L = 2**-13`` is admitted. Planted control: the binary case, admitted before this fix.
     """

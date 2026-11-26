@@ -267,7 +267,7 @@ def test_unknown_integrator_raises() -> None:
 
 
 def test_an_exhausted_newton_ceiling_labels_the_solution(caplog) -> None:
-    """The CONVERGENCE CONTRACT: a step that exhausts its Newton ceiling is LABELLED, never
+    """The CONVERGENCE CONTRACT: a step that exhausts its Newton ceiling is LABELED, never
     silent -- the solution carries the worst step residual and the offending times, the
     marcher warns (AGENTS.md: the caller can tell), and the caller reads the ``converged``
     tag. The DC-op precedent is the raise; the transient's contract is label-don't-block

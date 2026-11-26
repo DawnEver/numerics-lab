@@ -1,3 +1,4 @@
+# Rendered by dev_lab.dev.rusttoolchain from the family toolchain; hand edits RED.
 [toolchain]
 channel = "1.100.0"
-components = ["rustfmt", "clippy"]
+components = ["clippy", "rustfmt"]

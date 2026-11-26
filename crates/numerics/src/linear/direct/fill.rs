@@ -17,7 +17,7 @@ use faer::Side;
 /// `nnz(L)` of the Cholesky factor of a square pattern under the AMD ordering.
 ///
 /// `col_ptr` / `row_idx` describe the FULL pattern (both triangles, CSC; a symmetric pattern's CSR
-/// is the same arrays). Only one triangle is read, so an unsymmetric pattern must be symmetrised
+/// is the same arrays). Only one triangle is read, so an unsymmetric pattern must be symmetrized
 /// (`A + A^T`) by the caller -- the structure the LU's own fill is bounded against.
 ///
 /// # Errors

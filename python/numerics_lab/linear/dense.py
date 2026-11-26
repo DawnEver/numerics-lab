@@ -23,7 +23,7 @@ def _finite(name: str, *arrays: NDArray[np.float64]) -> None:
 
 
 def least_squares(a: NDArray[np.float64], b: NDArray[np.float64]) -> NDArray[np.float64]:
-    """The minimum-norm ``x`` minimising ``||a x - b||_2`` (SVD-based, so a rank-deficient ``a`` is answered).
+    """The minimum-norm ``x`` minimizing ``||a x - b||_2`` (SVD-based, so a rank-deficient ``a`` is answered).
 
     ``b`` may be a vector or a matrix of right-hand sides; ``x`` takes its trailing shape.
     """

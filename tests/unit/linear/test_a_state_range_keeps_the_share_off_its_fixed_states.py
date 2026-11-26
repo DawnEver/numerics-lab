@@ -15,7 +15,7 @@ PLANTED: the two-bodies case of `test_a_shared_body_row_is_judged_at_its_trial` 
 coordinate stored: its state row solves for its RATE, its stored-charge row for its STATE). Under
 a range holding the field states, the body-row plant is shared through the rate rows only, the
 field states stay exactly zero and every original row holds its bar. The stored-charge rows carry
-the caller's row scale, so on the parent (2ea8e4c) the share saw them at bar 1.0. The behavioural
+the caller's row scale, so on the parent (2ea8e4c) the share saw them at bar 1.0. The behavioral
 red at full scale is the captured cond03 replay. CONTROL: with no range, the same share still uses
 the stored-charge rows.
 """

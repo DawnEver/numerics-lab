@@ -14,7 +14,7 @@ Before ``gauss.linear``'s singular guard was reached from that call site, the ad
 Dorfler marking selected nothing from a NaN indicator, the adaptive loop read that as convergence
 and the CLI exited 0. Ten cases refined on noise and reported success.
 
-# Why pinning is exact rather than a regularisation
+# Why pinning is exact rather than a regularization
 
 An orphan dof appears in NO other equation, so fixing it cannot change any other unknown; and the
 QoI load ``g`` is identically zero on it (asserted below), so ``z = 0`` there is the true solution

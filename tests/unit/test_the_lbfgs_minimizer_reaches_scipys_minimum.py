@@ -1,4 +1,4 @@
-"""``minimize_lbfgs`` -- the one unconstrained minimiser -- against scipy.optimize L-BFGS-B, unbounded (tests only).
+"""``minimize_lbfgs`` -- the one unconstrained minimizer -- against scipy.optimize L-BFGS-B, unbounded (tests only).
 
 Tolerances: positions are ABSOLUTE in the variables' own units (dimensionless here); values RELATIVE.
 """
@@ -15,7 +15,7 @@ def _rosen(x):
 
 
 def _quadratic(x):
-    # Written about its minimiser so f* = 0 exactly. The expanded form 0.5 x.A.x - sum(x) has
+    # Written about its minimizer so f* = 0 exactly. The expanded form 0.5 x.A.x - sum(x) has
     # f* = -1.225, whose ulp (2.2e-16) swamps the decrease 0.5 g.A^-1.g a step can still make once
     # |g| < sqrt(eps |f*| max(A)) ~ 4e-8: below that no value comparison can certify a step, so an
     # atol of 1e-10 was reached only by a lucky rounding (x86) and failed on macOS arm64.

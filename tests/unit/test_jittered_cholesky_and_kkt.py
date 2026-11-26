@@ -1,4 +1,4 @@
-"""Jittered Cholesky reports the jitter it used; the KKT solve is the constrained minimiser, dense or sparse."""
+"""Jittered Cholesky reports the jitter it used; the KKT solve is the constrained minimizer, dense or sparse."""
 
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ def _problem():
     return h, a, rng.standard_normal(n), rng.standard_normal(m)
 
 
-def test_the_kkt_solution_is_the_constrained_minimiser() -> None:
+def test_the_kkt_solution_is_the_constrained_minimizer() -> None:
     h, a, c, d = _problem()
     solution = solve_kkt(h, a, c, d)
     np.testing.assert_allclose(a @ solution.x, d, atol=1e-12)
@@ -97,7 +97,7 @@ def test_no_draw_of_a_singular_sparse_kkt_is_answered() -> None:
 def test_a_numerically_singular_sparse_kkt_is_refused_by_its_pivot_bar() -> None:
     """The macOS residue, planted: a repeated constraint row off by an ulp-scale 1e-15 is singular to working
     precision (cond * eps >= 1), and the residual guard alone accepted 47 of 1200 such draws on x86 with
-    |x| up to 3.6e17. The factorisation's own pivot bar refuses every one, whatever the platform's arithmetic.
+    |x| up to 3.6e17. The factorization's own pivot bar refuses every one, whatever the platform's arithmetic.
     """
     for seed in range(1200):
         rng = np.random.default_rng(seed)

@@ -68,7 +68,7 @@ def ear_clip(vertices: NDArray[np.float64]) -> NDArray[np.intp]:
     """The simple polygon ``vertices (k, 2)`` (either winding) as ``(k - 2, 3)`` indices into ``vertices``, each
     triangle counter-clockwise.
 
-    A flat corner (a vertex on its neighbours' line) is never an ear tip, so every vertex stays a corner of some
+    A flat corner (a vertex on its neighbors' line) is never an ear tip, so every vertex stays a corner of some
     triangle and a mesh built on the clip stays conforming. Raises ``ValueError`` on fewer than three vertices, no
     area, or a polygon with no ear to clip (not simple).
     """

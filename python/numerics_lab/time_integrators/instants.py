@@ -1,7 +1,7 @@
 """The one owner of "which clock instant is this": roundoff joins, physics never does.
 
 Every owner that PROPOSES an instant (a lattice target, a source corner, a controller tick, an
-interpolation knot) and every owner that RECOGNISES one (``is_corner``, ``on_landing``) compares
+interpolation knot) and every owner that RECOGNIZES one (``is_corner``, ``on_landing``) compares
 through this module. Two owners computing the same physical instant by different arithmetic
 (``origin + 36 * dt`` against ``1 / 2400``) land one ulp apart; an owner that tests with a bare
 float ``==`` or ``>`` then never sees its event fire and re-proposes it one ulp later, which the

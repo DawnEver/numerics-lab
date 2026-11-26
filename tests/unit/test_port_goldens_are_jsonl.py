@@ -17,6 +17,7 @@ _FIXTURE = GOLDENS.parent / 'fixtures' / 'expm_scipy.jsonl'
 
 _PINS = {
     GOLDENS / 'interp.jsonl': '99836debc2451a72fe0daa2a822b81e4c2a23274204338c0f4e46fe961309026',
+    GOLDENS / 'linear_complex.jsonl': 'e97b6197a88e43820de4081e62fece71993c58aa632a32ccecd7cc5f432f070c',
     GOLDENS / 'linear.jsonl': 'a6b1ae6dabeb5a97073687c9ff267c39581fec2869e15962348d3d2cb55108d6',
     GOLDENS / 'nnls.jsonl': '689b375758e6b60490d72185a36657119778ce222d39f1a14387fb75b6d239a1',
     GOLDENS / 'nonlinear.jsonl': '694648ad615c7635f26e2064b3e7678adbfb15b90a83bdcd002684870ce95726',

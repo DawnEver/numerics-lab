@@ -59,7 +59,7 @@ def dogleg(
 ) -> Vector:
     """The dogleg step for a POSITIVE DEFINITE model: Newton inside, else the path through the Cauchy point.
 
-    ``newton_step`` is ``-B^{-1} g``, solved by the caller (the factorisation is its choice). The
+    ``newton_step`` is ``-B^{-1} g``, solved by the caller (the factorization is its choice). The
     path runs from 0 to the unconstrained Cauchy point ``-(g.g / g.Bg) g`` and on to the Newton
     step; the step is where it leaves the ball.
     """

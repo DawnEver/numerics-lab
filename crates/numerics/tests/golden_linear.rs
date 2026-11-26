@@ -15,7 +15,7 @@
 //!   axis that matters, because it is the property a user of the solve depends on, and it is
 //!   checkable without reference to any other implementation.
 //! * [`DIRECT_AGREEMENT_RTOL`] — and it must AGREE with the Python's answer. The fixtures are
-//!   well-conditioned (`kappa ~ 1e1..1e2`), so two backward-stable factorisations agree to about
+//!   well-conditioned (`kappa ~ 1e1..1e2`), so two backward-stable factorizations agree to about
 //!   `kappa * eps ~ 1e-14`. The bar is set at `1e-8`, six orders looser than that so a pivot-order
 //!   difference can never red it, and still six orders tighter than the `1e-6` residual guard —
 //!   which is to say, far too tight for a wrong answer to slip through.
@@ -35,11 +35,11 @@
 //! `gauss.linear.native_direct` (SciPy stays the logged fallback). The refinement step makes this
 //! side agree with the Python BETTER than before, so the bars below are unchanged.
 
-use numerics::sparse::{Coo, Csr};
 use numerics::linear::{
     check_direct_residual, direct, solve_linear_system, LinearSolveError, LinearSolver,
     DIRECT_RESIDUAL_RTOL,
 };
+use numerics::sparse::{Coo, Csr};
 use serde_json::Value;
 use std::path::PathBuf;
 

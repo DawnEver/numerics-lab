@@ -3,7 +3,7 @@ polygon's (``simplex_rule``) to TOTAL degree ``2 order - 1``.
 
 The rule ear-clips the polygon into triangles and maps a collapsed (Duffy) Gauss-Legendre rule onto each. The
 reference integral of ``x^p y^q`` is CLOSED FORM and independent of any triangulation: Green's theorem turns it into
-``oint x^(p+1) y^q / (p+1) dy``, each straight side a polynomial in its parameter integrated exactly.
+the contour integral of ``x^(p+1) y^q / (p+1) dy``, each straight side a polynomial in its parameter integrated exactly.
 
 Planted controls -- each a way the bar could read a constant:
 - one degree past the claim the same rule MISSES (the exactness bar can say no);

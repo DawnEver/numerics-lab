@@ -212,6 +212,6 @@ class CoefficientDampedPicardStrategy(_PicardLoop):
 
 
 class PicardStrategy(_PicardLoop):
-    """Plain substitution, alpha 1. Kept so its divergence on saturating B-H stays a labelled datum."""
+    """Plain substitution, alpha 1. Kept so its divergence on saturating B-H stays a labeled datum."""
 
     name, relax, damped = 'picard', 'x', False

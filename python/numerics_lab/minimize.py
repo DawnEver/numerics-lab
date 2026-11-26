@@ -1,6 +1,6 @@
-"""The one unconstrained minimiser: limited-memory BFGS on :class:`LbfgsMemory` and :func:`strong_wolfe`.
+"""The one unconstrained minimizer: limited-memory BFGS on :class:`LbfgsMemory` and :func:`strong_wolfe`.
 
-``minimize_lbfgs(fun_and_grad, x0)`` minimises a smooth ``f`` with ``fun_and_grad(x) -> (f, grad)``.
+``minimize_lbfgs(fun_and_grad, x0)`` minimizes a smooth ``f`` with ``fun_and_grad(x) -> (f, grad)``.
 The direction is the two-loop recursion over the last ``memory`` secant pairs on ``H0 = gamma I``
 (``gamma = s.y / y.y`` of the newest pair); the step is a strong-Wolfe search. A pair whose curvature
 ``y.s`` is not positive is skipped, and a direction that is not descent is replaced by ``-grad``.
@@ -49,7 +49,7 @@ def minimize_lbfgs(
     atol: float = 0.0,
     max_iter: int = 1000,
 ) -> MinimizeResult:
-    """Minimise ``f`` from *x0*; see the module docstring for the stop rules."""
+    """Minimize ``f`` from *x0*; see the module docstring for the stop rules."""
     model = LbfgsMemory(memory)
     if rtol < 0 or atol < 0 or (rtol == 0 and atol == 0):
         msg = f'rtol and atol are >= 0 and at least one is > 0, got rtol={rtol!r} atol={atol!r}'

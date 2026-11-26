@@ -1,7 +1,7 @@
 """The ``direct`` backend solves through faer when the wheel provides it, and says so when it does not.
 
 Three properties, each planted rather than assumed: the native path answers the same system SciPy
-answers (to round-off, not bit-for-bit -- it is a different factorisation); a held factor is never
+answers (to round-off, not bit-for-bit -- it is a different factorization); a held factor is never
 back-substituted after another solve overwrote the analysis it shares; and the SciPy fallback is
 logged and counted, never silent.
 """
@@ -38,7 +38,7 @@ def _unsymmetric(n: int) -> sp.csr_matrix:
 @pytest.mark.parametrize(
     ('build', 'kind'), [(lambda: _laplacian(20), 'faer-cholesky'), (lambda: _unsymmetric(300), 'faer-lu')]
 )
-def test_the_native_path_answers_what_superlu_answers_and_names_its_factorisation(build, kind):
+def test_the_native_path_answers_what_superlu_answers_and_names_its_factorization(build, kind):
     a = build()
     b = np.linspace(-1.0, 2.0, a.shape[0])
     before = native_direct.DIRECT_SOLVES[kind]
@@ -183,7 +183,7 @@ def test_all_unit_rows_remain_a_real_native_factor_not_an_empty_system():
 
 
 def test_the_superlu_fallback_is_logged_and_counted(monkeypatch, caplog):
-    monkeypatch.setenv('NUMERICS_LAB_DIRECT_NATIVE', '0')
+    monkeypatch.setattr(native_direct, 'NATIVE_SELECTED', False)
     monkeypatch.setattr(native_direct, '_warned', set())
     a = _unsymmetric(50)
     b = np.ones(50)

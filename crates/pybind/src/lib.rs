@@ -8,8 +8,11 @@
 mod kernels;
 
 use numerics::linear::direct::DirectFactorization;
-use numerics::linear::{check_direct_residual, requires_symmetric, solve_linear_system};
-use numerics::sparse::{Coo, Csr};
+use numerics::linear::{
+    check_direct_residual, requires_symmetric, solve_direct, solve_equilibrated,
+    solve_linear_system,
+};
+use numerics::sparse::{c64, Coo, Csr};
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -23,7 +26,7 @@ use pyo3::prelude::*;
 /// value summed into `A[1,1]`. `scipy.sparse.coo_matrix` refuses the same triplet outright
 /// ("axis 0 index 4294967297 exceeds matrix dimension 3"). A plausible-looking wrong answer
 /// returned as a success is what `.claude/rules/invariant.md` forbids, so the narrowing is
-/// checked here at the marshalling boundary rather than trusted.
+/// checked here at the marshaling boundary rather than trusted.
 ///
 /// Negative ids wrapped too, and the resulting `4294967295` is what the downstream bound check
 /// reported -- so its message named a number the caller never passed. Refusing here keeps the
@@ -89,23 +92,67 @@ pub fn py_solve_linear_system<'py>(
     Ok(x.into_pyarray(py))
 }
 
+/// `solve_direct_complex(n_rows, n_cols, rows, cols, values, rhs, equilibrated=False)`
+///
+/// Solve the `complex128` system `A @ x = rhs`, `A` as COO triplets (duplicates summed), through the
+/// guarded direct LU -- or, with `equilibrated=True`, through the symmetric Jacobi equilibrated solve.
+/// Returns `x` as `complex128[n_rows]`; a refusal of the guard is a `ValueError`.
+#[pyfunction]
+#[pyo3(
+    name = "solve_direct_complex",
+    signature = (n_rows, n_cols, rows, cols, values, rhs, equilibrated=false)
+)]
+#[allow(clippy::too_many_arguments)]
+pub fn py_solve_direct_complex<'py>(
+    py: Python<'py>,
+    n_rows: usize,
+    n_cols: usize,
+    rows: PyReadonlyArray1<'py, i64>,
+    cols: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, c64>,
+    rhs: PyReadonlyArray1<'py, c64>,
+    equilibrated: bool,
+) -> PyResult<Bound<'py, PyArray1<c64>>> {
+    let r: Vec<u32> = rows
+        .as_array()
+        .iter()
+        .map(|&i| narrow_index(i, n_rows, "row"))
+        .collect::<PyResult<_>>()?;
+    let c: Vec<u32> = cols
+        .as_array()
+        .iter()
+        .map(|&i| narrow_index(i, n_cols, "column"))
+        .collect::<PyResult<_>>()?;
+    let csr = Coo::from_triplets(n_rows, n_cols, r, c, values.as_array().to_vec())
+        .and_then(|coo| coo.to_csr())
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let b = rhs.as_array().to_vec();
+    let x = if equilibrated {
+        solve_equilibrated(&csr, &b)
+    } else {
+        solve_direct(&csr, &b)
+    }
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(x.into_pyarray(py))
+}
+
 /// `DirectFactorization(n_rows, n_cols, indptr, indices, values)` — the CACHED-symbolic direct LU.
 ///
-/// [`py_solve_linear_system`] pays colamd and the symbolic factorisation on every call, which is
+/// [`py_solve_linear_system`] pays colamd and the symbolic factorization on every call, which is
 /// 34% / 46% of a faer solve at the two production sizes and is IDENTICAL between Newton
 /// iterations. This class is that half held: the constructor analyses the pattern once and
-/// [`PyDirectFactorization::solve`] pays only the numeric factorisation and the triangular solve.
+/// [`PyDirectFactorization::solve`] pays only the numeric factorization and the triangular solve.
 ///
 /// It exists because the comparison that decides whether faer replaces SuperLU is only meaningful
-/// in this shape — a wiring would hold the factorisation across the loop, so a benchmark that
-/// re-analysed per call would be measuring an implementation nobody proposes.
+/// in this shape — a wiring would hold the factorization across the loop, so a benchmark that
+/// re-analyzed per call would be measuring an implementation nobody proposes.
 ///
 /// The pattern is CHECKED, never assumed: the constructor refuses a non-canonical CSR (columns not
 /// ascending / not unique, which `Coo::to_csr` would silently reorder into a different value
 /// order), and `numerics`'s own `DirectFactorization::solve` refuses a changed pattern.
 #[pyclass(name = "DirectFactorization")]
 pub struct PyDirectFactorization {
-    /// The analysed operator; only its VALUES move between solves.
+    /// The analyzed operator; only its VALUES move between solves.
     csr: Csr,
     factorization: DirectFactorization,
 }
@@ -196,7 +243,7 @@ impl PyDirectFactorization {
         let slot = self.csr.values_mut();
         if new_values.len() != slot.len() {
             return Err(PyValueError::new_err(
-                "values must carry the analysed pattern's nnz",
+                "values must carry the analyzed pattern's nnz",
             ));
         }
         for (dst, &src) in slot.iter_mut().zip(new_values.iter()) {
@@ -212,8 +259,8 @@ impl PyDirectFactorization {
         Ok(x.into_pyarray(py))
     }
 
-    /// `refactor(values) -> "lu" | "cholesky"` — numerically factorise a new value vector on the
-    /// SAME pattern into the held storage, and name the factorisation it took.
+    /// `refactor(values) -> "lu" | "cholesky"` — numerically factorize a new value vector on the
+    /// SAME pattern into the held storage, and name the factorization it took.
     ///
     /// The split from [`Self::back_substitute`] is what lets one factor answer several
     /// right-hand sides (the held-factor Newton, the bordered field<->circuit tangent). No
@@ -224,7 +271,7 @@ impl PyDirectFactorization {
         let slot = self.csr.values_mut();
         if new_values.len() != slot.len() {
             return Err(PyValueError::new_err(
-                "values must carry the analysed pattern's nnz",
+                "values must carry the analyzed pattern's nnz",
             ));
         }
         for (dst, &src) in slot.iter_mut().zip(new_values.iter()) {
@@ -254,13 +301,13 @@ impl PyDirectFactorization {
         Ok(x.into_pyarray(py))
     }
 
-    /// The factorisation the last refactor took (`"lu"` / `"cholesky"`), or `None`.
+    /// The factorization the last refactor took (`"lu"` / `"cholesky"`), or `None`.
     #[getter]
     fn kind(&self) -> Option<&'static str> {
         self.factorization.kind().map(|k| k.as_str())
     }
 
-    /// The order of the analysed system.
+    /// The order of the analyzed system.
     #[getter]
     fn n(&self) -> usize {
         self.factorization.n()
@@ -281,6 +328,7 @@ pub fn py_requires_symmetric(name: &str) -> bool {
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_solve_linear_system, m)?)?;
+    m.add_function(wrap_pyfunction!(py_solve_direct_complex, m)?)?;
     m.add_function(wrap_pyfunction!(py_requires_symmetric, m)?)?;
     m.add_class::<PyDirectFactorization>()?;
     kernels::register(m)?;

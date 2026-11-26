@@ -1,6 +1,6 @@
 """AMG coarsens an anisotropic operator along its STRONG couplings (numerics-lab #33).
 
-The pairwise coarsening paired every row with its strongest neighbour over every nonzero coupling, so each
+The pairwise coarsening paired every row with its strongest neighbor over every nonzero coupling, so each
 level shrank ~2x and the smoothed prolongation filled the coarse operators (the issue's 3-D litz conduction:
 13 levels, setup ~N^2). A strength threshold ``theta`` keeps only ``|a_ij| >= theta sqrt(a_ii a_jj)``, and
 ``coarsening='smoothed-aggregation'`` builds root-node aggregates over that graph with a prolongation
@@ -71,7 +71,7 @@ def test_smoothed_aggregation_without_a_threshold_degrades() -> None:
 def test_planted_control_the_threshold_drops_the_weak_couplings() -> None:
     matrix = _anisotropic(8)
     strong = strong_connections(matrix, 0.08).tocoo()
-    assert np.all(np.abs(strong.row - strong.col) == 1)  # only the x neighbours survive
+    assert np.all(np.abs(strong.row - strong.col) == 1)  # only the x neighbors survive
     assert strong_connections(matrix, 0.0).nnz == matrix.nnz - matrix.shape[0]  # theta = 0 keeps every one
 
 
@@ -83,7 +83,7 @@ def test_planted_control_no_aggregate_spans_the_weak_direction(coarsening) -> No
 
 
 def _spans_grid_rows(tentative, n: int) -> bool:
-    """Whether some aggregate holds nodes of two grid rows (``y`` neighbours, the weak direction)."""
+    """Whether some aggregate holds nodes of two grid rows (``y`` neighbors, the weak direction)."""
     entries = tentative.tocoo()
     grid_rows: dict[int, set[int]] = {}
     for node, aggregate in zip(entries.row, entries.col, strict=True):

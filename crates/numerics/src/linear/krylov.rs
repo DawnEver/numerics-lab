@@ -23,7 +23,7 @@ use crate::sparse::{Csr, SparseError};
 
 /// Krylov convergence target.
 ///
-/// Tight enough that the iterative solution matches the direct factorisation to the accuracy the
+/// Tight enough that the iterative solution matches the direct factorization to the accuracy the
 /// nonlinear outer loop needs (its energy tolerance is ~1e-4). Verbatim from the Python's
 /// `_KRYLOV_RTOL`.
 pub const KRYLOV_RTOL: f64 = 1e-10;

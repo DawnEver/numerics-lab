@@ -163,7 +163,7 @@ def test_coefficient_damped_does_not_declare_convergence_off_the_field():
 
 @pytest.mark.parametrize('j', [0.2, 1.0, 3.0, 6.0, 12.0])
 @pytest.mark.parametrize('name', ['anderson', 'modified-newton'])
-def test_a_globalised_strategy_converges_to_the_newton_field(name, j):
+def test_a_globalized_strategy_converges_to_the_newton_field(name, j):
     """Where Newton converges, anderson and modified-newton converge to the same field.
 
     Measured before the fix, field error: anderson 1.4 (capped) / 0.82 / 0.55 at j = 0.2 / 1 / 3,

@@ -1,6 +1,6 @@
 //! The sparse matrix, as a type BOTH sides own — the keystone of ruling D3.
 //!
-//! D3 (2026-09-03) is that Rust owns the data structures rather than marshalling numpy across
+//! D3 (2026-09-03) is that Rust owns the data structures rather than marshaling numpy across
 //! the FFI on every call. For the solve path that decision reduces almost entirely to this
 //! file: an assembly produces a sparse operator, a nonlinear iteration re-produces it every
 //! step, and a linear solve consumes it. If that operator is a numpy object, every one of
@@ -22,9 +22,97 @@
 //! it (a node shared by k elements contributes k times and the entries must ADD), while a
 //! boundary-condition pass relies on the opposite. `scipy.sparse.coo_matrix.tocsr()` sums, so
 //! the port sums, and the Dirichlet path gets its own explicit row-clearing operation instead
-//! of leaning on a format's implicit behaviour.
+//! of leaning on a format's implicit behavior.
 
 use std::fmt;
+use std::ops::{Add, AddAssign, Div, Mul, Neg, Sub, SubAssign};
+
+/// The complex scalar a [`Coo`] / [`Csr`] may hold beside `f64` -- `faer`'s own, so a factorization
+/// consumes the values without a conversion.
+pub use faer::c64;
+
+/// What a sparse entry may be: `f64` or [`c64`].
+///
+/// ONE matrix type serves both scalar types, so assembly, compression, the product and the direct solve
+/// exist once; only the handful of scalar-specific facts below differ.
+pub trait Scalar:
+    faer::traits::ComplexField
+    + Copy
+    + PartialEq
+    + fmt::Debug
+    + Send
+    + Sync
+    + 'static
+    + Add<Output = Self>
+    + Sub<Output = Self>
+    + Mul<Output = Self>
+    + Div<Output = Self>
+    + Neg<Output = Self>
+    + AddAssign
+    + SubAssign
+{
+    /// The additive identity.
+    const ZERO: Self;
+    /// The multiplicative identity.
+    const ONE: Self;
+    /// Whether the transpose of a matrix over this scalar type IS its adjoint. True for `f64`, false for
+    /// [`c64`]: a complex-symmetric matrix (`A = A^T`) is not Hermitian, so a symmetric pattern
+    /// with symmetric values never qualifies it for an `L L^H` factorization.
+    const TRANSPOSE_IS_ADJOINT: bool;
+    /// `|self|`.
+    fn modulus(self) -> f64;
+    /// A real number embedded in this scalar type.
+    fn from_real(value: f64) -> Self;
+    /// `self` times a real number.
+    #[must_use]
+    fn scale(self, by: f64) -> Self;
+    /// No component is a NaN or an infinity.
+    fn is_finite(self) -> bool;
+    /// Bitwise equality of every component -- the exact-symmetry test of a factorization.
+    fn same_bits(self, other: Self) -> bool;
+}
+
+impl Scalar for f64 {
+    const ZERO: Self = 0.0;
+    const ONE: Self = 1.0;
+    const TRANSPOSE_IS_ADJOINT: bool = true;
+    fn modulus(self) -> f64 {
+        self.abs()
+    }
+    fn from_real(value: f64) -> Self {
+        value
+    }
+    fn scale(self, by: f64) -> Self {
+        self * by
+    }
+    fn is_finite(self) -> bool {
+        Self::is_finite(self)
+    }
+    fn same_bits(self, other: Self) -> bool {
+        self.to_bits() == other.to_bits()
+    }
+}
+
+impl Scalar for c64 {
+    const ZERO: Self = Self::new(0.0, 0.0);
+    const ONE: Self = Self::new(1.0, 0.0);
+    const TRANSPOSE_IS_ADJOINT: bool = false;
+    fn modulus(self) -> f64 {
+        self.re.hypot(self.im)
+    }
+    fn from_real(value: f64) -> Self {
+        Self::new(value, 0.0)
+    }
+    fn scale(self, by: f64) -> Self {
+        Self::new(self.re * by, self.im * by)
+    }
+    fn is_finite(self) -> bool {
+        self.re.is_finite() && self.im.is_finite()
+    }
+    fn same_bits(self, other: Self) -> bool {
+        self.re.same_bits(other.re) && self.im.same_bits(other.im)
+    }
+}
 
 /// Every way a sparse matrix can be refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,15 +176,15 @@ impl std::error::Error for SparseError {}
 /// shape silently shrinks when the last row happens to be empty — which for an FE operator is
 /// exactly the case where a boundary node was constrained away.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Coo {
+pub struct Coo<T = f64> {
     n_rows: usize,
     n_cols: usize,
     rows: Vec<u32>,
     cols: Vec<u32>,
-    values: Vec<f64>,
+    values: Vec<T>,
 }
 
-impl Coo {
+impl<T: Scalar> Coo<T> {
     /// An empty matrix of the declared shape, ready to accumulate.
     #[must_use]
     pub const fn new(n_rows: usize, n_cols: usize) -> Self {
@@ -130,7 +218,7 @@ impl Coo {
         n_cols: usize,
         rows: Vec<u32>,
         cols: Vec<u32>,
-        values: Vec<f64>,
+        values: Vec<T>,
     ) -> Result<Self, SparseError> {
         if rows.len() != cols.len() || rows.len() != values.len() {
             return Err(SparseError::RaggedTriplets {
@@ -162,7 +250,7 @@ impl Coo {
     /// form. This is the innermost line of an element-assembly loop and a bounds check per
     /// triplet is the cost the whole D3 ruling exists to remove; the shape is verified once,
     /// in [`Coo::to_csr`], where an out-of-range index still cannot escape.
-    pub fn push_unchecked(&mut self, row: u32, col: u32, value: f64) {
+    pub fn push_unchecked(&mut self, row: u32, col: u32, value: T) {
         self.rows.push(row);
         self.cols.push(col);
         self.values.push(value);
@@ -172,7 +260,7 @@ impl Coo {
     ///
     /// # Errors
     /// [`SparseError::IndexOutOfBounds`].
-    pub fn push(&mut self, row: u32, col: u32, value: f64) -> Result<(), SparseError> {
+    pub fn push(&mut self, row: u32, col: u32, value: T) -> Result<(), SparseError> {
         if row as usize >= self.n_rows || col as usize >= self.n_cols {
             return Err(SparseError::IndexOutOfBounds {
                 row: row as usize,
@@ -209,13 +297,13 @@ impl Coo {
     ///
     /// Exact zeros produced by cancellation are KEPT rather than dropped. Dropping them would
     /// make the sparsity pattern depend on the numbers in it, so two assemblies of the same
-    /// mesh could produce structurally different matrices — and a factorisation cached on the
+    /// mesh could produce structurally different matrices — and a factorization cached on the
     /// pattern would then be silently invalid.
     ///
     /// # Errors
     /// [`SparseError::IndexOutOfBounds`] for a triplet pushed through
     /// [`Coo::push_unchecked`] that lies outside the declared shape.
-    pub fn to_csr(&self) -> Result<Csr, SparseError> {
+    pub fn to_csr(&self) -> Result<Csr<T>, SparseError> {
         for (&r, &c) in self.rows.iter().zip(&self.cols) {
             if r as usize >= self.n_rows || c as usize >= self.n_cols {
                 return Err(SparseError::IndexOutOfBounds {
@@ -238,7 +326,7 @@ impl Coo {
         let mut cursor = counts.clone();
         let nnz = self.values.len();
         let mut cols = vec![0u32; nnz];
-        let mut vals = vec![0.0; nnz];
+        let mut vals = vec![T::ZERO; nnz];
         for i in 0..nnz {
             let slot = &mut cursor[self.rows[i] as usize];
             cols[*slot] = self.cols[i];
@@ -250,7 +338,7 @@ impl Coo {
         let mut out_cols = Vec::with_capacity(nnz);
         let mut out_vals = Vec::with_capacity(nnz);
         out_indptr.push(0u32);
-        let mut scratch: Vec<(u32, f64)> = Vec::new();
+        let mut scratch: Vec<(u32, T)> = Vec::new();
         for r in 0..self.n_rows {
             let (lo, hi) = (counts[r], counts[r + 1]);
             scratch.clear();
@@ -259,7 +347,7 @@ impl Coo {
             let mut i = 0;
             while i < scratch.len() {
                 let col = scratch[i].0;
-                let mut acc = 0.0;
+                let mut acc = T::ZERO;
                 while i < scratch.len() && scratch[i].0 == col {
                     acc += scratch[i].1;
                     i += 1;
@@ -286,15 +374,15 @@ impl Coo {
 /// searching; [`Csr::check_invariants`] states them as something checkable rather than as a
 /// comment, because every operation below assumes them.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Csr {
+pub struct Csr<T = f64> {
     n_rows: usize,
     n_cols: usize,
     indptr: Vec<u32>,
     indices: Vec<u32>,
-    values: Vec<f64>,
+    values: Vec<T>,
 }
 
-impl Csr {
+impl<T: Scalar> Csr<T> {
     #[must_use]
     pub const fn shape(&self) -> (usize, usize) {
         (self.n_rows, self.n_cols)
@@ -316,7 +404,7 @@ impl Csr {
     }
 
     #[must_use]
-    pub fn values(&self) -> &[f64] {
+    pub fn values(&self) -> &[T] {
         &self.values
     }
 
@@ -324,10 +412,10 @@ impl Csr {
     ///
     /// This is the whole point of separating pattern from values: a nonlinear iteration
     /// re-assembles the SAME sparsity with new numbers every step, and a solver that cached a
-    /// symbolic factorisation on the pattern stays valid across that update. Handing out the
+    /// symbolic factorization on the pattern stays valid across that update. Handing out the
     /// values alone makes "the pattern did not change" a property of the API rather than a
     /// promise in a docstring.
-    pub fn values_mut(&mut self) -> &mut [f64] {
+    pub fn values_mut(&mut self) -> &mut [T] {
         &mut self.values
     }
 
@@ -335,17 +423,17 @@ impl Csr {
     ///
     /// # Errors
     /// [`SparseError::ShapeMismatch`] when `x` is not `n_cols` long.
-    pub fn matvec(&self, x: &[f64]) -> Result<Vec<f64>, SparseError> {
+    pub fn matvec(&self, x: &[T]) -> Result<Vec<T>, SparseError> {
         if x.len() != self.n_cols {
             return Err(SparseError::ShapeMismatch {
                 expected: self.n_cols,
                 got: x.len(),
             });
         }
-        let mut y = vec![0.0; self.n_rows];
+        let mut y = vec![T::ZERO; self.n_rows];
         for (r, y_r) in y.iter_mut().enumerate() {
             let (lo, hi) = (self.indptr[r] as usize, self.indptr[r + 1] as usize);
-            let mut acc = 0.0;
+            let mut acc = T::ZERO;
             for i in lo..hi {
                 acc += self.values[i] * x[self.indices[i] as usize];
             }
@@ -354,7 +442,7 @@ impl Csr {
         Ok(y)
     }
 
-    /// The main diagonal, with a structural absence read as `0.0`.
+    /// The main diagonal, with a structural absence read as zero.
     ///
     /// A Jacobi preconditioner wants this, and it wants the absence to be a zero rather than a
     /// panic — a row with no diagonal entry is a real (singular) matrix, and diagnosing it is
@@ -362,14 +450,14 @@ impl Csr {
     ///
     /// # Errors
     /// [`SparseError::NotSquare`].
-    pub fn diagonal(&self) -> Result<Vec<f64>, SparseError> {
+    pub fn diagonal(&self) -> Result<Vec<T>, SparseError> {
         if self.n_rows != self.n_cols {
             return Err(SparseError::NotSquare {
                 n_rows: self.n_rows,
                 n_cols: self.n_cols,
             });
         }
-        let mut d = vec![0.0; self.n_rows];
+        let mut d = vec![T::ZERO; self.n_rows];
         for (r, d_r) in d.iter_mut().enumerate() {
             let (lo, hi) = (self.indptr[r] as usize, self.indptr[r + 1] as usize);
             // Columns ascend, so a binary search is honest here.
@@ -380,7 +468,7 @@ impl Csr {
         Ok(d)
     }
 
-    /// Is the matrix structurally AND numerically symmetric to `tol`?
+    /// Is the matrix structurally AND numerically symmetric (`A = A^T`, never the adjoint) to `tol`?
     ///
     /// The linear registry tags `cg`/`minres` as assuming a symmetric operator, and the Python
     /// benchmark harness reads that tag to skip them on a non-symmetric Jacobian. The tag says
@@ -399,8 +487,8 @@ impl Csr {
                 let (clo, chi) = (self.indptr[c] as usize, self.indptr[c + 1] as usize);
                 let mirror = self.indices[clo..chi]
                     .binary_search(&(r as u32))
-                    .map_or(0.0, |k| self.values[clo + k]);
-                if (self.values[i] - mirror).abs() > tol * self.values[i].abs().max(1.0) {
+                    .map_or(T::ZERO, |k| self.values[clo + k]);
+                if (self.values[i] - mirror).modulus() > tol * self.values[i].modulus().max(1.0) {
                     return false;
                 }
             }
@@ -557,7 +645,7 @@ mod tests {
 
     #[test]
     fn a_diagonal_is_refused_on_a_rectangular_matrix() {
-        let a = Coo::new(2, 3);
+        let a = Coo::<f64>::new(2, 3);
         assert!(matches!(
             a.to_csr().unwrap().diagonal().unwrap_err(),
             SparseError::NotSquare { .. }
@@ -574,7 +662,7 @@ mod tests {
 
     #[test]
     fn values_mut_updates_the_numbers_and_leaves_the_pattern_alone() {
-        // The property a cached symbolic factorisation depends on.
+        // The property a cached symbolic factorization depends on.
         let mut csr = tri().to_csr().unwrap();
         let pattern = (csr.indptr().to_vec(), csr.indices().to_vec());
         for v in csr.values_mut() {
@@ -590,5 +678,39 @@ mod tests {
         assert!(csr.check_invariants());
         assert_eq!(csr.nnz(), 0);
         assert_eq!(csr.matvec(&[1.0, 1.0, 1.0]).unwrap(), vec![0.0; 3]);
+    }
+
+    #[test]
+    fn complex_duplicates_are_summed_and_the_product_is_complex() {
+        let z = c64::new;
+        let mut a = Coo::new(2, 2);
+        a.push(0, 0, z(1.0, 1.0)).unwrap();
+        a.push(0, 0, z(0.5, -2.0)).unwrap();
+        a.push(0, 1, z(0.0, 1.0)).unwrap();
+        a.push(1, 1, z(2.0, 0.0)).unwrap();
+        let csr = a.to_csr().unwrap();
+        assert_eq!(csr.nnz(), 3);
+        assert_eq!(csr.diagonal().unwrap(), vec![z(1.5, -1.0), z(2.0, 0.0)]);
+        // [(1.5-1i)(1+1i) + (1i)(2), 2*2] = [2.5+0.5i + 2i, 4]
+        assert_eq!(
+            csr.matvec(&[z(1.0, 1.0), z(2.0, 0.0)]).unwrap(),
+            vec![z(2.5, 2.5), z(4.0, 0.0)]
+        );
+    }
+
+    #[test]
+    fn complex_symmetry_is_the_transpose_never_the_adjoint() {
+        let z = c64::new;
+        let pair = |lower: c64| {
+            let mut a = Coo::new(2, 2);
+            a.push(0, 1, z(1.0, 2.0)).unwrap();
+            a.push(1, 0, lower).unwrap();
+            a.to_csr().unwrap()
+        };
+        assert!(
+            pair(z(1.0, 2.0)).is_symmetric(1e-12),
+            "A = A^T is symmetric"
+        );
+        assert!(!pair(z(1.0, -2.0)).is_symmetric(1e-12), "A = A^H is not");
     }
 }

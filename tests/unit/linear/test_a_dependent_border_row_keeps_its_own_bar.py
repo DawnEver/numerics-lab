@@ -176,7 +176,7 @@ def test_a_joint_correction_that_already_holds_is_not_rate_re_solved(monkeypatch
 def test_a_weak_retained_row_takes_its_residual_from_the_eliminated_rows_by_their_bars():
     """The adjoint share: ``y . shift = residual`` at least weighted size; a zero-bar row takes nothing.
 
-    case_a admission 338: body 5's Schur row is 2e-5 of its neighbours, so no retained row can
+    case_a admission 338: body 5's Schur row is 2e-5 of its neighbors, so no retained row can
     hold its 2.6x-bar residual; the eliminated rows (bars far larger) can.
     """
     from numerics_lab.linear.initial_storage_border import _eliminated_share  # noqa: PLC0415

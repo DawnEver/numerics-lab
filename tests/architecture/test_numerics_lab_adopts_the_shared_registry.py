@@ -19,7 +19,7 @@ from dev_lab.dev.rules import Adoption, LintRule, TestPath, assert_adopted
 _ROOT: Final = Path(__file__).resolve().parents[2]
 
 _PROFILE: Final = RepoProfile(
-    app_name='numerics_lab', package='numerics_lab', root=_ROOT, lint_config=_ROOT / 'ruff.toml'
+    app_name='numerics_lab', package='numerics_lab', root=_ROOT, lint_config=_ROOT / 'pyproject.toml'
 )
 
 _BRANCHES: Final = TestPath('tests/architecture/test_the_branches_are_the_declared_set.py')
@@ -71,8 +71,11 @@ _MECHANISMS: Final = {
     'VERSION-TAG-NEEDS-APPROVAL': (TestPath('pyproject.toml'),),
     # Adopted 2026-11-24 with dev-lab cbecf58a: the same milestonebase pre-push row refuses a non-version tag.
     'ONLY-VERSION-TAGS': (TestPath('pyproject.toml'),),
-    # Adopted 2026-10-24 with dev-lab 1d74f38: the October summary is the first month this tree holds.
-    'MONTHLY-PLANS-CARRIED': (TestPath('tests/architecture/test_every_month_carries_its_plans.py'),),
+    # Adopted 2026-11-26 with the adopt-dev-lab-1126 relock: verify's family checks read pyproject's
+    # [tool.dev_lab.placement.layout] (the tree and its formats) and [tool.dev_lab.env] (no read outside an entry).
+    'DECLARED-LAYOUT': (TestPath('pyproject.toml'),),
+    'ONE-FORMAT-PER-NEED': (TestPath('pyproject.toml'),),
+    'ENV-IS-READ-ONCE': (TestPath('pyproject.toml'),),
     # Adopted 2026-10-26 with dev-lab c9eaa7f: the agent guard ships in every family repo; the rendered
     # `.claude/hooks/deny-rules.json` refuses these, each by its own rule, and the test pins it live.
     **dict.fromkeys(
@@ -104,6 +107,10 @@ _MECHANISMS: Final = {
             'OUTPUT-HOLDS-NO-CODE',
             'WORKTREE-NAMES-ITS-TASK',
             'IMAGES-BY-ABSOLUTE-PATH',
+            # Adopted 2026-11-26 with the adopt-dev-lab-1126 relock: the rendered deny rows refuse a ledger write
+            # past its door and a backup copy under output/ or scratch/.
+            'LEDGER-WRITES-THROUGH-ITS-DOOR',
+            'NO-BACKUP-COPIES',
         ),
         (TestPath('tests/architecture/test_the_agent_guard_is_live.py'),),
     ),
@@ -140,6 +147,14 @@ _ABSENT: Final = frozenset({
     'NAMED-SETS-NOT-COUNTS', 'XFAIL-NOT-SKIP', 'MODULE-SIZE-ALARM',
     # Hosts: numerics-lab deploys no host role, so it runs no scheduler to restrict, and declares no ssh endpoint.
     'SCHEDULER-ONLY-FOR-SERVING', 'SSH-HOST-KEY-DECLARED',
+    # Gained 2026-11-26 with the adopt-dev-lab-1126 relock, none with a mechanism here yet. Opt-in declarations this
+    # repo does not make ([tool.dev_lab.layers], [tool.dev_lab.native], dependencies.toml):
+    'ZERO-CORE-CHANGE', 'NATIVE-FIRST', 'OWNER-DAG', 'NO-DETOUR',
+    # Forge- and host-side (the merge refuses an unmeasured crate; red integration is the forge's policy; machines
+    # meet through it): nothing in this tree carries them.
+    'MEASURE-BEFORE-PORTING', 'RED-INTEGRATION-MERGES', 'MACHINES-MEET-ONLY-THROUGH-THE-FORGE',
+    # No goldens rewritten with a quote, no unit-carrying config keys, no secret-scan or prior-art hook wired here.
+    'BASELINE-REWRITE-QUOTED', 'CONFIG-VALUES-CARRY-UNITS', 'NEVER-LOG-SECRETS', 'PRIOR-ART-FIRST',
 })  # fmt: skip
 
 #: The size of the absent set at adoption (2026-10-18: 47; 2026-10-23: 50, the three rules the registry gained
@@ -150,7 +165,9 @@ _ABSENT: Final = frozenset({
 #: subject in this engine.
 #: Held at 45 on 2026-11-22: dev-lab 77ef8452 added SSH-HOST-KEY-DECLARED (no ssh endpoint is declared here),
 #: which fills the ceiling exactly.
-_ABSENT_CEILING: Final = 45
+#: Raised to 56 on 2026-11-26: the adopt-dev-lab-1126 relock added the eleven rules named in the set's last
+#: block, none with a mechanism in this tree.
+_ABSENT_CEILING: Final = 56
 
 
 def test_every_rule_is_enforced_or_declared_absent() -> None:

@@ -121,7 +121,7 @@ def test_the_sparse_resolver_agrees_with_the_dense_inverse_on_a_closure_of_real_
     # Compared over the UNION of targets, because the dense oracle FILLS: a global LU leaves
     # roundoff where the algebra has an exact zero (measured on the real case_p closure: 255 of
     # 13,575 rows carry dense-only entries, largest 3.2e-17, smallest 1e-86, and the sparse side
-    # invents none). Requiring identical support would pin a LAPACK artefact, so what is asserted
+    # invents none). Requiring identical support would pin a LAPACK artifact, so what is asserted
     # is the direction that matters -- the sparse form never invents a target, and no shared
     # target moves.
     for h, exp_row in expected.items():

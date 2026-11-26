@@ -276,7 +276,7 @@ class ResidualAssemblyBound:
     ``law``: the CONSTITUTIVE LAW's certified evaluation bound propagated to each row -- a law the
     residual reads only through a certified inverse (a hysteresis model's ``H(B)``) is known to that
     inverse's own acceptance bound, never better. Zero where every law is evaluated in closed form.
-    It is certified independently of ``known``: an uncounted arithmetic does not unknow it.
+    It is certified independently of ``known``: an uncounted arithmetic does not make it unknown.
     """
 
     values: NDArray[np.float64]

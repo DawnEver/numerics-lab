@@ -21,7 +21,7 @@ is the caller's.
 
 The accelerator is REDUCED RANK EXTRAPOLATION (RRE, Skelboe's choice for exactly this problem):
 from ``k + 1`` successive map values ``x_0 .. x_{k+1}`` with differences ``d_j = x_{j+1} - x_j``,
-the extrapolated fixed point is ``sum_j gamma_j x_j`` with ``gamma`` minimising ``|sum_j gamma_j
+the extrapolated fixed point is ``sum_j gamma_j x_j`` with ``gamma`` minimizing ``|sum_j gamma_j
 d_j|`` under ``sum_j gamma_j = 1``. For an affine ``P`` it is EXACT once ``k`` reaches the number of
 slow modes; for a switched (piecewise-affine) ``P`` it is a Newton-like cycle whose rate is set by
 how affine ``P`` is near the orbit. No Jacobian, no state-variable bookkeeping -- the map is opaque.

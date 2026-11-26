@@ -381,7 +381,7 @@ def _sign(value: float) -> bool:
 
 
 def _crossed(surface, before: float, after: float) -> bool:
-    """Whether ``surface`` crossed between two readings, honouring a declared :class:`EventSurface` direction."""
+    """Whether ``surface`` crossed between two readings, honoring a declared :class:`EventSurface` direction."""
     before_sign, after_sign = _sign(before), _sign(after)
     direction = surface.direction if isinstance(surface, EventSurface) else 0
     if direction > 0:
@@ -908,7 +908,7 @@ def integrate_transient(
     if plan == 'nominal' and cursor is None and restart is not None:
         # A checkpoint without a locator cursor resumes on its absolute parent lattice.
         tick = math.floor((state.t - origin) / dt)
-        # `same_instant`: a full final cell is labelled with the declared endpoint, not the tick.
+        # `same_instant`: a full final cell is labeled with the declared endpoint, not the tick.
         if same_instant(origin + (tick + 1) * dt, state.t):
             tick += 1
         k = tick
@@ -1095,7 +1095,7 @@ def integrate_transient(
         if prepared is not None:
             prepared.accept(outcome.candidate)
         # THE STEP JOINED THE TRAJECTORY, so its material history is the one the next step starts
-        # from -- including a step labelled non-converged: the march continues from `u_new`.
+        # from -- including a step labeled non-converged: the march continues from `u_new`.
         if capabilities.history:
             problem.commit_history(u_new, t_new)
         solution.times.append(t_new)
@@ -1281,7 +1281,7 @@ def integrate_transient(
                 ):
                     # A nominal endpoint and a requested endpoint separated only by roundoff are one cell,
                     # solved at the requested time; a declared breakpoint is exact, so a distinct
-                    # neighbour is its own cell.
+                    # neighbor is its own cell.
                     t_target = observations[observation_index]
                     pending_dt = t_target - state.t
                     nominal_anchor, k = t_target, 0

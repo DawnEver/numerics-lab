@@ -11,7 +11,7 @@ strategies and the implicit time step are callers, not owners.
   ``phi(step) <= phi(0) + c1 step phi'(0)``, and the backtracking search over it.
 - :func:`strong_wolfe` -- a step satisfying the strong Wolfe conditions (Nocedal and Wright,
   Algorithms 3.5 and 3.6, cubic interpolation in the zoom with a bisection safeguard).
-- :func:`directional_line_search` -- the energy-slope search: the step minimising a convex potential
+- :func:`directional_line_search` -- the energy-slope search: the step minimizing a convex potential
   along the ray, judged on its derivative ``phi'(s) = R(u + s step) . step`` alone.
 """
 
@@ -153,7 +153,7 @@ class WolfeSearchFailed(RuntimeError):
 
 
 def _cubic_minimizer(a: float, fa: float, ga: float, b: float, fb: float, gb: float) -> float | None:
-    """The minimiser of the cubic interpolating ``(a, fa, ga)`` and ``(b, fb, gb)``, or ``None``."""
+    """The minimizer of the cubic interpolating ``(a, fa, ga)`` and ``(b, fb, gb)``, or ``None``."""
     d1 = ga + gb - 3.0 * (fa - fb) / (a - b)
     radicand = d1 * d1 - ga * gb
     if radicand < 0.0:

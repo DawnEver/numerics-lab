@@ -16,7 +16,7 @@ UNDISTURBED steps, and a noise-driven ratchet means there is never one.
 
 WHAT IS PINNED. A limit cycle is by definition an oscillation that does NOT decay, so both ratchets
 now require the relative energy change to be at or above the convergence tolerance. Below it there
-is nothing to stabilise. The converse is pinned too, in the second test: a REAL oscillation, whose
+is nothing to stabilize. The converse is pinned too, in the second test: a REAL oscillation, whose
 amplitude stays far above tolerance, must still damp alpha -- otherwise "never ratchet" would pass
 the first test and the limit-cycle protection would be gone.
 """

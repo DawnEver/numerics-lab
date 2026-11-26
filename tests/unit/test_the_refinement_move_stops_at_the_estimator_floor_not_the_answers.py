@@ -41,7 +41,7 @@ from numerics_lab.linear import (
 # MEASURED 2026-09-17 on this tree via `runner.py measure --price --with-heavy` (`-n0`, per-test
 # timeout DISABLED so no reading is censored by the kill being priced): 4 tests, 4 passed, 0.352 s
 # of CALL time for the whole file and 0.368 s over all phases, worst single test 0.240 s. The work
-# is a handful of small sparse factorisations built to a DECLARED condition number -- no mesher, no
+# is a handful of small sparse factorizations built to a DECLARED condition number -- no mesher, no
 # vendor, no OCC import -- so the cost is set by `splu` on matrices sized in this file, not by
 # anything that can grow under it.
 # 600 s is therefore a HANG DETECTOR at ~1700x the measured file, never a performance assertion. It
