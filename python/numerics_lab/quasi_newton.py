@@ -1,18 +1,15 @@
-"""Quasi-Newton secant updates: BFGS, the L-BFGS two-loop recursion and pair memory, SR1 and Broyden.
+"""Quasi-Newton secant updates: the secant pair, the two-loop recursion and L-BFGS pair memory, and Broyden.
 
 A secant pair is ``s = x_{k+1} - x_k`` and ``y = g_{k+1} - g_k`` (``g`` a gradient or a residual).
-Two forms are published, and both are used:
+Every form here is MATRIX-FREE: :func:`two_loop` applies the BFGS inverse model ``H g`` over a list
+of :class:`SecantPair` on top of a caller-supplied ``H0`` action; :class:`LbfgsMemory` is the pair
+memory behind :func:`numerics_lab.minimize.minimize_lbfgs`; :func:`broyden_apply` applies Broyden's
+("good") inverse model as stored rank-1 :class:`BroydenUpdate` terms, and
+:func:`broyden_inverse_update` is its dense form. The dense Hessian models of trust-region and SQP
+strategies are optimi_lab's (``optimi_lab.operator.quasi_newton``).
 
-- MATRIX-FREE, for large systems: :func:`two_loop` applies the BFGS inverse model ``H g`` over a
-  list of :class:`SecantPair` on top of a caller-supplied ``H0`` action; :func:`broyden_apply`
-  applies Broyden's ("good") inverse model as stored rank-1 :class:`BroydenUpdate` terms. The
-  nonlinear BFGS / L-BFGS / Broyden strategies run on these.
-- DENSE, for small models (a trust-region or SQP Hessian): :func:`bfgs_update`,
-  :func:`bfgs_inverse_update`, :func:`sr1_update`, :func:`broyden_inverse_update`.
-
-Every update keeps its secant equation exactly in exact arithmetic (``H y = s`` or ``B s = y``), and
-an update whose denominator vanishes is SKIPPED (returns ``None`` or the model unchanged), never
-divided through.
+Every update keeps its secant equation exactly in exact arithmetic (``H y = s``), and an update whose
+denominator vanishes is SKIPPED (returns ``None`` or the model unchanged), never divided through.
 """
 
 from __future__ import annotations
@@ -31,13 +28,10 @@ __all__ = [
     'LbfgsMemory',
     'SecantPair',
     'SingularCompactModel',
-    'bfgs_inverse_update',
-    'bfgs_update',
     'broyden_apply',
     'broyden_inverse_update',
     'broyden_update',
     'secant_pair',
-    'sr1_update',
     'two_loop',
 ]
 
@@ -115,42 +109,6 @@ def broyden_apply(v: Vector, updates: Sequence[BroydenUpdate]) -> Vector:
     for update in updates:
         v = v + (update.s @ v) * update.u
     return v
-
-
-def bfgs_inverse_update(h: NDArray[np.float64], s: Vector, y: Vector) -> NDArray[np.float64]:
-    """``(I - rho s y^T) H (I - rho y s^T) + rho s s^T``; ``H`` unchanged when ``y . s <= 0``.
-
-    A non-positive curvature would destroy positive definiteness, so that pair is skipped.
-    """
-    ys = float(y @ s)
-    if not ys > SECANT_FLOOR:
-        return h
-    rho = 1.0 / ys
-    hy = h @ y
-    return h - rho * (np.outer(s, hy) + np.outer(hy, s)) + (rho * rho * float(y @ hy) + rho) * np.outer(s, s)
-
-
-def bfgs_update(b: NDArray[np.float64], s: Vector, y: Vector) -> NDArray[np.float64]:
-    """The direct BFGS Hessian update ``B - B s s^T B / (s^T B s) + y y^T / (y^T s)``; skipped when ``y . s <= 0``."""
-    ys = float(y @ s)
-    bs = b @ s
-    sbs = float(s @ bs)
-    if not ys > SECANT_FLOOR or not sbs > SECANT_FLOOR:
-        return b
-    return b - np.outer(bs, bs) / sbs + np.outer(y, y) / ys
-
-
-def sr1_update(b: NDArray[np.float64], s: Vector, y: Vector, *, skip: float = 1e-8) -> NDArray[np.float64]:
-    """The symmetric rank-1 update ``B + (y - B s)(y - B s)^T / ((y - B s)^T s)``.
-
-    Skipped (``B`` returned) when ``|(y - B s) . s| < skip ||s|| ||y - B s||`` (Nocedal and Wright,
-    eq. 6.26): the denominator is then too small to trust. SR1 does not keep positive definiteness.
-    """
-    v = y - b @ s
-    denominator = float(v @ s)
-    if abs(denominator) < skip * float(np.linalg.norm(s)) * float(np.linalg.norm(v)) or denominator == 0.0:
-        return b
-    return b + np.outer(v, v) / denominator
 
 
 def broyden_inverse_update(h: NDArray[np.float64], s: Vector, y: Vector) -> NDArray[np.float64]:

@@ -13,7 +13,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from numerics_lab.quasi_newton import LbfgsMemory, SecantPair, SingularCompactModel, bfgs_update
+from numerics_lab.quasi_newton import LbfgsMemory, SecantPair, SingularCompactModel
 
 _RNG = np.random.default_rng(11)
 _N = 6
@@ -30,9 +30,11 @@ def _filled(count: int, size: int) -> LbfgsMemory:
 
 
 def _dense_chain(memory: LbfgsMemory) -> np.ndarray:
+    # The textbook direct BFGS update, written out as the reference (every kept pair has s.y > 0).
     b = (1.0 / memory.gamma) * np.eye(_N)
     for pair in memory.pairs:
-        b = bfgs_update(b, pair.s, pair.y)
+        bs = b @ pair.s
+        b = b - np.outer(bs, bs) / float(pair.s @ bs) + np.outer(pair.y, pair.y) / float(pair.y @ pair.s)
     return b
 
 

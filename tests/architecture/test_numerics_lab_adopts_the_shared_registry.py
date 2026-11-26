@@ -155,6 +155,9 @@ _ABSENT: Final = frozenset({
     'MEASURE-BEFORE-PORTING', 'RED-INTEGRATION-MERGES', 'MACHINES-MEET-ONLY-THROUGH-THE-FORGE',
     # No goldens rewritten with a quote, no unit-carrying config keys, no secret-scan or prior-art hook wired here.
     'BASELINE-REWRITE-QUOTED', 'CONFIG-VALUES-CARRY-UNITS', 'NEVER-LOG-SECRETS', 'PRIOR-ART-FIRST',
+    # Gained with the dev-lab f7e18361 relock: no evidence-reference scan runs here yet, and four test docstrings
+    # still cite an ignored path (dev_lab.dev.famtests.evidencerefs names them); adopting it moves that evidence.
+    'EVIDENCE-OUTLIVES-OUTPUT',
 })  # fmt: skip
 
 #: The size of the absent set at adoption (2026-10-18: 47; 2026-10-23: 50, the three rules the registry gained
@@ -167,7 +170,8 @@ _ABSENT: Final = frozenset({
 #: which fills the ceiling exactly.
 #: Raised to 56 on 2026-11-26: the adopt-dev-lab-1126 relock added the eleven rules named in the set's last
 #: block, none with a mechanism in this tree.
-_ABSENT_CEILING: Final = 56
+#: Raised to 57 on 2026-11-26: the dev-lab f7e18361 relock added EVIDENCE-OUTLIVES-OUTPUT, not yet scanned here.
+_ABSENT_CEILING: Final = 57
 
 
 def test_every_rule_is_enforced_or_declared_absent() -> None:

@@ -21,6 +21,12 @@ RETIRED: dict[str, str] = {
     'time_integrators._step.directional_line_search': 'numerics_lab.line_search.directional_line_search',
     'from numerics_lab.time_integrators import directional_line_search': 'numerics_lab.line_search',
     'material_change': 'state_change (AssembledState, _has_converged, _StagnationWatch.observe)',
+    # Engine split (2026-11-26): optimization strategies and sampling live in optimi-lab; callers import it there.
+    'numerics_lab.trust_region': 'optimi_lab.operator.trust_region (agreement, update_radius, dogleg)',
+    'numerics_lab.random_streams': 'optimi_lab.core.random_streams.Stream',
+    'bfgs_update': 'optimi_lab.operator.quasi_newton.bfgs_update',
+    'bfgs_inverse_update': 'optimi_lab.operator.quasi_newton.bfgs_inverse_update',
+    'sr1_update': 'optimi_lab.operator.quasi_newton.sr1_update',
 }
 
 
