@@ -176,7 +176,7 @@ def _zero_rate_source(problem, form, u):
         return None
 
 
-def _noise_judged(problem, form, u, bars, operands, resolution: float, *, source=None):
+def _noise_judged(problem, form, u, bars, operands, resolution: float, *, source=None, state_jacobian=None):
     """``bars``, with every HOMOGENEOUS row whose ``operands`` are under ``resolution`` judged at it.
 
     A row's source is read as its affine intercept at the ACTUAL state, ``F(u, 0) - F_u u``: no zero
@@ -187,7 +187,8 @@ def _noise_judged(problem, form, u, bars, operands, resolution: float, *, source
     Where no row's ``operands`` are under ``resolution`` the homogeneity mask cannot move a single bar, and it
     is not read: no residual, no Jacobian (numerics-lab #55 -- one full Jacobian of the coupled system per
     Newton iterate). It is NOT cached per step: the intercept is read at the iterate and moves with a
-    nonlinear row's ``F_u(u)``.
+    nonlinear row's ``F_u(u)``. A caller that already holds ``F_u`` at this iterate hands it in as
+    ``state_jacobian`` and it is not assembled again.
     """
     bars = np.asarray(bars, dtype=float)
     if not np.any(np.asarray(operands, dtype=float) <= resolution):
@@ -197,7 +198,11 @@ def _noise_judged(problem, form, u, bars, operands, resolution: float, *, source
     try:
         if source is None:
             source = np.asarray(problem.residual(u_arg, zero, zero, form.t_eval), dtype=float).ravel()
-        jacobian = problem.jacobian(u_arg, zero, zero, form.t_eval, DerivativeWeights(1, 0, 0))
+        jacobian = (
+            state_jacobian
+            if state_jacobian is not None
+            else problem.jacobian(u_arg, zero, zero, form.t_eval, DerivativeWeights(1, 0, 0))
+        )
     except (ValueError, ArithmeticError):
         return bars  # Unknowable homogeneity keeps every row's own bar.
     magnitude = abs(jacobian) if sp.issparse(jacobian) else np.abs(np.asarray(jacobian, dtype=float))
@@ -443,6 +448,14 @@ class RowAcceptance:
         #: ``bars`` is the verdict; ``roundoff`` the same rows at ``FLOOR_SAFETY eps`` of their scale (never
         #: above ``bars``) -- the floor no Newton step goes below. Both are read at the last judged iterate.
         self.bars = self.roundoff = self.judged = self.judged_rate = self.worst = None
+        #: The step's weighted tangent ``J(u)``, assembled by the last read verdict at ``judged`` (else ``None``).
+        self._tangent = None
+
+    def tangent_for(self, u):
+        """The step tangent ``jacobian(..., form.weights)`` the last read verdict assembled at ``u``, else ``None``."""
+        if self._tangent is None or self.judged is None or not np.array_equal(u, self.judged):
+            return None
+        return self._tangent
 
     def accepts(self, u, r) -> bool:
         residual = np.abs(np.asarray(r, dtype=float))
@@ -461,9 +474,22 @@ class RowAcceptance:
         # ``F(u, 0)``, read ONCE: the scale takes its magnitude, the homogeneity screen its sign.
         source = np.asarray(problem.residual(u_arg, zero, zero, t), dtype=float).ravel()
         scale = np.abs(source)
+        # TWO ASSEMBLIES CARRY EVERY FACT (numerics-lab #55). The step needs ``J = F_u + alpha1 F_u'`` at this
+        # very iterate, so the verdict assembles that tangent (handed on through `tangent_for`) and ``F_u``;
+        # the rate Jacobian is their difference ``(J - F_u) / alpha1``, exact to the rounding of ``|F_u|``,
+        # far under any bar. ``F_u`` also feeds the homogeneity screen. A form the identity does not hold
+        # for (no rate weight, an acceleration weight, a scaled state weight) assembles ``F_u'`` itself.
+        state = problem.jacobian(u_arg, u_dot, u_ddot, t, DerivativeWeights(1, 0, 0))
+        w = form.weights
+        derivable = complex(w.alpha0) == 1 and complex(w.alpha2) == 0 and complex(w.alpha1).imag == 0 and w.alpha1 != 0
+        if derivable:
+            self._tangent = problem.jacobian(u_arg, u_dot, u_ddot, t, w)
+            rate_matrix = (self._tangent - state) / complex(w.alpha1).real
+        else:
+            self._tangent = None
+            rate_matrix = problem.jacobian(u_arg, u_dot, u_ddot, t, DerivativeWeights(0, 1, 0))
         magnitudes = []
-        for weights, operand in ((DerivativeWeights(1, 0, 0), u_arg), (DerivativeWeights(0, 1, 0), u_dot)):
-            matrix = problem.jacobian(u_arg, u_dot, u_ddot, t, weights)
+        for matrix, operand in ((state, u_arg), (rate_matrix, u_dot)):
             magnitudes.append(abs(matrix) if sp.issparse(matrix) else np.abs(np.asarray(matrix, dtype=float)))
             scale = scale + np.asarray(magnitudes[-1] @ np.abs(np.asarray(operand, dtype=float))).ravel()
         # THE RATE IS BUILT FROM THE STATE, ``u' = alpha1 (u - origin) + h``: it carries the rounding of
@@ -485,7 +511,9 @@ class RowAcceptance:
         relative = self.tol * scale
         # A HOMOGENEOUS row (``u_i = 0`` beside a coupled system) holds only the solve's rounding, and its
         # own bar ``tol |u_i|`` sits below its own residual for every nonzero iterate.
-        own = _noise_judged(problem, form, u, relative, scale, system_resolution(scale), source=source)
+        own = _noise_judged(
+            problem, form, u, relative, scale, system_resolution(scale), source=source, state_jacobian=state
+        )
         self.bars = np.maximum(own, floor)
         # A noise row's bar IS the system's resolution, a round-off already; every other row rounds at its own scale.
         rounding = np.where(own != relative, own, FLOOR_SAFETY * float(np.finfo(float).eps) * scale)
@@ -814,6 +842,12 @@ def _solve_step(
                 tangent_active = True
         prev_residual = residual
         capped_prev, capped = capped, False
+
+        def assemble_tangent(u=u, u_arg=u_arg, u_dot=u_dot, u_ddot=u_ddot):
+            # The row verdict that just refused this iterate already assembled its tangent (#55).
+            held_tangent = None if rows is None else rows.tangent_for(u)
+            return held_tangent if held_tangent is not None else problem.jacobian(u_arg, u_dot, u_ddot, t, form.weights)
+
         if tangent_active:
             jac = tangent_source(u_arg, u_dot, u_ddot, t, form.weights)
             tangent = jac
@@ -824,17 +858,17 @@ def _solve_step(
             # held step contracted the residual by less than HELD_STALL_RATIO / needed backtracking.
             stalled = prev_ratio is not None and prev_ratio > HELD_STALL_RATIO
             if held.needs_refresh(form.weights) or stalled or capped_prev:
-                held.refresh(problem.jacobian(u_arg, u_dot, u_ddot, t, form.weights), form.weights)
+                held.refresh(assemble_tangent(), form.weights)
             tangent = held.matrix
             du = held.solve(-r)
         elif not reusable:
-            jac = problem.jacobian(u_arg, u_dot, u_ddot, t, form.weights)
+            jac = assemble_tangent()
             tangent = jac
             du = np.asarray(solve(jac, -r), dtype=float)
         else:
             key = problem.factor_reuse_key(u_arg, u_dot, u_ddot, t, form.weights)
             du = np.asarray(
-                factor_cache.solve(key, lambda: problem.jacobian(u_arg, u_dot, u_ddot, t, form.weights), -r),
+                factor_cache.solve(key, assemble_tangent, -r),
                 dtype=float,
             )
             tangent = factor_cache.matrix
