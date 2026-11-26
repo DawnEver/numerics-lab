@@ -23,7 +23,13 @@ THE FALLBACK IS VISIBLE. When the native path is switched off with :data:`NATIVE
 ``= False`` (the A/B selector, explicit configuration: ENV-IS-READ-ONCE reads no environment here), the
 ``direct`` backend runs SciPy ``spsolve`` and says so: one WARNING per
 process naming the reason, and every solve is counted by backend in :data:`DIRECT_SOLVES`. A
-complex or non-sparse operator is outside the native's reach and is counted as ``superlu`` too.
+non-sparse operator is outside the native's reach and is counted as ``superlu`` too.
+
+A COMPLEX SYSTEM is solved natively too, by ``numerics_lab._native.solve_direct_complex`` (the same
+generic faer LU over ``c64``, behind the Rust guard that refuses a singular system), counted as
+``faer-complex``. It is a one-shot solve: no pattern cache and no held factor (:func:`native_factor`
+still hands a complex operator to SuperLU), accepted pointwise against the frozen SuperLU answers in
+``tests/unit/test_complex_linear_port_golden.py``.
 """
 
 from __future__ import annotations
@@ -58,7 +64,7 @@ NATIVE_SELECTED: bool = True
 #: coupled march adds one more; beyond that an evicted pattern simply re-analyses.
 _CACHE_SIZE = 3
 
-#: Solves by the backend that answered them: ``faer-lu``, ``faer-cholesky`` or ``superlu``.
+#: Solves by the backend that answered them: ``faer-lu``, ``faer-cholesky``, ``faer-complex`` or ``superlu``.
 DIRECT_SOLVES: Counter[str] = Counter()
 
 _warned: set[str] = set()
@@ -200,9 +206,11 @@ def native_solve(matrix, rhs) -> np.ndarray | None:
         assert reason is not None
         _fallback(reason)
         return None
+    if sp.issparse(matrix) and not sp.issparse(rhs) and (np.iscomplexobj(matrix) or np.iscomplexobj(rhs)):
+        return _complex_solve(matrix, rhs)
     csr = _canonical(matrix)
-    if csr is None or sp.issparse(rhs) or np.iscomplexobj(rhs):
-        _fallback('the operator or rhs is complex, dense or non-square (outside the native reach)')
+    if csr is None or sp.issparse(rhs):
+        _fallback('the operator or rhs is dense or non-square (outside the native reach)')
         return None
     entry, kind = _refactor(cls, csr)
     DIRECT_SOLVES[f'faer-{kind}'] += 1
@@ -217,6 +225,29 @@ def native_solve(matrix, rhs) -> np.ndarray | None:
         )
         raise LinearSolveError(msg)
     return x
+
+
+def _complex_solve(matrix, rhs) -> np.ndarray | None:
+    """``matrix^{-1} rhs`` over ``complex128`` through faer's guarded LU, or ``None`` (non-square)."""
+    coo = matrix.tocoo()
+    n = coo.shape[0]
+    if coo.shape[1] != n:
+        _fallback('the operator is non-square (outside the native reach)')
+        return None
+    rows = np.asarray(coo.row, dtype=np.int64)
+    cols = np.asarray(coo.col, dtype=np.int64)
+    values = np.asarray(coo.data, dtype=np.complex128)
+    b = np.asarray(rhs, dtype=np.complex128)
+    columns = b.reshape(n, -1, order='F')
+    try:
+        x = np.column_stack([
+            np.asarray(_native.solve_direct_complex(n, n, rows, cols, values, np.ascontiguousarray(col)))
+            for col in columns.T
+        ])
+    except ValueError as exc:
+        raise _singular(exc, n) from exc
+    DIRECT_SOLVES['faer-complex'] += 1
+    return x.reshape(b.shape, order='F')
 
 
 class NativeFactor:

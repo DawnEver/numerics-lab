@@ -180,7 +180,7 @@ def _direct(matrix, rhs, **_iterative_only):
     which measured faster than SuperLU at every production size. It is a DIFFERENT factorization,
     so it agrees with ``spsolve`` to round-off and not bit-for-bit; both sit behind the same
     residual guard in :func:`solve_linear_system`. When the extension is absent, switched off
-    (``native_direct.NATIVE_SELECTED = False``) or the operator is outside its reach (complex, dense), the
+    (``native_direct.NATIVE_SELECTED = False``) or the operator is outside its reach (dense, non-square), the
     SciPy ``spsolve`` below runs -- logged once and counted in ``native_direct.DIRECT_SOLVES``,
     never silently.
 
