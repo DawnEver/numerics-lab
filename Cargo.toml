@@ -13,6 +13,21 @@ rust-version = "1.84"
 [workspace.dependencies]
 numerics = { path = "crates/numerics" }
 
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+
+[workspace.lints.clippy.all]
+level = "deny"
+priority = -1
+
+[workspace.lints.clippy.pedantic]
+level = "warn"
+priority = -1
 [profile.release]
 lto = true
 codegen-units = 1

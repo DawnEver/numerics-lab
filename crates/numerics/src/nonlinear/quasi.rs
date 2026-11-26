@@ -1,6 +1,8 @@
 //! Multi-secant and quasi-Newton strategies: Anderson acceleration and the Broyden / BFGS /
 //! L-BFGS family. Split from `newton.rs`, which crossed the 800-line band.
 
+use std::cmp::Ordering;
+
 use super::newton::{axpy, dot, neg, sub};
 use super::{
     energy_error_pct, has_converged, increment_ratio, state_settled, IterationResult,
@@ -74,8 +76,8 @@ impl<S: NonlinearSystem> IterationStrategy<S> for AndersonStrategy {
             let f = sub(&gx, &x); // fixed-point residual
             let f_ratio = increment_ratio(&x, &gx);
             // Only a rise ABOVE the convergence bar: below it the residual is roundoff.
-            let rose = matches!(&accepted, Some((_, _, best)) if !(f_ratio <= *best))
-                && !(f_ratio < rtol / 100.0);
+            let rose = matches!(&accepted, Some((_, _, best)) if !matches!(f_ratio.partial_cmp(best), Some(Ordering::Less | Ordering::Equal)))
+                && f_ratio.partial_cmp(&(rtol / 100.0)) != Some(Ordering::Less);
             if rose && (mixed || beta > ALPHA_MIN) {
                 // SAFEGUARD (as the Python): a step that made the relative fixed-point residual
                 // grow is rejected; a mix restarts the history, a substitution halves beta, and

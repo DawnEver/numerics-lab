@@ -184,7 +184,7 @@ fn a_held_factorisation_answers_every_revalued_system_and_several_right_hand_sid
     for s in [1.0, 0.5, 3.0] {
         let mut next = a.clone();
         for (k, v) in next.values_mut().iter_mut().enumerate() {
-            *v = *v * z(s, 0.1 * (k % 4) as f64);
+            *v *= z(s, 0.1 * (k % 4) as f64);
         }
         f.refactor(&next).unwrap();
         let (b1, b2) = (

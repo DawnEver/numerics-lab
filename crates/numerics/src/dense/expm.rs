@@ -53,7 +53,7 @@ impl std::error::Error for ExpmError {}
 /// `THETA` of `pick_pade_structure_d`.
 const THETA: [f64; 5] = [
     1.495585217958292e-002,
-    2.539398330063230e-001,
+    2.539_398_330_063_23e-1,
     9.504178996162932e-001,
     2.097847961257068e+000,
     4.25,
@@ -62,8 +62,8 @@ const THETA: [f64; 5] = [
 const COEFF: [f64; 5] = [
     1.1191048088221578e-11,
     1.1167770708198077e-06,
-    4.9826124310493469e-01,
-    6.5662862500000000e+05,
+    4.982_612_431_049_347e-1,
+    6.566_286_25e5,
     1.2573361865339437e+19,
 ];
 
@@ -222,12 +222,12 @@ fn pick_pade_structure(w: &mut Work) -> (usize, i32) {
     let mut s = ((eta4 / THETA[4]).log2().ceil() as i32).max(0);
     if s != 0 {
         let two_pow_s = 2f64.powf(-f64::from(s));
-        for k in 5 * n * n..6 * n * n {
-            w.am[k] *= two_pow_s;
+        for v in &mut w.am[5 * n * n..6 * n * n] {
+            *v *= two_pow_s;
         }
         let spun = 2f64.powf(-19.0 * f64::from(s));
-        for k in base + n..base + 2 * n {
-            w.am[k] *= spun;
+        for v in &mut w.am[base + n..base + 2 * n] {
+            *v *= spun;
         }
         norm_a *= 2f64.powf(-f64::from(s));
     }
@@ -409,7 +409,7 @@ fn gemv_n_minus(
     }
     let lead = rows & !3;
     let mut widths = vec![4usize; cols / 4];
-    widths.extend([2usize, 1].into_iter().filter(|w| cols % 4 & w != 0));
+    widths.extend([2usize, 1].into_iter().filter(|w| (cols % 4) & w != 0));
     for r in row0..row0 + lead {
         let mut c = 0;
         for &width in &widths {
@@ -440,8 +440,7 @@ fn gemv_n_minus(
 fn getf2(a: &mut [f64], m: usize, nc: usize, ipiv: &mut [usize]) -> Result<(), ExpmError> {
     for j in 0..nc.min(m) {
         let col = j * m;
-        for i in 0..j {
-            let ip = ipiv[i];
+        for (i, &ip) in ipiv.iter().enumerate().take(j) {
             if ip != i {
                 a.swap(col + i, col + ip);
             }
@@ -532,9 +531,9 @@ pub(crate) fn getrf(
         getrf(a, lda, o, m - j, jb, ipiv)?;
         if j + jb < nc {
             for c in o + jb..off + nc {
-                for i in o..o + jb {
-                    if ipiv[i] != i {
-                        a.swap(at(i, c), at(ipiv[i], c));
+                for (i, &ip) in ipiv.iter().enumerate().take(o + jb).skip(o) {
+                    if ip != i {
+                        a.swap(at(i, c), at(ip, c));
                     }
                 }
                 for (start, size) in trsm_blocks(jb, true) {
@@ -567,9 +566,9 @@ pub(crate) fn getrf(
     while j < mn {
         let jb = (mn - j).min(blocking);
         for c in off + j..off + j + jb {
-            for i in off + j + jb..off + mn {
-                if ipiv[i] != i {
-                    a.swap(at(i, c), at(ipiv[i], c));
+            for (i, &ip) in ipiv.iter().enumerate().take(off + mn).skip(off + j + jb) {
+                if ip != i {
+                    a.swap(at(i, c), at(ip, c));
                 }
             }
         }

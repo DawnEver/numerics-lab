@@ -42,6 +42,8 @@ pub mod precond;
 #[cfg(test)]
 mod tests;
 
+use std::cmp::Ordering;
+
 use crate::sparse::{Csr, Scalar, SparseError};
 
 pub use constrained::fixed_values::{apply_dirichlet_triplets, DirichletGroup};
@@ -413,8 +415,11 @@ pub fn check_direct_residual<T: Scalar>(
     } else {
         f64::NAN
     };
-    // `!(<=)`, not `>`: a NaN compares false against every bound, and must be refused.
-    if !(residual <= DIRECT_RESIDUAL_RTOL) {
+    // Not `>`: a NaN is unordered against every bound, and must be refused.
+    if !matches!(
+        residual.partial_cmp(&DIRECT_RESIDUAL_RTOL),
+        Some(Ordering::Less | Ordering::Equal)
+    ) {
         return Err(LinearSolveError::DirectResidual {
             residual,
             bound: DIRECT_RESIDUAL_RTOL,
