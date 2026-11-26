@@ -179,18 +179,19 @@ def test_the_complex_golden_holds_its_floors() -> None:
 
 
 def _native_complex():
-    try:
-        native = importlib.import_module('numerics_lab._native')
-    except ImportError:
-        return None
-    return getattr(native, 'solve_direct_complex', None)
+    return getattr(importlib.import_module('numerics_lab._native'), 'solve_direct_complex', None)
 
 
 @pytest.mark.unit
-@pytest.mark.skipif(_native_complex() is None, reason='numerics_lab._native with solve_direct_complex not built')
+@pytest.mark.xfail(
+    _native_complex() is None,
+    reason='numerics_lab._native predates solve_direct_complex: rebuild the extension (dep --bootstrap)',
+    raises=AttributeError,
+    strict=True,
+)
 def test_the_native_complex_solve_answers_what_superlu_answers_and_refuses_what_it_refuses() -> None:
     """The binding, against the same frozen SuperLU answers the Rust golden reads."""
-    solve = _native_complex()
+    solve = importlib.import_module('numerics_lab._native').solve_direct_complex
     for name, case in _load()['cases'].items():
         m = case['matrix']
         args = (
