@@ -327,7 +327,10 @@ fn the_restart_drops_the_derivative_history_and_keeps_the_state() {
     let after = restart_at_event(&Bdf2, &before, 0.75).unwrap();
     assert_eq!(after.us, vec![vec![2.0]], "the older state must be dropped");
     assert_eq!(after.t, 0.75);
-    assert_eq!(after.h, None, "a restart carries no spacing: the history it describes is gone");
+    assert_eq!(
+        after.h, None,
+        "a restart carries no spacing: the history it describes is gone"
+    );
     // ...and the proof that it is BDF1: Bdf2's own prepare bootstraps on a one-state history.
     let restarted = Bdf2.prepare(&after, 0.05, 0.8).unwrap();
     let bdf1 = Bdf1.prepare(&after, 0.05, 0.8).unwrap();

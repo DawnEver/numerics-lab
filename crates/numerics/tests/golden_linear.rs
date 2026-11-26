@@ -35,11 +35,11 @@
 //! `gauss.linear.native_direct` (SciPy stays the logged fallback). The refinement step makes this
 //! side agree with the Python BETTER than before, so the bars below are unchanged.
 
-use numerics::sparse::{Coo, Csr};
 use numerics::linear::{
     check_direct_residual, direct, solve_linear_system, LinearSolveError, LinearSolver,
     DIRECT_RESIDUAL_RTOL,
 };
+use numerics::sparse::{Coo, Csr};
 use serde_json::Value;
 use std::path::PathBuf;
 
