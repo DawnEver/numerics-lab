@@ -28,7 +28,13 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import spsolve
 from tests.port_goldens import GOLDENS, load_golden, register
 
-from numerics_lab.linear import LinearSolveError, apply_dirichlet_triplets, solve_equilibrated, solve_linear_system
+from numerics_lab.linear import (
+    LinearSolveError,
+    apply_dirichlet_triplets,
+    native_direct,
+    solve_equilibrated,
+    solve_linear_system,
+)
 
 _GOLDEN = GOLDENS / 'linear_complex.jsonl'
 
@@ -202,6 +208,53 @@ def test_the_native_complex_solve_answers_what_superlu_answers_and_refuses_what_
         x = solve(*args, equilibrated=case['solve'] == 'equilibrated')
         want = np.asarray(case['solution']['re']) + 1j * np.asarray(case['solution']['im'])
         assert np.all(np.abs(x - want) <= 1e-8 * np.abs(want) + 1e-14), name
+
+
+def _system(case: dict) -> tuple[sp.csr_matrix, np.ndarray]:
+    m = case['matrix']
+    values = np.asarray(m['values']['re']) + 1j * np.asarray(m['values']['im'])
+    a = sp.coo_matrix((values, (m['rows'], m['cols'])), shape=(m['n'], m['n'])).tocsr()
+    return a, np.asarray(case['rhs']['re']) + 1j * np.asarray(case['rhs']['im'])
+
+
+@pytest.mark.unit
+def test_the_direct_backend_solves_a_complex_system_natively_to_the_golden(monkeypatch) -> None:
+    """The WIRING: ``solve_linear_system(..., 'direct')`` over complex128 is answered by faer, pointwise
+    to the frozen SuperLU answers, and a singular system is refused as one.
+    """
+    monkeypatch.setattr(native_direct, 'NATIVE_SELECTED', True)
+    solved = 0
+    for name, case in _load()['cases'].items():
+        if case['solve'] != 'direct':
+            continue
+        a, b = _system(case)
+        before = native_direct.DIRECT_SOLVES['faer-complex']
+        if case['refused_by_the_singular_guard']:
+            with pytest.raises(LinearSolveError, match='singular'):
+                solve_linear_system(a, b, linear_solver='direct')
+            continue
+        x = solve_linear_system(a, b, linear_solver='direct')
+        assert native_direct.DIRECT_SOLVES['faer-complex'] == before + 1, name
+        want = np.asarray(case['solution']['re']) + 1j * np.asarray(case['solution']['im'])
+        # Different factorization than the SuperLU golden: round-off, not bit-for-bit. abs= in the
+        # solution's own unit (dimensionless here), so a near-zero component is not passed for free.
+        assert x == pytest.approx(want, rel=1e-10, abs=1e-12), name
+        solved += 1
+    assert solved >= 3, 'the planted fixtures did not all reach the native path'
+
+
+@pytest.mark.unit
+def test_a_deselected_native_sends_a_complex_system_to_superlu_and_counts_it(monkeypatch) -> None:
+    """The A/B selector holds for complex too: off, SuperLU answers and the fallback is counted."""
+    monkeypatch.setattr(native_direct, 'NATIVE_SELECTED', False)
+    case = _load()['cases']['general']
+    a, b = _system(case)
+    before = native_direct.DIRECT_SOLVES['superlu'], native_direct.DIRECT_SOLVES['faer-complex']
+    x = solve_linear_system(a, b, linear_solver='direct')
+    after = native_direct.DIRECT_SOLVES['superlu'], native_direct.DIRECT_SOLVES['faer-complex']
+    assert after == (before[0] + 1, before[1])
+    want = np.asarray(case['solution']['re']) + 1j * np.asarray(case['solution']['im'])
+    assert x == pytest.approx(want, rel=1e-12, abs=1e-14)
 
 
 register(_GOLDEN, _build)

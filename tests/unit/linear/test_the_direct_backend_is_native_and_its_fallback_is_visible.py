@@ -195,10 +195,15 @@ def test_the_superlu_fallback_is_logged_and_counted(monkeypatch, caplog):
     assert np.array_equal(x, spsolve(a, b))  # the fallback IS spsolve, bit for bit
 
 
-def test_a_complex_operator_is_outside_the_native_reach_and_counted_as_superlu():
+def test_a_complex_operator_is_solved_natively_and_counted_as_faer_complex():
+    """A complex operator with a real rhs block (two columns) is answered by faer column by column."""
     a = (_unsymmetric(30) * (1.0 + 1.0j)).tocsr()
-    b = np.ones(30, dtype=complex)
-    before = native_direct.DIRECT_SOLVES['superlu']
+    b = np.column_stack([np.ones(30), np.arange(30.0)])
+    before = native_direct.DIRECT_SOLVES['faer-complex'], native_direct.DIRECT_SOLVES['superlu']
     x = solve_linear_system(a, b)
-    assert native_direct.DIRECT_SOLVES['superlu'] == before + 1
+    assert (native_direct.DIRECT_SOLVES['faer-complex'], native_direct.DIRECT_SOLVES['superlu']) == (
+        before[0] + 1,
+        before[1],
+    )
+    assert x.shape == b.shape
     assert np.linalg.norm(a @ x - b) <= 1e-12 * np.linalg.norm(b)
