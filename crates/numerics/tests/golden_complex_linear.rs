@@ -21,7 +21,7 @@ fn golden() -> Value {
         env!("CARGO_MANIFEST_DIR"),
         "tests",
         "goldens",
-        "linear_complex.json",
+        "linear_complex.jsonl",
     ]
     .iter()
     .collect();
@@ -32,7 +32,7 @@ fn golden() -> Value {
             path.display()
         )
     });
-    serde_json::from_str(&text).expect("goldens/linear_complex.json is valid JSON")
+    serde_json::from_str(&text).expect("goldens/linear_complex.jsonl is one valid JSONL record")
 }
 
 fn complexes(v: &Value) -> Vec<c64> {

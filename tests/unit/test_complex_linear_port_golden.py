@@ -30,7 +30,7 @@ from tests.port_goldens import GOLDENS, load_golden, register
 
 from numerics_lab.linear import LinearSolveError, apply_dirichlet_triplets, solve_equilibrated, solve_linear_system
 
-_GOLDEN = GOLDENS / 'linear_complex.json'
+_GOLDEN = GOLDENS / 'linear_complex.jsonl'
 
 
 def _complex_symmetric(n=16):
