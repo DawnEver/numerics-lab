@@ -15,11 +15,10 @@
 //! collapse unstateable, so the complex form is carried even though every time integrator
 //! produces real values.
 //!
-//! `Complex64` is hand-written rather than pulled from `num-complex`: what is needed here is
-//! addition, scaling and a real part.
+//! The weight scalar is [`c64`], the one complex type of this crate (faer's, re-exported by
+//! [`crate::sparse`]), so a weight multiplies a complex operator entry without a conversion.
 
-use std::fmt;
-use std::ops::{Add, Mul};
+use crate::sparse::c64;
 
 /// Newmark's average-acceleration defaults — unconditionally stable and second order.
 ///
@@ -28,97 +27,21 @@ pub const NEWMARK_BETA: f64 = 0.25;
 /// See [`NEWMARK_BETA`].
 pub const NEWMARK_GAMMA: f64 = 0.5;
 
-/// The minimal complex number this crate needs.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct Complex64 {
-    pub re: f64,
-    pub im: f64,
-}
-
-impl Complex64 {
-    #[must_use]
-    pub const fn new(re: f64, im: f64) -> Self {
-        Self { re, im }
-    }
-
-    /// A purely real weight — what every time integrator produces.
-    #[must_use]
-    pub const fn real(re: f64) -> Self {
-        Self { re, im: 0.0 }
-    }
-
-    /// A purely imaginary weight — the harmonic `j*omega`.
-    #[must_use]
-    pub const fn imag(im: f64) -> Self {
-        Self { re: 0.0, im }
-    }
-
-    #[must_use]
-    pub const fn is_zero(self) -> bool {
-        self.re == 0.0 && self.im == 0.0
-    }
-
-    #[must_use]
-    pub fn norm(self) -> f64 {
-        self.re.hypot(self.im)
-    }
-}
-
-impl Add for Complex64 {
-    type Output = Self;
-    fn add(self, rhs: Self) -> Self {
-        Self::new(self.re + rhs.re, self.im + rhs.im)
-    }
-}
-
-impl Mul for Complex64 {
-    type Output = Self;
-    fn mul(self, rhs: Self) -> Self {
-        Self::new(
-            self.re * rhs.re - self.im * rhs.im,
-            self.re * rhs.im + self.im * rhs.re,
-        )
-    }
-}
-
-impl Mul<f64> for Complex64 {
-    type Output = Self;
-    fn mul(self, rhs: f64) -> Self {
-        Self::new(self.re * rhs, self.im * rhs)
-    }
-}
-
-impl From<f64> for Complex64 {
-    fn from(re: f64) -> Self {
-        Self::real(re)
-    }
-}
-
-impl fmt::Display for Complex64 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.im == 0.0 {
-            write!(f, "{}", self.re)
-        } else {
-            write!(f, "{}{:+}j", self.re, self.im)
-        }
-    }
-}
-
 /// Weights `(alpha0, alpha1, alpha2)` on the `u` / `u_dot` / `u_ddot` operators.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DerivativeWeights {
-    pub alpha0: Complex64,
-    pub alpha1: Complex64,
-    pub alpha2: Complex64,
+    pub alpha0: c64,
+    pub alpha1: c64,
+    pub alpha2: c64,
 }
 
 impl Default for DerivativeWeights {
     /// The stationary triple: stiffness only.
     fn default() -> Self {
         Self {
-            alpha0: Complex64::real(1.0),
-            alpha1: Complex64::new(0.0, 0.0),
-            alpha2: Complex64::new(0.0, 0.0),
+            alpha0: c64::new(1.0, 0.0),
+            alpha1: c64::new(0.0, 0.0),
+            alpha2: c64::new(0.0, 0.0),
         }
     }
 }
@@ -128,9 +51,9 @@ impl DerivativeWeights {
     #[must_use]
     pub const fn real(alpha0: f64, alpha1: f64, alpha2: f64) -> Self {
         Self {
-            alpha0: Complex64::real(alpha0),
-            alpha1: Complex64::real(alpha1),
-            alpha2: Complex64::real(alpha2),
+            alpha0: c64::new(alpha0, 0.0),
+            alpha1: c64::new(alpha1, 0.0),
+            alpha2: c64::new(alpha2, 0.0),
         }
     }
 
@@ -147,16 +70,16 @@ impl DerivativeWeights {
     #[must_use]
     pub const fn harmonic(omega: f64) -> Self {
         Self {
-            alpha0: Complex64::real(1.0),
-            alpha1: Complex64::imag(omega),
-            alpha2: Complex64::new(0.0, 0.0),
+            alpha0: c64::new(1.0, 0.0),
+            alpha1: c64::new(0.0, omega),
+            alpha2: c64::new(0.0, 0.0),
         }
     }
 
     /// True when only `alpha0` is nonzero — the equation reduces to the stiffness `K`.
     #[must_use]
-    pub const fn collapses_to_stationary(&self) -> bool {
-        self.alpha1.is_zero() && self.alpha2.is_zero()
+    pub fn collapses_to_stationary(&self) -> bool {
+        self.alpha1 == c64::ZERO && self.alpha2 == c64::ZERO
     }
 }
 
@@ -189,23 +112,13 @@ mod tests {
         assert!(!DerivativeWeights::harmonic(50.0).collapses_to_stationary());
         assert_eq!(
             DerivativeWeights::harmonic(50.0).alpha1,
-            Complex64::new(0.0, 50.0)
+            c64::new(0.0, 50.0)
         );
     }
 
     #[test]
     fn a_transient_triple_with_a_damping_term_does_not_collapse() {
         assert!(!DerivativeWeights::real(1.0, 100.0, 0.0).collapses_to_stationary());
-    }
-
-    #[test]
-    fn complex_arithmetic_is_the_ordinary_one() {
-        let a = Complex64::new(1.0, 2.0);
-        let b = Complex64::new(3.0, -1.0);
-        assert_eq!(a + b, Complex64::new(4.0, 1.0));
-        assert_eq!(a * b, Complex64::new(5.0, 5.0));
-        assert_eq!(a * 2.0, Complex64::new(2.0, 4.0));
-        assert!((Complex64::new(3.0, 4.0).norm() - 5.0).abs() < 1e-15);
     }
 
     #[test]
