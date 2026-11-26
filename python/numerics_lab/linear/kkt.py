@@ -7,7 +7,7 @@ SuperLU, whose pivots it judges. A rank-deficient ``A`` or a ``H`` singular on t
 makes the system singular, and that is refused, never answered -- dense or sparse, with the same
 :class:`~numerics_lab.linear.errors.LinearSolveError`.
 
-THE SPARSE REFUSAL IS THE FACTORISATION'S PIVOT BAR, not a residual (2026-10-30). Once
+THE SPARSE REFUSAL IS THE FACTORIZATION'S PIVOT BAR, not a residual (2026-10-30). Once
 ``cond * eps >= 1`` floating point cannot tell a singular system from an ill-conditioned one, so a
 residual guard answered such draws platform by platform: 47 of 1200 repeated-row draws perturbed by
 1e-15 passed it on x86 with ``|x|`` up to 3.6e17, and the exact repeated row passed it on macOS. LU with

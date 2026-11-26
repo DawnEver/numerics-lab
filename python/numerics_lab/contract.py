@@ -63,7 +63,7 @@ def contract(subscripts: str, *operands: NDArray[np.float64]) -> NDArray[np.floa
 
     Raises:
         ValueError: on fewer than two operands, because there is then no contraction order to
-            optimise and the caller means :func:`numpy.einsum` rather than this.
+            optimize and the caller means :func:`numpy.einsum` rather than this.
 
     """
     if len(operands) < 2:

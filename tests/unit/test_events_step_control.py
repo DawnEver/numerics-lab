@@ -111,12 +111,12 @@ class _StiffOnlyAtLargeSteps:
         return np.array([[alpha if alpha > 12.0 else 0.2 * alpha]])
 
 
-def test_a_step_rejected_and_then_re_landed_converged_is_not_labelled_non_converged() -> None:
+def test_a_step_rejected_and_then_re_landed_converged_is_not_labeled_non_converged() -> None:
     """The rejected full step's failure is a PROBE's; the halves that reach its instant converged.
 
     MEASURED 2026-09-25 on case_i's chopper: every step the retry rescued was still listed in
     ``nonconverged_times`` -- the landing at the same instant promoted the rejected attempt's record
-    -- so the run was labelled `coarse` with every landed step solved.
+    -- so the run was labeled `coarse` with every landed step solved.
     """
     dt = 0.1
     study = TimeWindow(t0=0.0, t1=0.3, dt=dt, integrator=IntegratorKind.BDF1)

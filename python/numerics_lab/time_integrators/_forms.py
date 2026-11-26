@@ -269,7 +269,7 @@ class TransientSolution:
     """The time march: parallel ``times`` and ``states`` including the initial condition.
 
     The CONVERGENCE CONTRACT (the FVS plan's near-term item): a march that exhausted its
-    per-step Newton ceiling somewhere is LABELLED, never silent -- the worst step residual
+    per-step Newton ceiling somewhere is LABELED, never silent -- the worst step residual
     and the offending step times ride the solution, and :meth:`converged` is the machine-
     readable tag. The structured warning is emitted by the marcher at the first exhaustion
     (AGENTS.md: a log is a signal only when the CALLER can tell -- the caller reads the tag).

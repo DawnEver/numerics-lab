@@ -1,4 +1,4 @@
-//! The complex direct solve, its held factorisation, the equilibrated variant and the complex pin.
+//! The complex direct solve, its held factorization, the equilibrated variant and the complex pin.
 //!
 //! Judged against a dense complex reference (Gaussian elimination with partial pivoting, written
 //! here so the reference shares no code with the sparse path) and by the residual it achieves.
@@ -8,7 +8,7 @@ use crate::linear::direct::{solve, DirectFactorization, DirectFailure, FactorKin
 use crate::linear::{solve_direct, solve_equilibrated, LinearSolveError};
 use crate::sparse::{c64, Coo, Csr, Scalar};
 
-/// Agreement with the dense reference: both are backward-stable factorisations of systems with
+/// Agreement with the dense reference: both are backward-stable factorizations of systems with
 /// `kappa ~ 1e1`, so they agree to `~kappa * eps`; the bar sits two orders above that.
 const AGREEMENT_RTOL: f64 = 1e-12;
 /// The absolute leg of every comparison, in the unit of the compared entries: without it a
@@ -169,8 +169,8 @@ fn a_general_non_hermitian_solve_agrees_with_the_dense_reference_and_satisfies_t
 }
 
 #[test]
-fn a_complex_symmetric_operator_is_factorised_by_lu_never_by_an_adjoint_cholesky() {
-    // Its values ARE exactly symmetric, which on f64 routes to L L^T. Over c64 that factorisation
+fn a_complex_symmetric_operator_is_factorized_by_lu_never_by_an_adjoint_cholesky() {
+    // Its values ARE exactly symmetric, which on f64 routes to L L^T. Over c64 that factorization
     // would be L L^H -- the factor of a DIFFERENT matrix -- so the kind must stay LU.
     let a = complex_symmetric(10);
     let mut f = DirectFactorization::new(&a).unwrap();
@@ -178,7 +178,7 @@ fn a_complex_symmetric_operator_is_factorised_by_lu_never_by_an_adjoint_cholesky
 }
 
 #[test]
-fn a_held_factorisation_answers_every_revalued_system_and_several_right_hand_sides() {
+fn a_held_factorization_answers_every_revalued_system_and_several_right_hand_sides() {
     let a = general(20);
     let mut f = DirectFactorization::new(&a).unwrap();
     for s in [1.0, 0.5, 3.0] {
@@ -200,7 +200,7 @@ fn a_held_factorisation_answers_every_revalued_system_and_several_right_hand_sid
 }
 
 #[test]
-fn a_held_factorisation_refuses_a_changed_pattern_and_a_solve_before_a_factor() {
+fn a_held_factorization_refuses_a_changed_pattern_and_a_solve_before_a_factor() {
     let a = general(8);
     let mut f = DirectFactorization::new(&a).unwrap();
     let mut b = rhs(8);
@@ -251,7 +251,7 @@ fn a_structurally_singular_complex_matrix_is_refused_by_name() {
 
 #[test]
 fn a_numerically_singular_complex_matrix_is_refused_by_the_guard() {
-    // Two identical rows: the factorisation may or may not refuse, the guard must.
+    // Two identical rows: the factorization may or may not refuse, the guard must.
     let r = [z(2.0, 1.0), z(1.0, -1.0), z(1.0, 0.5)];
     let rows = vec![0, 0, 0, 1, 1, 1, 2, 2, 2];
     let cols = vec![0, 1, 2, 0, 1, 2, 0, 1, 2];

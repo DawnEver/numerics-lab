@@ -8,7 +8,7 @@ picks its nonlinear method without the equation code changing.
 
 First principle (``AGENTS.md``): IMPLEMENT every method and characterize it -- never exclude one
 because an experiment showed it inferior. Plain Picard's historical divergence on saturating B-H
-is a labelled datum, not a hidden exclusion. The default is Newton with a backtracking line search
+is a labeled datum, not a hidden exclusion. The default is Newton with a backtracking line search
 (user ruling 2026-09-25, every family); the damped-Picard extracted verbatim from the old MEC/FEA
 inline loops stays selectable by name, as do the others.
 

@@ -108,7 +108,7 @@ def _at_roundoff_floor(problem, tangent, u: NDArray[np.floating], form, capabili
 
     ``increment`` is the Newton step ``du`` that produced ``u``, and the generic floor reads
     ``|J| (|u| + |du|)``, not ``|J| |u|`` alone. THE DERIVATION: ``du`` solves ``J du = -r_prev`` by a
-    backward-stable factorisation, i.e. exactly ``(J + E) du = -r_prev`` with ``|E| <~ eps |J|``, so the
+    backward-stable factorization, i.e. exactly ``(J + E) du = -r_prev`` with ``|E| <~ eps |J|``, so the
     new residual carries ``E du``, of size ``eps |J| |du|`` -- and ``|J| |du| >= |r_prev|``. The floor is
     therefore RELATIVE TO THE RESIDUAL THE STEP REMOVED, not to the state it landed on: a stiff decay
     from ``u ~ 1`` to ``u ~ 5e-4`` under ``|J| ~ 1e4`` lands at ~1e-12, where ``eps |J| |u|`` alone reads

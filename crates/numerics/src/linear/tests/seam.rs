@@ -101,7 +101,7 @@ fn a_structurally_singular_system_raises_rather_than_returning_nans() {
 #[test]
 fn a_rank_deficient_system_is_refused_by_one_of_the_two_halves() {
     // Two identical rows. The Python's SuperLU emits a MatrixRankWarning and may return NaNs OR
-    // finite garbage; faer factorises and produces non-finite values. Either way the seam must
+    // finite garbage; faer factorizes and produces non-finite values. Either way the seam must
     // refuse — which half fires is an implementation detail, that it fires is not.
     let (a, b) = duplicate_row_system();
     for route in [None, Some("direct")] {

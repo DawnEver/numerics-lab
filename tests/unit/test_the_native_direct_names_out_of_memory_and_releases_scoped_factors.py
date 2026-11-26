@@ -1,4 +1,4 @@
-"""The native direct factorisation reports an allocation failure as one, and lets a caller release its patterns.
+"""The native direct factorization reports an allocation failure as one, and lets a caller release its patterns.
 
 2026-10-20, an 806,777-unknown fixed-secant seed: faer's ``OutOfMemory`` was reported as "the linear system
 is rank-deficient -- is a gauge/reference set?", sending the reader after a gauge. And the pattern cache kept
@@ -54,13 +54,13 @@ def test_a_singular_refusal_is_still_rank_deficient(monkeypatch) -> None:
     assert not isinstance(caught.value, MemoryError)
 
 
-def test_a_scope_releases_the_patterns_analysed_inside_it_and_keeps_the_rest() -> None:
+def test_a_scope_releases_the_patterns_analyzed_inside_it_and_keeps_the_rest() -> None:
     native_direct._cache.clear()
     outer = _system(8)
     native_direct.native_solve(outer, np.ones(8))
     with native_direct.released_on_exit():
         native_direct.native_solve(_system(6), np.ones(6))
-        native_direct.native_solve(outer, np.ones(8))  # reused, not analysed here: it stays
+        native_direct.native_solve(outer, np.ones(8))  # reused, not analyzed here: it stays
         assert len(native_direct._cache) == 2
     assert [key[0] for key in native_direct._cache] == [8]
 

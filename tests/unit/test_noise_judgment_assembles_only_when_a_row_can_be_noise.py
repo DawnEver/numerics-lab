@@ -1,4 +1,4 @@
-"""The noise judgement assembles its zero-rate Jacobian only when some row CAN be noise (numerics-lab #55).
+"""The noise judgment assembles its zero-rate Jacobian only when some row CAN be noise (numerics-lab #55).
 
 ``_noise_judged`` replaces a row's bar with the system resolution only where the row is homogeneous AND its
 operands are at or below that resolution (`row_bar`). Where no row's operands are that small the homogeneity
@@ -101,7 +101,7 @@ class _Linear:
 
 
 def _full_mask(problem, u, bars, operands, resolution):
-    """The pre-change judgement: the mask read for every row, whatever its operands."""
+    """The pre-change judgment: the mask read for every row, whatever its operands."""
     jacobian = problem.jacobian(u, 0 * u, 0 * u, 0.0, DerivativeWeights(1, 0, 0))
     intercept = problem.residual(u, 0, 0, 0.0) - jacobian @ u
     homogeneous = np.abs(intercept) <= FLOOR_SAFETY * float(np.finfo(float).eps) * (np.abs(jacobian) @ np.abs(u))

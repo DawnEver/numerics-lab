@@ -99,9 +99,9 @@ def test_the_plant_is_finite_garbage_and_silent_so_only_the_residual_can_catch_i
 def test_the_production_order_157_system_is_refused_naming_its_residual_and_order():
     """The refusal is INFORMATIVE: the measured residual, the system order, and a remedy.
 
-    The residual VALUE is not pinned, only its scale. The garbage a singular factorisation returns
+    The residual VALUE is not pinned, only its scale. The garbage a singular factorization returns
     depends on the pivot ordering, so the CLI reads 1.608e+01 through CSR and 1.789e+01 through
-    CSC -- pinning either would be pinning an artefact of the storage format. What is stable, and
+    CSC -- pinning either would be pinning an artifact of the storage format. What is stable, and
     what the guard is judged on, is that it is seven orders of magnitude over the bar.
     """
     matrix, rhs = _inductor_m6_singular()

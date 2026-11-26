@@ -15,7 +15,7 @@ them. Two tests read it:
 * `crates/numerics/tests/golden_nonlinear.rs` (Rust), asserting the port does too.
 
 Together they are the equivalence proof. Separately, the first one IS the freeze protocol
-(plan §3) made executable: prose cannot stop `nonlinear/` taking a behaviour change while the
+(plan §3) made executable: prose cannot stop `nonlinear/` taking a behavior change while the
 port is in flight. This test can.
 
 ## Why the golden freezes TRAJECTORIES and not just the answer
@@ -71,7 +71,7 @@ class _AffineSystem:
     `r(x) = x - g(x)` is the diagonal `1 - slope`, supplied as a PLAIN ARRAY on purpose: it is not
     a scipy sparse matrix, so `newton-krylov` takes its opaque-tangent branch and
     `modified-newton`'s `_lu_factorize` returns `None` — both routing through `solve_system`,
-    which is the behaviour the port implements.
+    which is the behavior the port implements.
     """
 
     def __init__(

@@ -1,7 +1,7 @@
 """A homogeneous row holding only the solve's rounding is at the ROUNDOFF FLOOR of its system.
 
 The norm-verdict floor (``_at_roundoff_floor``) judged every row by its own ``eps |J| |u|`` (plus, since
-3ba7e65, its source and rate). A homogeneous row -- a field coordinate that is physically zero beside a
+the commit that added its source and rate). A homogeneous row -- a field coordinate that is physically zero beside a
 coupled 1e6-scale circuit -- has operands that are themselves rounding, so its own floor sits ~1e-14 below
 its own residual for every iterate. MEASURED 2026-10-24 on a downstream repo's
 ``test_switched_network_checkpoint_preserves_actual_trips_and_full_storage[bdf2]``: the event probe at

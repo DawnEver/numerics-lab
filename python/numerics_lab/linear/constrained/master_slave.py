@@ -100,11 +100,11 @@ def _solve_block(block, declared, resolved):
             if m in inner:
                 a_mat[inner[h], inner[m]] -= w
     targets = sorted({t for row in rhs for t in row})
-    tpos = {t: j for j, t in enumerate(targets)}
+    target_column = {t: j for j, t in enumerate(targets)}
     b_mat = np.zeros((size, len(targets)))
     for i, row in enumerate(rhs):
         for target, weight in row.items():
-            b_mat[i, tpos[target]] = weight
+            b_mat[i, target_column[target]] = weight
     try:
         x_mat = np.linalg.solve(a_mat, b_mat)
     except np.linalg.LinAlgError as exc:
@@ -177,7 +177,7 @@ def resolve_constraint_chains(constraints):
     dense LU fills, leaving roundoff (largest 3.2e-17, down to 1e-86) on 255 of the 13,575 rows
     where the algebra has an exact zero. The sparse form invents no target at all, which is what
     ``tests/unit/test_the_constraint_closure_is_sparse_not_a_dense_inverse.py`` asserts
-    rather than identical support -- pinning that would pin a LAPACK artefact.
+    rather than identical support -- pinning that would pin a LAPACK artifact.
 
     Only the nodes actually entangled are solved; every other row is returned untouched, and a
     constraint set with no chains at all is returned AS THE SAME OBJECT, so meshes that never had

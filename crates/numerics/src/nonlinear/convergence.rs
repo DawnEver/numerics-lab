@@ -84,7 +84,7 @@ pub fn has_converged_residual(
 
 /// The state-change half of the ONE rule: an equation's reported
 /// [`super::AssembledState::state_change`] (a fraction) is below `rtol_energy_pct / 100`.
-/// ANDed onto every strategy's verdict, the stagnation break included -- a strategy
+/// Combined by AND with every strategy's verdict, the stagnation break included -- a strategy
 /// clears its [`StagnationWatch`] while this is false, as the iterate alone cannot see that state.
 #[must_use]
 pub fn state_settled(state_change: f64, rtol_energy_pct: f64) -> bool {

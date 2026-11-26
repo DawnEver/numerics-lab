@@ -105,7 +105,7 @@ def test_strong_wolfe_returns_a_capped_step_where_phi_still_falls_at_max_step() 
 
 
 def test_strong_wolfe_still_raises_at_a_cap_where_sufficient_decrease_fails() -> None:
-    """Planted control: a cap is not a licence -- phi rising past the cap's Armijo line still zooms or fails."""
+    """Planted control: a cap is not a license -- phi rising past the cap's Armijo line still zooms or fails."""
     found = strong_wolfe(lambda a: (-a + 2 * a * a, -1.0 + 4 * a), 0.0, -1.0, max_step=1.0)
     assert not found.capped and abs(found.slope) <= 0.9
 

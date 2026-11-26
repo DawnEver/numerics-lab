@@ -7,7 +7,7 @@ call :func:`scipy.sparse.linalg.spsolve`). This module extracts that one call be
 newton-krylov and by large 3D / eddy-current systems) without the equation code changing.
 
 First principle (``AGENTS.md``): IMPLEMENT every method and characterize it. The ``direct`` backend is
-faer's pattern-cached factorisation when the native wheel provides it and ``spsolve`` VERBATIM when it
+faer's pattern-cached factorization when the native wheel provides it and ``spsolve`` VERBATIM when it
 does not (see :mod:`~numerics_lab.linear.native_direct` -- the two agree to round-off, not
 bit-for-bit, and the SciPy fallback is logged, never silent); the iterative
 backends are additive peers, each of which must reach the SAME solution as ``direct`` within its
@@ -176,8 +176,8 @@ def _direct(matrix, rhs, **_iterative_only):
     """Sparse direct factorization -- faer through :mod:`~numerics_lab.linear.native_direct`, else ``spsolve``.
 
     THE NATIVE PATH FIRST (2026-09-26): a real sparse operator goes to the pattern-cached faer
-    factorisation (supernodal LU, or Cholesky when the values are verified exactly symmetric),
-    which measured faster than SuperLU at every production size. It is a DIFFERENT factorisation,
+    factorization (supernodal LU, or Cholesky when the values are verified exactly symmetric),
+    which measured faster than SuperLU at every production size. It is a DIFFERENT factorization,
     so it agrees with ``spsolve`` to round-off and not bit-for-bit; both sit behind the same
     residual guard in :func:`solve_linear_system`. When the extension is absent, switched off
     (``native_direct.NATIVE_SELECTED = False``) or the operator is outside its reach (complex, dense), the
@@ -497,7 +497,7 @@ def solve_equilibrated(matrix, rhs):
     scaling. So the reading to take from all three measurements is: THE GUARD IS THE
     REQUIREMENT, THE SCALING IS A PER-SITE CLAIM. `solve_linear_system` is what a caller owes;
     reaching for this one is a statement about a particular operator and has to be measured on
-    THAT operator, never inherited from a neighbour.
+    THAT operator, never inherited from a neighbor.
 
     WHAT IS MEASURED, on the real operator: `case_k`'s
     overspeed/rated peak-hoop ratio, a quantity in which every discretization error cancels by

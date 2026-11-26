@@ -1,4 +1,4 @@
-//! The dense BORDER of a sparse direct factorisation: the dense rows/columns found, and their
+//! The dense BORDER of a sparse direct factorization: the dense rows/columns found, and their
 //! elimination through the `k x k` Schur complement so the supernodal kernel sees only the sparse
 //! block. Split out of `direct.rs` on 2026-09-29; see [`super::DirectFactorization`] for why.
 
@@ -41,7 +41,7 @@ pub(super) fn dense_indices(n: usize, indptr: &[u32], indices: &[u32]) -> Vec<us
     dense
 }
 
-/// `A = [[A11, A12], [A21, A22]]` with the dense indices last: `A11` is factorised sparsely and
+/// `A = [[A11, A12], [A21, A22]]` with the dense indices last: `A11` is factorized sparsely and
 /// the border is eliminated through the `k x k` Schur complement `S = A22 - A21 A11^{-1} A12`.
 pub(super) struct Border<T: Scalar> {
     pub(super) dense: Vec<usize>,

@@ -14,7 +14,7 @@ from scipy.sparse.linalg import LinearOperator
 __all__ = ['COARSENINGS', 'aggregates', 'amg_preconditioner', 'strong_connections']
 
 
-#: The selectable coarsenings. ``pairwise``: greedy strongest-neighbour pairs (each level shrinks ~2x),
+#: The selectable coarsenings. ``pairwise``: greedy strongest-neighbor pairs (each level shrinks ~2x),
 #: prolongation smoothed on the full operator. ``smoothed-aggregation``: Vanek-Mandel-Brezina root-node
 #: aggregates over the strong graph, prolongation smoothed on the FILTERED operator (weak couplings lumped
 #: into the diagonal) so the coarse stencils stay bounded. Ruge-Stueben (C/F splitting) is not implemented.
@@ -36,7 +36,7 @@ def _tentative(labels, count: int):
 
 
 def _pairwise_aggregates(strong):
-    """Greedy strongest-neighbour pairs over the strong graph; unmatched rows form singleton aggregates."""
+    """Greedy strongest-neighbor pairs over the strong graph; unmatched rows form singleton aggregates."""
     size = strong.shape[0]
     labels = np.full(size, -1, dtype=int)
     count = 0
@@ -49,18 +49,18 @@ def _pairwise_aggregates(strong):
         values = strong.data[start:end]
         available = labels[columns] < 0
         if np.any(available):
-            neighbour = columns[available][np.argmax(np.abs(values[available]))]
-            labels[neighbour] = count
+            neighbor = columns[available][np.argmax(np.abs(values[available]))]
+            labels[neighbor] = count
         count += 1
     return _tentative(labels, count)
 
 
 def _root_node_aggregates(strong):
-    """Standard aggregation: a free node whose strong neighbours are all free roots an aggregate of them.
+    """Standard aggregation: a free node whose strong neighbors are all free roots an aggregate of them.
 
-    Phase 2 attaches each leftover node to the aggregate of its strongest aggregated neighbour; phase 3
-    roots new aggregates at whatever is still free (with its free strong neighbours). A node with no strong
-    neighbour is a singleton.
+    Phase 2 attaches each leftover node to the aggregate of its strongest aggregated neighbor; phase 3
+    roots new aggregates at whatever is still free (with its free strong neighbors). A node with no strong
+    neighbor is a singleton.
     """
     size = strong.shape[0]
     labels = np.full(size, -1, dtype=int)

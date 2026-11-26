@@ -165,7 +165,7 @@ def _load() -> dict:
 
 @pytest.mark.unit
 def test_the_live_python_still_produces_the_frozen_solutions() -> None:
-    """The freeze, enforced: a behaviour change in `gauss/linear/` reds HERE, not in silence."""
+    """The freeze, enforced: a behavior change in `gauss/linear/` reds HERE, not in silence."""
     golden = _load()
     live = _build()
     assert set(live['cases']) == set(golden['cases']), 'the fixture set moved'

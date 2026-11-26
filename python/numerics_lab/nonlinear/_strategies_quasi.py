@@ -1,7 +1,7 @@
 """Multi-secant and quasi-Newton strategies: Anderson acceleration and the Broyden / BFGS / L-BFGS
-family -- none of which factorises the tangent.
+family -- none of which factorizes the tangent.
 
-Split out of `_strategies_newton.py` on 2026-09-29, which keeps the factorising Newton family and
+Split out of `_strategies_newton.py` on 2026-09-29, which keeps the factorizing Newton family and
 continuation.
 """
 
@@ -41,7 +41,7 @@ class AndersonStrategy:
 
     The Picard map is ``g(x) = solve_linear(assemble(x))`` and its fixed-point residual is
     ``f(x) = g(x) - x``. Plain/damped Picard mixes only the LAST iterate; Anderson mixes the last
-    ``m`` iterates by the least-squares combination of their residuals that minimises the mixed
+    ``m`` iterates by the least-squares combination of their residuals that minimizes the mixed
     residual, giving multi-secant (quasi-Newton-like) acceleration while using ONLY ``assemble`` +
     ``solve_linear`` -- so it drops onto BOTH MEC and FEA with no tangent. Converges to the SAME
     fixed point damped-Picard reaches, in fewer iterations on a contractive map.
@@ -123,7 +123,7 @@ class AndersonStrategy:
                 x = gx if system.is_linear else x + beta * f
                 mixed = False
             else:
-                # Least-squares Anderson mix: minimise || f_k - dF @ gamma || over the m residual
+                # Least-squares Anderson mix: minimize || f_k - dF @ gamma || over the m residual
                 # differences, then x <- (X_k @ w) with the relaxed combination of the g-images.
                 dF = np.column_stack([f_hist[j + 1] - f_hist[j] for j in range(len(f_hist) - 1)])
                 dX = np.column_stack([x_hist[j + 1] - x_hist[j] for j in range(len(x_hist) - 1)])

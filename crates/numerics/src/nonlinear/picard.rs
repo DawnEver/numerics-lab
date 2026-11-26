@@ -273,7 +273,7 @@ impl<S: NonlinearSystem> IterationStrategy<S> for CoefficientDampedPicardStrateg
     }
 }
 
-/// Plain substitution, alpha 1. Kept so its divergence on saturating B-H stays a labelled datum.
+/// Plain substitution, alpha 1. Kept so its divergence on saturating B-H stays a labeled datum.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PicardStrategy;
 

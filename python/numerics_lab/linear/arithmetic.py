@@ -75,7 +75,7 @@ def certified_sparse_product(left, right):
     """
     product, bound = sparse_product_bound(left, right)
     # JUDGED ON THE PRODUCT'S OWN ENTRIES: a sparse `<=` is True at every implicit zero, and
-    # materialised n^2 of them on a field-sized product (76 GiB, case_a, 2026-10-12).
+    # materialized n^2 of them on a field-sized product (76 GiB, case_a, 2026-10-12).
     product.eliminate_zeros()
     rows = np.repeat(np.arange(product.shape[0]), np.diff(product.indptr))
     limit = np.asarray(bound[rows, product.indices]).ravel()

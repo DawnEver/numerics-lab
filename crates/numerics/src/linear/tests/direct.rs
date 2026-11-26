@@ -1,5 +1,5 @@
-//! The cached-symbolic direct factorisation: it must agree with the one-shot solve, and it must
-//! REFUSE a pattern it did not analyse.
+//! The cached-symbolic direct factorization: it must agree with the one-shot solve, and it must
+//! REFUSE a pattern it did not analyze.
 //!
 //! There is no Python counterpart to mirror here. `scipy.sparse.linalg.spsolve` has no
 //! symbolic/numeric split to expose, which is precisely the lever this type exists to take:
@@ -43,7 +43,7 @@ fn a_cached_symbolic_reproduces_the_one_shot_solve_on_every_revalued_system() {
 #[test]
 fn the_analysis_survives_a_value_of_zero_in_a_stored_entry() {
     // A structurally present entry going numerically zero must not be mistaken for a pattern
-    // change: the CSR still stores it, and re-analysing on every zero crossing would forfeit the
+    // change: the CSR still stores it, and re-analyzing on every zero crossing would forfeit the
     // whole point of the cache.
     let (a, b) = spd_system(32);
     let mut cached = DirectFactorization::new(&a).unwrap();
@@ -61,8 +61,8 @@ fn the_analysis_survives_a_value_of_zero_in_a_stored_entry() {
 }
 
 #[test]
-fn a_different_sparsity_pattern_is_refused_rather_than_factorised() {
-    // The declaration-that-lies case: a cached symbolic applied to a pattern it never analysed
+fn a_different_sparsity_pattern_is_refused_rather_than_factorized() {
+    // The declaration-that-lies case: a cached symbolic applied to a pattern it never analyzed
     // returns a plausible vector for the WRONG structure. Planting the change and calling the
     // real guard is the only way to know the refusal fires.
     let (a, b) = spd_system(16);
@@ -71,7 +71,7 @@ fn a_different_sparsity_pattern_is_refused_rather_than_factorised() {
     for i in 0..16u32 {
         coo.push(i, i, 3.0).unwrap();
         if i + 2 < 16 {
-            // An entry the analysed tridiagonal does not have -- the pattern genuinely moved.
+            // An entry the analyzed tridiagonal does not have -- the pattern genuinely moved.
             coo.push(i, i + 2, -0.5).unwrap();
         }
     }
@@ -110,7 +110,7 @@ fn residual(a: &crate::sparse::Csr, x: &[f64], b: &[f64]) -> f64 {
 }
 
 #[test]
-fn an_exactly_symmetric_positive_operator_is_factorised_by_cholesky() {
+fn an_exactly_symmetric_positive_operator_is_factorized_by_cholesky() {
     // MEC's loop matrix is exactly SPD; the check that routes it to LLT is on pattern AND values,
     // so a symmetric system must take it and still solve.
     let (a, b) = laplacian_2d(12);
@@ -122,7 +122,7 @@ fn an_exactly_symmetric_positive_operator_is_factorised_by_cholesky() {
 }
 
 #[test]
-fn a_nonsymmetric_operator_is_factorised_by_lu() {
+fn a_nonsymmetric_operator_is_factorized_by_lu() {
     let (a, b) = nonsymmetric_system(40);
     let mut f = DirectFactorization::new(&a).unwrap();
     assert_eq!(f.refactor(&a).unwrap(), FactorKind::Lu);
@@ -161,7 +161,7 @@ fn a_kernel_holds_one_kind_and_releases_the_one_it_leaves() {
     assert_eq!(f.held(), vec![FactorKind::Lu]);
     let x = f.solve(&skew, &b).unwrap();
     assert!(residual(&skew, &x, &b) < 1e-13);
-    // ... and back: the LU is released, the Cholesky re-analysed, and it still solves.
+    // ... and back: the LU is released, the Cholesky re-analyzed, and it still solves.
     assert_eq!(f.refactor(&a).unwrap(), FactorKind::Cholesky);
     assert_eq!(f.held(), vec![FactorKind::Cholesky]);
     let x = f.solve(&a, &b).unwrap();
@@ -239,7 +239,7 @@ fn one_indefinite_refactor_does_not_pin_the_pattern_to_lu() {
 }
 
 #[test]
-fn one_factorisation_back_substitutes_several_right_hand_sides() {
+fn one_factorization_back_substitutes_several_right_hand_sides() {
     let (a, b) = nonsymmetric_system(25);
     let mut f = DirectFactorization::new(&a).unwrap();
     f.refactor(&a).unwrap();
@@ -311,7 +311,7 @@ fn bordered_system(side: usize, dense_every: usize) -> (crate::sparse::Csr, Vec<
 }
 
 #[test]
-fn a_dense_border_is_eliminated_by_its_schur_complement_not_factorised_as_a_clique() {
+fn a_dense_border_is_eliminated_by_its_schur_complement_not_factorized_as_a_clique() {
     let (a, b) = bordered_system(60, 2); // 3600 interior dofs, a border row of 1800 entries
     let mut f = DirectFactorization::new(&a).unwrap();
     assert_eq!(f.border_size(), 1);
@@ -342,7 +342,7 @@ fn a_bordered_factor_back_substitutes_several_right_hand_sides() {
 }
 
 #[test]
-fn back_substituting_before_any_factorisation_is_refused() {
+fn back_substituting_before_any_factorization_is_refused() {
     let (a, b) = spd_system(8);
     let f = DirectFactorization::new(&a).unwrap();
     let mut x = b.clone();

@@ -27,7 +27,7 @@
 //! # The two-sided singular guard
 //!
 //! A singular direct solve is the defect this seam exists to catch. The BELT is the
-//! factorisation's own refusal; the SUSPENDERS are [`DIRECT_RESIDUAL_RTOL`], and it is the
+//! factorization's own refusal; the SUSPENDERS are [`DIRECT_RESIDUAL_RTOL`], and it is the
 //! suspenders that catch the case that actually shipped garbage — a FINITE but meaningless
 //! vector that passes every finiteness check. Both apply to `faer`'s LU exactly as they applied
 //! to SuperLU's.
@@ -56,12 +56,12 @@ pub use krylov::{
 };
 pub use precond::{Preconditioner, PreconditionerError, KNOWN_PRECONDITIONERS, SSOR_OMEGA};
 
-/// Direct-solve singular guard: the largest relative residual a direct factorisation may report.
+/// Direct-solve singular guard: the largest relative residual a direct factorization may report.
 ///
-/// Even when the factorisation returns a FINITE vector for an (exactly or numerically) singular
+/// Even when the factorization returns a FINITE vector for an (exactly or numerically) singular
 /// system, `||A x - b|| / ||b||` is large. Rejecting above this tolerance is what makes a
 /// rank-deficient reluctance network fail honestly instead of shipping garbage as `status=ok`.
-/// The bound is loose (1e-6) so a well-conditioned factorisation — residual ~ machine eps — always
+/// The bound is loose (1e-6) so a well-conditioned factorization — residual ~ machine eps — always
 /// passes. Verbatim from the Python's `_DIRECT_RESIDUAL_RTOL`.
 pub const DIRECT_RESIDUAL_RTOL: f64 = 1e-6;
 
@@ -87,7 +87,7 @@ pub enum LinearSolveError {
     },
     /// An unregistered preconditioner name.
     UnknownPreconditioner(PreconditionerError),
-    /// The direct factorisation refused (the BELT half of the singular guard).
+    /// The direct factorization refused (the BELT half of the singular guard).
     Direct(direct::DirectFailure),
     /// A Krylov method did not converge or broke down.
     Krylov {
@@ -103,7 +103,7 @@ pub enum LinearSolveError {
     },
     /// The SUSPENDERS half: a finite solution that does not satisfy the system.
     ///
-    /// This is the one that catches what actually shipped — a rank-deficient factorisation
+    /// This is the one that catches what actually shipped — a rank-deficient factorization
     /// returning finite-but-meaningless numbers past every finiteness check.
     DirectResidual {
         /// The measured `||A x - b|| / ||b||`.
@@ -159,7 +159,7 @@ impl From<SparseError> for LinearSolveError {
     }
 }
 
-/// A resolved backend: the direct factorisation or one of the Krylov peers.
+/// A resolved backend: the direct factorization or one of the Krylov peers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinearSolver {
     /// Admissibility-based ICCG with guarded direct fallback; no timing crossover claimed.
@@ -384,9 +384,9 @@ pub fn check_finite<T: Scalar>(x: &[T], backend: &str) -> Result<(), LinearSolve
 ///
 /// Public and separate from [`solve_linear_system`] on purpose. The Python tests this half by
 /// monkeypatching the registry to return finite garbage, which is the only way to reach the
-/// branch — a real factorisation rarely produces it on demand. Exposing the check makes the same
+/// branch — a real factorization rarely produces it on demand. Exposing the check makes the same
 /// test possible here WITHOUT a mutable registry, and makes the guard a thing a caller with its
-/// own factorisation can reuse.
+/// own factorization can reuse.
 ///
 /// A zero-norm rhs is not judged: `||b|| = 0` has no relative residual, and `x = 0` is the answer.
 /// A residual that cannot be measured (`||b||^2` overflowing) is refused, never passed; [`solve_equilibrated`] is the entry point for an operator scaled that far.
@@ -428,12 +428,12 @@ pub fn check_direct_residual<T: Scalar>(
     Ok(())
 }
 
-/// The guarded direct solve over either scalar type: factorise, then refuse a non-finite solution and a
+/// The guarded direct solve over either scalar type: factorize, then refuse a non-finite solution and a
 /// relative residual above [`DIRECT_RESIDUAL_RTOL`] -- the `direct` branch of
 /// [`solve_linear_system`], which is the entry point for a `c64` system.
 ///
 /// # Errors
-/// [`LinearSolveError::Direct`] (the factorisation refused), [`LinearSolveError::NonFinite`],
+/// [`LinearSolveError::Direct`] (the factorization refused), [`LinearSolveError::NonFinite`],
 /// [`LinearSolveError::DirectResidual`].
 pub fn solve_direct<T: Scalar>(matrix: &Csr<T>, rhs: &[T]) -> Result<Vec<T>, LinearSolveError> {
     let x = direct::solve(matrix, rhs).map_err(LinearSolveError::Direct)?;
@@ -452,7 +452,7 @@ pub fn solve_direct<T: Scalar>(matrix: &Csr<T>, rhs: &[T]) -> Result<Vec<T>, Lin
 /// negative or complex diagonal never produces a NaN.
 ///
 /// The guard runs on the SCALED system, through [`solve_direct`]: the residual it refuses on is the
-/// one the factorisation actually saw. The scaling is a per-operator claim, not a general accuracy
+/// one the factorization actually saw. The scaling is a per-operator claim, not a general accuracy
 /// improvement -- the Python's docstring records an operator on which it measured worse.
 ///
 /// # Errors

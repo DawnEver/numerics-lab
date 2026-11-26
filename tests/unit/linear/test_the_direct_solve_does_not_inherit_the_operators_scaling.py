@@ -41,7 +41,7 @@ def test_it_agrees_with_the_plain_factorization_on_a_well_scaled_system() -> Non
     """THE IDENTITY. Where conditioning is not in question, the two agree to round-off.
 
     To round-off and not to the bit since 2026-09-26: the ``direct`` backend under the equilibrated
-    solve is faer's factorisation when the native wheel is present, a different pivot/ordering
+    solve is faer's factorization when the native wheel is present, a different pivot/ordering
     from the SciPy ``spsolve`` it is compared against.
     """
     n = 60

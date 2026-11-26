@@ -109,7 +109,7 @@ class NonlinearSystem(Protocol):
         ...
 
     def residual_norm(self, x: np.ndarray, state: AssembledState, /) -> float:
-        """Scalar convergence measure a line search minimises -- the norm over the FREE DOFs only.
+        """Scalar convergence measure a line search minimizes -- the norm over the FREE DOFs only.
 
         Defaults to ``||residual||`` (correct for MEC, whose reduced loop residual has no pinned rows).
         FEA overrides it to EXCLUDE the Dirichlet rows: the full-space FEA residual ``S A - T`` carries a

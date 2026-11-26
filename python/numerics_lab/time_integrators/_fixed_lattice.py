@@ -36,7 +36,7 @@ def fixed_lattice_step_size(origin, start, target, dt):
     """
     tick = math.floor((target - origin) / dt)
     for candidate in (tick, tick + 1):
-        # A start labelled with a declared endpoint (a resumed checkpoint) is the tick it rounds to.
+        # A start labeled with a declared endpoint (a resumed checkpoint) is the tick it rounds to.
         if origin + candidate * dt == target and same_instant(origin + (candidate - 1) * dt, start):
             return dt
     return target - start

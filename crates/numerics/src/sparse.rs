@@ -1,6 +1,6 @@
 //! The sparse matrix, as a type BOTH sides own — the keystone of ruling D3.
 //!
-//! D3 (2026-09-03) is that Rust owns the data structures rather than marshalling numpy across
+//! D3 (2026-09-03) is that Rust owns the data structures rather than marshaling numpy across
 //! the FFI on every call. For the solve path that decision reduces almost entirely to this
 //! file: an assembly produces a sparse operator, a nonlinear iteration re-produces it every
 //! step, and a linear solve consumes it. If that operator is a numpy object, every one of
@@ -22,12 +22,12 @@
 //! it (a node shared by k elements contributes k times and the entries must ADD), while a
 //! boundary-condition pass relies on the opposite. `scipy.sparse.coo_matrix.tocsr()` sums, so
 //! the port sums, and the Dirichlet path gets its own explicit row-clearing operation instead
-//! of leaning on a format's implicit behaviour.
+//! of leaning on a format's implicit behavior.
 
 use std::fmt;
 use std::ops::{Add, AddAssign, Div, Mul, Neg, Sub, SubAssign};
 
-/// The complex scalar a [`Coo`] / [`Csr`] may hold beside `f64` -- `faer`'s own, so a factorisation
+/// The complex scalar a [`Coo`] / [`Csr`] may hold beside `f64` -- `faer`'s own, so a factorization
 /// consumes the values without a conversion.
 pub use faer::c64;
 
@@ -57,7 +57,7 @@ pub trait Scalar:
     const ONE: Self;
     /// Whether the transpose of a matrix over this scalar type IS its adjoint. True for `f64`, false for
     /// [`c64`]: a complex-symmetric matrix (`A = A^T`) is not Hermitian, so a symmetric pattern
-    /// with symmetric values never qualifies it for an `L L^H` factorisation.
+    /// with symmetric values never qualifies it for an `L L^H` factorization.
     const TRANSPOSE_IS_ADJOINT: bool;
     /// `|self|`.
     fn modulus(self) -> f64;
@@ -68,7 +68,7 @@ pub trait Scalar:
     fn scale(self, by: f64) -> Self;
     /// No component is a NaN or an infinity.
     fn is_finite(self) -> bool;
-    /// Bitwise equality of every component -- the exact-symmetry test of a factorisation.
+    /// Bitwise equality of every component -- the exact-symmetry test of a factorization.
     fn same_bits(self, other: Self) -> bool;
 }
 
@@ -297,7 +297,7 @@ impl<T: Scalar> Coo<T> {
     ///
     /// Exact zeros produced by cancellation are KEPT rather than dropped. Dropping them would
     /// make the sparsity pattern depend on the numbers in it, so two assemblies of the same
-    /// mesh could produce structurally different matrices — and a factorisation cached on the
+    /// mesh could produce structurally different matrices — and a factorization cached on the
     /// pattern would then be silently invalid.
     ///
     /// # Errors
@@ -412,7 +412,7 @@ impl<T: Scalar> Csr<T> {
     ///
     /// This is the whole point of separating pattern from values: a nonlinear iteration
     /// re-assembles the SAME sparsity with new numbers every step, and a solver that cached a
-    /// symbolic factorisation on the pattern stays valid across that update. Handing out the
+    /// symbolic factorization on the pattern stays valid across that update. Handing out the
     /// values alone makes "the pattern did not change" a property of the API rather than a
     /// promise in a docstring.
     pub fn values_mut(&mut self) -> &mut [T] {
@@ -662,7 +662,7 @@ mod tests {
 
     #[test]
     fn values_mut_updates_the_numbers_and_leaves_the_pattern_alone() {
-        // The property a cached symbolic factorisation depends on.
+        // The property a cached symbolic factorization depends on.
         let mut csr = tri().to_csr().unwrap();
         let pattern = (csr.indptr().to_vec(), csr.indices().to_vec());
         for v in csr.values_mut() {

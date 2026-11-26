@@ -147,7 +147,7 @@ def test_breakpoint_clipping_never_drifts_the_time_base() -> None:
 def test_a_final_cell_breakpoint_is_a_partial_step_not_a_full_dt() -> None:
     """SR-025 regression: a breakpoint inside the LAST cell clips to t1 with a PARTIAL step.
 
-    The round-1 re-anchor marched the final clipped cell a full dt while labelling it t1
+    The round-1 re-anchor marched the final clipped cell a full dt while labeling it t1
     (measured max |u - t| = 0.05 on a linear ramp) -- the regression test passed only because
     its last breakpoint landed exactly on t1. Here the breakpoint sits at 0.95 (dt = 0.1):
     the march must land 0.95 then finish with a 0.05 step to t1, riding its labels exactly.

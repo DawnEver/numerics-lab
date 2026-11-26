@@ -26,7 +26,7 @@ use pyo3::prelude::*;
 /// value summed into `A[1,1]`. `scipy.sparse.coo_matrix` refuses the same triplet outright
 /// ("axis 0 index 4294967297 exceeds matrix dimension 3"). A plausible-looking wrong answer
 /// returned as a success is what `.claude/rules/invariant.md` forbids, so the narrowing is
-/// checked here at the marshalling boundary rather than trusted.
+/// checked here at the marshaling boundary rather than trusted.
 ///
 /// Negative ids wrapped too, and the resulting `4294967295` is what the downstream bound check
 /// reported -- so its message named a number the caller never passed. Refusing here keeps the
@@ -138,21 +138,21 @@ pub fn py_solve_direct_complex<'py>(
 
 /// `DirectFactorization(n_rows, n_cols, indptr, indices, values)` — the CACHED-symbolic direct LU.
 ///
-/// [`py_solve_linear_system`] pays colamd and the symbolic factorisation on every call, which is
+/// [`py_solve_linear_system`] pays colamd and the symbolic factorization on every call, which is
 /// 34% / 46% of a faer solve at the two production sizes and is IDENTICAL between Newton
 /// iterations. This class is that half held: the constructor analyses the pattern once and
-/// [`PyDirectFactorization::solve`] pays only the numeric factorisation and the triangular solve.
+/// [`PyDirectFactorization::solve`] pays only the numeric factorization and the triangular solve.
 ///
 /// It exists because the comparison that decides whether faer replaces SuperLU is only meaningful
-/// in this shape — a wiring would hold the factorisation across the loop, so a benchmark that
-/// re-analysed per call would be measuring an implementation nobody proposes.
+/// in this shape — a wiring would hold the factorization across the loop, so a benchmark that
+/// re-analyzed per call would be measuring an implementation nobody proposes.
 ///
 /// The pattern is CHECKED, never assumed: the constructor refuses a non-canonical CSR (columns not
 /// ascending / not unique, which `Coo::to_csr` would silently reorder into a different value
 /// order), and `numerics`'s own `DirectFactorization::solve` refuses a changed pattern.
 #[pyclass(name = "DirectFactorization")]
 pub struct PyDirectFactorization {
-    /// The analysed operator; only its VALUES move between solves.
+    /// The analyzed operator; only its VALUES move between solves.
     csr: Csr,
     factorization: DirectFactorization,
 }
@@ -243,7 +243,7 @@ impl PyDirectFactorization {
         let slot = self.csr.values_mut();
         if new_values.len() != slot.len() {
             return Err(PyValueError::new_err(
-                "values must carry the analysed pattern's nnz",
+                "values must carry the analyzed pattern's nnz",
             ));
         }
         for (dst, &src) in slot.iter_mut().zip(new_values.iter()) {
@@ -259,8 +259,8 @@ impl PyDirectFactorization {
         Ok(x.into_pyarray(py))
     }
 
-    /// `refactor(values) -> "lu" | "cholesky"` — numerically factorise a new value vector on the
-    /// SAME pattern into the held storage, and name the factorisation it took.
+    /// `refactor(values) -> "lu" | "cholesky"` — numerically factorize a new value vector on the
+    /// SAME pattern into the held storage, and name the factorization it took.
     ///
     /// The split from [`Self::back_substitute`] is what lets one factor answer several
     /// right-hand sides (the held-factor Newton, the bordered field<->circuit tangent). No
@@ -271,7 +271,7 @@ impl PyDirectFactorization {
         let slot = self.csr.values_mut();
         if new_values.len() != slot.len() {
             return Err(PyValueError::new_err(
-                "values must carry the analysed pattern's nnz",
+                "values must carry the analyzed pattern's nnz",
             ));
         }
         for (dst, &src) in slot.iter_mut().zip(new_values.iter()) {
@@ -301,13 +301,13 @@ impl PyDirectFactorization {
         Ok(x.into_pyarray(py))
     }
 
-    /// The factorisation the last refactor took (`"lu"` / `"cholesky"`), or `None`.
+    /// The factorization the last refactor took (`"lu"` / `"cholesky"`), or `None`.
     #[getter]
     fn kind(&self) -> Option<&'static str> {
         self.factorization.kind().map(|k| k.as_str())
     }
 
-    /// The order of the analysed system.
+    /// The order of the analyzed system.
     #[getter]
     fn n(&self) -> usize {
         self.factorization.n()

@@ -183,7 +183,7 @@ def test_it_is_a_DIFFERENT_pin_from_the_orphan_one() -> None:
 
 @pytest.mark.parametrize('n', [4, 6, 12])
 def test_the_detector_is_scale_free(n: int) -> None:
-    """The same verdict in metres and millimetres -- the tolerance is relative, so it must be.
+    """The same verdict in meters and millimeters -- the tolerance is relative, so it must be.
 
     A 1e6 scaling is what a unit change does to a stiffness, and a detector that flipped on it
     would fire on some cases and not their identical twins.

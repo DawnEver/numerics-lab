@@ -25,7 +25,7 @@ class LinearSolveError(RuntimeError):
 
 
 class DirectSolveOutOfMemory(LinearSolveError, MemoryError):
-    """The direct factorisation could not get the memory its factor (or its scratch) needs.
+    """The direct factorization could not get the memory its factor (or its scratch) needs.
 
     A ``LinearSolveError`` so every existing handler still sees a failed solve, and a ``MemoryError`` so
     nobody reads it as a statement about the operator: it says NOTHING about the rank. Split out on

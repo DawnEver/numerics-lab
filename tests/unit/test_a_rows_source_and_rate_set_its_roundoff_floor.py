@@ -94,7 +94,7 @@ def test_a_second_order_rows_acceleration_sets_its_floor(defect, accepted):
 
 
 class _CountsTheRestPoint(_Winding):
-    """Counts the zero-rate residual reads ``F(u, 0)``: one judgement needs the source ONCE."""
+    """Counts the zero-rate residual reads ``F(u, 0)``: one judgment needs the source ONCE."""
 
     def __init__(self) -> None:
         self.rest_reads = 0
@@ -105,7 +105,7 @@ class _CountsTheRestPoint(_Winding):
 
 
 def test_a_refused_tangent_floor_reads_the_rows_source_once():
-    """Both the unseen-term floor and the noise judgement read ``F(u, 0)``; it is one state and one time."""
+    """Both the unseen-term floor and the noise judgment read ``F(u, 0)``; it is one state and one time."""
     problem, form = _CountsTheRestPoint(), _form()
     u = np.array([1e-12])
     tangent = problem.jacobian(u, None, None, 0.0, form.weights)

@@ -1,10 +1,10 @@
 //! The complex direct solve judged against SciPy SuperLU, through the committed golden.
 //!
 //! Written by `tests/unit/test_complex_linear_port_golden.py`, which separately asserts the live
-//! Python still produces it. As in `golden_linear.rs`, faer is a DIFFERENT factorisation from
+//! Python still produces it. As in `golden_linear.rs`, faer is a DIFFERENT factorization from
 //! SuperLU, so this file CHARACTERIZES: the port's solution must satisfy the system to the guard's
 //! bound, and agree with SuperLU's to [`AGREEMENT_RTOL`] (the fixtures have `kappa ~ 1e1`, so two
-//! backward-stable factorisations agree to `~1e-15`; the bar is the real golden's `1e-8`).
+//! backward-stable factorizations agree to `~1e-15`; the bar is the real golden's `1e-8`).
 
 use numerics::linear::{solve_direct, solve_equilibrated, LinearSolveError};
 use numerics::sparse::{c64, Coo, Csr, Scalar};

@@ -14,7 +14,7 @@ use super::{
 ///
 /// The Picard map is `g(x) = solve_linear(assemble(x))` and its fixed-point residual is
 /// `f(x) = g(x) - x`. Plain/damped Picard mixes only the LAST iterate; Anderson mixes the last `m`
-/// iterates by the least-squares combination of their residuals that minimises the mixed residual,
+/// iterates by the least-squares combination of their residuals that minimizes the mixed residual,
 /// giving multi-secant (quasi-Newton-like) acceleration while using ONLY `assemble` +
 /// `solve_linear` — so it drops onto BOTH MEC and FEA with no tangent. Converges to the SAME fixed
 /// point damped Picard reaches, in fewer iterations on a contractive map.

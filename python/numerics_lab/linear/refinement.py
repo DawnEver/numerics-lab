@@ -149,7 +149,7 @@ _DIRECT_REFINEMENT_MAX_STEPS = 4
 # WHY THE MAGNITUDE GATE IS NO LONGER AN ABSOLUTE NUMBER. It stood at `1e-3`, calibrated
 # 2026-09-07 on exactly two points:
 #
-#     the real conditioning artefact  (n=864 tied-contact KKT)       first move = 2.5893e-05
+#     the real conditioning artifact  (n=864 tied-contact KKT)       first move = 2.5893e-05
 #     a backend returning garbage     (`np.ones_like(rhs)` on SPD)   first move = 9.7219e-01
 #
 # Neither point carries n, and the first refinement move goes as cond*eps -- so a PHYSICALLY SOUND
@@ -182,7 +182,7 @@ _DIRECT_REFINEMENT_MAX_STEPS = 4
 #: n=200 plants). An underestimated `cond` LOWERS the ceiling and makes this gate STRICTER: the
 #: error direction can only cause a false refusal, never a false repair.
 #:
-#: The n=864 tied-contact KKT artefact (first move 2.5893e-05) cannot be placed on this axis --
+#: The n=864 tied-contact KKT artifact (first move 2.5893e-05) cannot be placed on this axis --
 #: its `cond` was never recorded and the system is not kept -- so it is two points, not three.
 _REPAIRABLE_CONDITION_FACTOR = 100.0
 
@@ -198,14 +198,14 @@ _REPAIRABLE_CONDITION_FACTOR = 100.0
 # THE RING DOES NOT NEED THE ALLOWANCE, which is the point: measured 2026-09-17 its R is 4.09e-07
 # to 9.38e-07, so it passes at C = 1 -- the bare model with no fudge -- by six decades. C is not
 # fitted to it. What the allowance protects is some OTHER sound system whose move sits a little
-# above its conditioning floor, and the n=864 artefact that cannot be placed here is exactly that
+# above its conditioning floor, and the n=864 artifact that cannot be placed here is exactly that
 # unknown.
 #
 # AND ON A BADLY ENOUGH CONDITIONED SYSTEM THIS GATE IS INERT, which it must SAY rather than
 # pretend otherwise. The ring measured cond_1 = 1.16e+17 to 2.41e+19, i.e. cond*eps = 25.8 to
 # 5.3e+03: past cond*eps = 1 no digits are guaranteed and NO magnitude is anomalous, so magnitude
 # cannot discriminate and the TRAJECTORY is the only working gate there. That is the correct
-# behaviour and not a gap -- a gate claiming to separate what it cannot is the declaration that
+# behavior and not a gap -- a gate claiming to separate what it cannot is the declaration that
 # lies. The two gates are independent precisely so that one can go quiet without taking the other
 # with it.
 
@@ -475,7 +475,7 @@ def _repair_one_column(matrix, rhs, x) -> tuple[np.ndarray, tuple[float, ...]]:
     #
     # UNDECIDABLE IS NOT A PASS. When no condition estimate can be formed the magnitude gate has
     # no scale to judge against, and the answer is to DECLINE the repair -- the caller keeps its
-    # vector and the guard below judges it on the acceptance bar, which is the behaviour that
+    # vector and the guard below judges it on the acceptance bar, which is the behavior that
     # existed before any repair did.
     if move <= _DIRECT_REFINEMENT_RTOL or move_is_this_systems_conditioning(matrix, move, factor=factor) is not True:
         return np.asarray(x), (move,)

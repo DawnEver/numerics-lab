@@ -145,7 +145,7 @@ def _load() -> dict:
 
 @pytest.mark.unit
 def test_the_live_python_still_produces_the_frozen_complex_solutions() -> None:
-    """The freeze: a behaviour change in SciPy or `solve_equilibrated` reds HERE, not in silence."""
+    """The freeze: a behavior change in SciPy or `solve_equilibrated` reds HERE, not in silence."""
     golden = _load()
     live = _build()
     assert set(live['cases']) == set(golden['cases']), 'the fixture set moved'

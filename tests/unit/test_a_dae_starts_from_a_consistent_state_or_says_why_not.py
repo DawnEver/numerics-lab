@@ -1,4 +1,4 @@
-"""Consistent index-1 initialisation: the algebraic unknowns are derived, the rule is stated, a conflict raises."""
+"""Consistent index-1 initialization: the algebraic unknowns are derived, the rule is stated, a conflict raises."""
 
 from __future__ import annotations
 
