@@ -54,7 +54,7 @@ def test_smoothed_aggregation_converges_on_the_anisotropic_operator() -> None:
 
 def test_pairwise_converges_but_only_halves_each_level() -> None:
     matrix = _anisotropic(64)
-    preconditioner = amg_preconditioner(matrix)
+    preconditioner = amg_preconditioner(matrix, coarsening='pairwise', theta=0.0)
     iterations, relative = _cg_iterations(matrix, preconditioner)
     assert iterations <= 25
     assert relative == pytest.approx(0.0, abs=1e-8)
@@ -64,7 +64,8 @@ def test_pairwise_converges_but_only_halves_each_level() -> None:
 def test_smoothed_aggregation_without_a_threshold_degrades() -> None:
     # theta = 0 aggregates ACROSS the weak direction: the coarse space misses the smooth-along-x error.
     matrix = _anisotropic(64)
-    iterations, _relative = _cg_iterations(matrix, amg_preconditioner(matrix, coarsening='smoothed-aggregation'))
+    preconditioner = amg_preconditioner(matrix, coarsening='smoothed-aggregation', theta=0.0)
+    iterations, _relative = _cg_iterations(matrix, preconditioner)
     assert iterations > 100
 
 

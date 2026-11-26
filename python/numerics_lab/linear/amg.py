@@ -17,7 +17,9 @@ __all__ = ['COARSENINGS', 'aggregates', 'amg_preconditioner', 'strong_connection
 #: The selectable coarsenings. ``pairwise``: greedy strongest-neighbor pairs (each level shrinks ~2x),
 #: prolongation smoothed on the full operator. ``smoothed-aggregation``: Vanek-Mandel-Brezina root-node
 #: aggregates over the strong graph, prolongation smoothed on the FILTERED operator (weak couplings lumped
-#: into the diagonal) so the coarse stencils stay bounded. Ruge-Stueben (C/F splitting) is not implemented.
+#: into the diagonal) so the coarse stencils stay bounded -- the default. ``pairwise`` stays an option: it
+#: converges, but its full-operator smoothing fills every coarse level, so its operator complexity grows with N
+#: (setup ~N^2, numerics-lab #33). Ruge-Stueben (C/F splitting) is not implemented.
 COARSENINGS = ('pairwise', 'smoothed-aggregation')
 
 
@@ -117,12 +119,13 @@ def _prolongation(matrix, coarsening: str, theta: float):
     return (tentative - sp.diags(inverse) @ smoothed @ tentative).tocsr()
 
 
-def amg_preconditioner(matrix, *, coarsening: str = 'pairwise', theta: float = 0.0) -> LinearOperator:
+def amg_preconditioner(matrix, *, coarsening: str = 'smoothed-aggregation', theta: float = 0.08) -> LinearOperator:
     """Symmetric pre/post Jacobi V-cycle with smoothed Galerkin coarse spaces.
 
     ``coarsening`` is one of :data:`COARSENINGS`; ``theta`` is the strength-of-connection threshold: only
     couplings with ``|a_ij| >= theta sqrt(a_ii a_jj)`` may join an aggregate (``0`` keeps them all). An
-    anisotropic operator needs ``theta > 0`` so its weak direction is not aggregated (numerics-lab #33).
+    anisotropic operator needs ``theta > 0`` so its weak direction is not aggregated (numerics-lab #33). The
+    returned operator carries ``level_sizes`` and ``operator_complexity`` (``sum(nnz_l) / nnz_0``).
 
     Assumes SPD, as CG does; refuses non-real, nonsymmetric and nonpositive
     diagonals. Coarsest Cholesky additionally refuses indefinite/singular coarse
@@ -204,4 +207,6 @@ def amg_preconditioner(matrix, *, coarsening: str = 'pairwise', theta: float = 0
         dtype=float,
     )
     result.level_sizes = tuple(operator.shape[0] for operator in operators)
+    # sum(nnz_l) / nnz_0: the hierarchy's storage and per-cycle work relative to the fine operator.
+    result.operator_complexity = sum(operator.nnz for operator in operators) / operators[0].nnz
     return result
