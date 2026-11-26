@@ -183,7 +183,7 @@ def test_all_unit_rows_remain_a_real_native_factor_not_an_empty_system():
 
 
 def test_the_superlu_fallback_is_logged_and_counted(monkeypatch, caplog):
-    monkeypatch.setenv('NUMERICS_LAB_DIRECT_NATIVE', '0')
+    monkeypatch.setattr(native_direct, 'NATIVE_SELECTED', False)
     monkeypatch.setattr(native_direct, '_warned', set())
     a = _unsymmetric(50)
     b = np.ones(50)

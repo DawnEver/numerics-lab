@@ -19,9 +19,9 @@ on the same pattern, so it records the generation it was factorised at and re-fa
 values if another solve has since overwritten the shared storage -- a stale factor is never
 back-substituted.
 
-THE FALLBACK IS VISIBLE. When the native path is switched off with
-``NUMERICS_LAB_DIRECT_NATIVE=0`` (the A/B selector), the ``direct`` backend runs SciPy ``spsolve``
-and says so: one WARNING per
+THE FALLBACK IS VISIBLE. When the native path is switched off with :data:`NATIVE_SELECTED`
+``= False`` (the A/B selector, explicit configuration: ENV-IS-READ-ONCE reads no environment here), the
+``direct`` backend runs SciPy ``spsolve`` and says so: one WARNING per
 process naming the reason, and every solve is counted by backend in :data:`DIRECT_SOLVES`. A
 complex or non-sparse operator is outside the native's reach and is counted as ``superlu`` too.
 """
@@ -29,7 +29,6 @@ complex or non-sparse operator is outside the native's reach and is counted as `
 from __future__ import annotations
 
 import logging
-import os
 from collections import Counter, OrderedDict
 from contextlib import contextmanager
 
@@ -40,12 +39,20 @@ from numerics_lab import _native
 from numerics_lab.linear.constrained.fixed_values import lift_dirichlet_rhs
 from numerics_lab.linear.errors import DirectSolveOutOfMemory, LinearSolveError
 
-__all__ = ['DIRECT_SOLVES', 'NativeFactor', 'native_available', 'native_factor', 'native_solve', 'released_on_exit']
+__all__ = [
+    'DIRECT_SOLVES',
+    'NATIVE_SELECTED',
+    'NativeFactor',
+    'native_available',
+    'native_factor',
+    'native_solve',
+    'released_on_exit',
+]
 
 logger = logging.getLogger(__name__)
 
-#: ``NUMERICS_LAB_DIRECT_NATIVE=0`` forces SciPy SuperLU -- the A/B selector, read per call.
-_ENV = 'NUMERICS_LAB_DIRECT_NATIVE'
+#: ``False`` forces SciPy SuperLU -- the A/B selector, consulted per call; a caller assigns it.
+NATIVE_SELECTED: bool = True
 
 #: Analyses held at once. A Newton loop alternates at most a secant and a tangent pattern, a
 #: coupled march adds one more; beyond that an evicted pattern simply re-analyses.
@@ -60,8 +67,8 @@ _cache: OrderedDict[tuple, _Entry] = OrderedDict()
 
 def _extension_or_reason():
     """``(DirectFactorization class, None)`` or ``(None, why the native path cannot run)``."""
-    if os.environ.get(_ENV, '1') == '0':
-        return None, f'{_ENV}=0'
+    if not NATIVE_SELECTED:
+        return None, 'NATIVE_SELECTED=False'
     return _native.DirectFactorization, None
 
 
