@@ -5,6 +5,7 @@
 //! `scipy.sparse.coo_matrix` hands out on the Python side, and `numerics::sparse` owns the
 //! COO -> CSR conversion.
 
+mod amg;
 mod kernels;
 mod structural;
 
@@ -137,6 +138,73 @@ pub fn py_solve_direct_complex<'py>(
     Ok(x.into_pyarray(py))
 }
 
+/// A CANONICAL CSR (columns ascending and unique) from its numpy parts, every index checked.
+pub(crate) fn canonical_csr(
+    n_rows: usize,
+    n_cols: usize,
+    indptr: &PyReadonlyArray1<'_, i64>,
+    indices: &PyReadonlyArray1<'_, i64>,
+    values: &PyReadonlyArray1<'_, f64>,
+) -> PyResult<Csr> {
+    // `indptr` is validated BEFORE it is narrowed, because the row-expansion loop below
+    // turns a bad offset straight into an allocation. Measured 2026-09-05: `indptr =
+    // [0, -1, 2, 3]` passes both of the checks that used to be here (it is n_rows+1 long
+    // and ends at nnz), then `-1 as usize` makes the range `0..18446744073709551615` and
+    // the process ABORTS -- "memory allocation of 51539607552 bytes failed". That is not
+    // an exception a caller can catch; it takes the interpreter with it.
+    let raw_ptr = indptr.as_array();
+    let mut ptr: Vec<usize> = Vec::with_capacity(raw_ptr.len());
+    let mut previous = 0i64;
+    for (row, &offset) in raw_ptr.iter().enumerate() {
+        if offset < 0 || offset < previous {
+            return Err(PyValueError::new_err(format!(
+                "indptr must be non-negative and non-descending; entry {row} is {offset} \
+                 after {previous}. A descending or negative offset becomes an enormous \
+                 unsigned range here and aborts the process rather than raising"
+            )));
+        }
+        previous = offset;
+        ptr.push(offset as usize);
+    }
+    let idx: Vec<u32> = indices
+        .as_array()
+        .iter()
+        .map(|&i| narrow_index(i, n_cols, "column"))
+        .collect::<PyResult<_>>()?;
+    let val: Vec<f64> = values.as_array().to_vec();
+    if ptr.len() != n_rows + 1 || ptr.last().copied().unwrap_or(0) != idx.len() {
+        return Err(PyValueError::new_err(
+            "indptr must be n_rows+1 long and end at nnz",
+        ));
+    }
+    if val.len() != idx.len() {
+        return Err(PyValueError::new_err(format!(
+            "values and indices must agree; got {} values for {} indices",
+            val.len(),
+            idx.len()
+        )));
+    }
+    let mut rows: Vec<u32> = Vec::with_capacity(idx.len());
+    for r in 0..n_rows {
+        for _ in ptr[r]..ptr[r + 1] {
+            rows.push(r as u32);
+        }
+    }
+    let coo = Coo::from_triplets(n_rows, n_cols, rows, idx.clone(), val)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let csr = coo
+        .to_csr()
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    if csr.indices() != idx.as_slice() {
+        return Err(PyValueError::new_err(
+            "the CSR offered is not canonical (columns must be ascending and unique); \
+             call sort_indices()/sum_duplicates() before handing it over, because a \
+             reordering here would silently misplace every later value update",
+        ));
+    }
+    Ok(csr)
+}
+
 /// `DirectFactorization(n_rows, n_cols, indptr, indices, values)` — the CACHED-symbolic direct LU.
 ///
 /// [`py_solve_linear_system`] pays colamd and the symbolic factorization on every call, which is
@@ -169,62 +237,7 @@ impl PyDirectFactorization {
         indices: PyReadonlyArray1<'py, i64>,
         values: PyReadonlyArray1<'py, f64>,
     ) -> PyResult<Self> {
-        // `indptr` is validated BEFORE it is narrowed, because the row-expansion loop below
-        // turns a bad offset straight into an allocation. Measured 2026-09-05: `indptr =
-        // [0, -1, 2, 3]` passes both of the checks that used to be here (it is n_rows+1 long
-        // and ends at nnz), then `-1 as usize` makes the range `0..18446744073709551615` and
-        // the process ABORTS -- "memory allocation of 51539607552 bytes failed". That is not
-        // an exception a caller can catch; it takes the interpreter with it.
-        let raw_ptr = indptr.as_array();
-        let mut ptr: Vec<usize> = Vec::with_capacity(raw_ptr.len());
-        let mut previous = 0i64;
-        for (row, &offset) in raw_ptr.iter().enumerate() {
-            if offset < 0 || offset < previous {
-                return Err(PyValueError::new_err(format!(
-                    "indptr must be non-negative and non-descending; entry {row} is {offset} \
-                     after {previous}. A descending or negative offset becomes an enormous \
-                     unsigned range here and aborts the process rather than raising"
-                )));
-            }
-            previous = offset;
-            ptr.push(offset as usize);
-        }
-        let idx: Vec<u32> = indices
-            .as_array()
-            .iter()
-            .map(|&i| narrow_index(i, n_cols, "column"))
-            .collect::<PyResult<_>>()?;
-        let val: Vec<f64> = values.as_array().to_vec();
-        if ptr.len() != n_rows + 1 || ptr.last().copied().unwrap_or(0) != idx.len() {
-            return Err(PyValueError::new_err(
-                "indptr must be n_rows+1 long and end at nnz",
-            ));
-        }
-        if val.len() != idx.len() {
-            return Err(PyValueError::new_err(format!(
-                "values and indices must agree; got {} values for {} indices",
-                val.len(),
-                idx.len()
-            )));
-        }
-        let mut rows: Vec<u32> = Vec::with_capacity(idx.len());
-        for r in 0..n_rows {
-            for _ in ptr[r]..ptr[r + 1] {
-                rows.push(r as u32);
-            }
-        }
-        let coo = Coo::from_triplets(n_rows, n_cols, rows, idx.clone(), val)
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
-        let csr = coo
-            .to_csr()
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
-        if csr.indices() != idx.as_slice() {
-            return Err(PyValueError::new_err(
-                "the CSR offered is not canonical (columns must be ascending and unique); \
-                 call sort_indices()/sum_duplicates() before handing it over, because a \
-                 reordering here would silently misplace every later value update",
-            ));
-        }
+        let csr = canonical_csr(n_rows, n_cols, &indptr, &indices, &values)?;
         let factorization =
             DirectFactorization::new(&csr).map_err(|e| PyValueError::new_err(format!("{e:?}")))?;
         Ok(Self { csr, factorization })
@@ -332,6 +345,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_solve_direct_complex, m)?)?;
     m.add_function(wrap_pyfunction!(py_requires_symmetric, m)?)?;
     m.add_class::<PyDirectFactorization>()?;
+    amg::register(m)?;
     kernels::register(m)?;
     kernels::register_lti(m)?;
     structural::register(m)?;

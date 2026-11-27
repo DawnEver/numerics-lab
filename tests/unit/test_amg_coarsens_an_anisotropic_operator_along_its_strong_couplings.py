@@ -9,7 +9,10 @@ smoothed on the filtered operator.
 Measured here on the 2-D anisotropic Poisson (eps = 1e-3), CG to rtol 1e-8: pairwise CONVERGES (14
 iterations at 64^2, 16 at 128^2), so it is recorded as passing, not xfailed; what it does not do is shrink
 -- 8 levels at 64^2, 10 at 128^2, setup 0.18 s -> 2.9 s for 4x the unknowns. Smoothed aggregation: 17 / 19
-iterations, setup 0.04 s -> 0.13 s, first level shrinking ~2.9x.
+iterations, setup 0.04 s -> 0.13 s, first level shrinking ~2.9x. Those pairwise figures are its prolongation
+smoothed on the FULL operator, now ``smoothing='full'``; pairwise defaults to plain aggregation (bounded
+complexity, numerics-lab #33), which converges in 38 iterations at 64^2 -- a plain-aggregation V-cycle
+gives up iterations for sparsity.
 """
 
 from __future__ import annotations
@@ -52,11 +55,12 @@ def test_smoothed_aggregation_converges_on_the_anisotropic_operator() -> None:
     assert preconditioner.level_sizes[1] <= matrix.shape[0] / 2.5
 
 
-def test_pairwise_converges_but_only_halves_each_level() -> None:
+@pytest.mark.parametrize(('smoothing', 'bar'), [('full', 25), ('none', 45)])
+def test_pairwise_converges_but_only_halves_each_level(smoothing, bar) -> None:
     matrix = _anisotropic(64)
-    preconditioner = amg_preconditioner(matrix, coarsening='pairwise', theta=0.0)
+    preconditioner = amg_preconditioner(matrix, coarsening='pairwise', theta=0.0, smoothing=smoothing)
     iterations, relative = _cg_iterations(matrix, preconditioner)
-    assert iterations <= 25
+    assert iterations <= bar
     assert relative == pytest.approx(0.0, abs=1e-8)
     assert preconditioner.level_sizes[:4] == (4096, 2048, 1024, 512)
 
@@ -93,7 +97,8 @@ def _spans_grid_rows(tentative, n: int) -> bool:
 
 
 @pytest.mark.parametrize(
-    ('options', 'match'), [({'coarsening': 'ruge-stueben'}, 'coarsening'), ({'theta': 1.0}, 'theta')]
+    ('options', 'match'),
+    [({'coarsening': 'ruge-stueben'}, 'coarsening'), ({'theta': 1.0}, 'theta'), ({'smoothing': 'twice'}, 'smoothing')],
 )
 def test_an_unknown_coarsening_or_threshold_is_refused(options, match) -> None:
     with pytest.raises(ValueError, match=match):
