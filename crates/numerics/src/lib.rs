@@ -18,4 +18,5 @@ pub mod lti;
 pub mod marching;
 pub mod nonlinear;
 pub mod sparse;
+pub mod structural;
 pub mod weights;
