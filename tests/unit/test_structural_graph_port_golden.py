@@ -25,7 +25,14 @@ _STRUCTURAL = GOLDENS / 'structural.jsonl'
 def _patterns() -> list[tuple[int, int, list[int], list[int]]]:
     rng = np.random.default_rng(20261126)
     out = []
-    for n_rows, n_cols, density in ((6, 6, 0.3), (12, 9, 0.2), (9, 12, 0.15), (40, 40, 0.06), (60, 50, 0.04), (30, 30, 0.02)):
+    for n_rows, n_cols, density in (
+        (6, 6, 0.3),
+        (12, 9, 0.2),
+        (9, 12, 0.15),
+        (40, 40, 0.06),
+        (60, 50, 0.04),
+        (30, 30, 0.02),
+    ):
         mask = rng.random((n_rows, n_cols)) < density
         r, c = np.nonzero(mask)
         out.append((n_rows, n_cols, r.tolist(), c.tolist()))
@@ -131,7 +138,7 @@ def test_the_decompositions_are_block_lower_triangular() -> None:
 def test_blt_refuses_a_singular_pattern_by_its_rank() -> None:
     with pytest.raises(ValueError, match='covers 1 of 2'):
         structural.block_triangular(2, _ix([0, 1]), _ix([0, 0]))
-    ro, co, bounds = structural.block_triangular(3, _ix([0, 1, 1, 2, 2]), _ix([0, 0, 1, 1, 2]))
+    ro, _co, bounds = structural.block_triangular(3, _ix([0, 1, 1, 2, 2]), _ix([0, 0, 1, 1, 2]))
     assert bounds.tolist() == [0, 1, 2, 3]
     assert ro.tolist() == [0, 1, 2]
 
@@ -143,7 +150,9 @@ def test_tearing_and_pantelides_answer_through_the_seam() -> None:
     # The planar pendulum: index 3 (see crates/numerics/tests/structural_textbook.rs).
     rows = [0, 0, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4]
     cols = [5, 2, 6, 3, 7, 4, 0, 8, 4, 1, 0, 1]
-    er, _, eq_der, var_der, assign = structural.pantelides(5, 9, _ix(rows), _ix(cols), _ix([5, 6, 7, 8, -1, -1, -1, -1, -1]))
+    er, _, eq_der, var_der, assign = structural.pantelides(
+        5, 9, _ix(rows), _ix(cols), _ix([5, 6, 7, 8, -1, -1, -1, -1, -1])
+    )
     assert eq_der[:5].tolist().count(-1) == 2
     assert int(er.max()) + 1 == 9
     assert len(var_der) == len(assign)
