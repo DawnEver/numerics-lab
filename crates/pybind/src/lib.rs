@@ -6,6 +6,7 @@
 //! COO -> CSR conversion.
 
 mod kernels;
+mod structural;
 
 use numerics::linear::direct::DirectFactorization;
 use numerics::linear::{
@@ -333,5 +334,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDirectFactorization>()?;
     kernels::register(m)?;
     kernels::register_lti(m)?;
+    structural::register(m)?;
     Ok(())
 }
